@@ -11,7 +11,7 @@ const port = process.env.PORT || 3000
 app.get('/', (req, res) => {
     res.send('Hello World!')
 })
-app.post('/modus', (req, res) => {
+app.post('/services/modus', (req, res) => {
     const authorization = req.get("Authorization")
     // console.log(authorization);    
     if (authorization === `Bearer ${secretModus}`) {
@@ -20,7 +20,7 @@ app.post('/modus', (req, res) => {
         res.status(400).json({ status: "error" })
     }
 })
-app.post('/edds', async (req, res) => {
+app.post('/services/edds', async (req, res) => {
     const authorization = req.get("Authorization")
     // console.log(authorization);
     const me = await auth.fetchAuth(authorization)
