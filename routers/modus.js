@@ -14,7 +14,6 @@ const jwt = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MiwiaWF0IjoxNzU
 router.post("/", async (req, res) => {
     const authorization = req.get("Authorization")
 
-
     function sendDataSequentially(dataArray) {
         return dataArray.reduce(async (previousPromise, item, index) => {
             const accumulatedResults = await previousPromise;
@@ -32,9 +31,9 @@ router.post("/", async (req, res) => {
                     });
                 accumulatedResults.push({
                     success: true,
-                    data: item,
-                    response: response.data,
-                    index: index
+                    // data: item,
+                    id: response.data?.data.id,
+                    index: index + 1
                 });
 
                 console.log(`Элемент ${index + 1} успешно отправлен`);
