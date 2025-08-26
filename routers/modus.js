@@ -32,6 +32,9 @@ async function getJwt() {
     }
 }
 
+router.put("/", async (req, res) => {
+res.json({test:123})
+})
 router.post("/", async (req, res) => {
     const authorization = req.get("Authorization")
 
