@@ -5,6 +5,7 @@ const axios = require("axios");
 const router = express.Router();
 
 const EDDS_URL = process.env.EDDS_URL;
+const EDDS_TOKEN = process.env.EDDS_TOKEN;
 
 function jsonForShell(data) {
   return JSON.stringify(data).replace(/'/g, `'\\''`);
@@ -15,22 +16,31 @@ function maskToken(t) {
   if (t.length <= 8) return "****";
   return `${t.slice(0, 4)}…${t.slice(-4)}`;
 }
-function clipLog(s, limit = 1200) {
+
+function clipLog(s, limit = 1500) {
   if (!s) return "";
   const str = s.toString();
-  return str.length > limit ? `${str.slice(0, limit)}… (${str.length}b)` : str;
+  return str.length > limit
+    ? `${str.slice(0, limit)}… (${str.length} символов)`
+    : str;
 }
 
 router.post("/", async (req, res) => {
   const debug = String(req.query.debug || "").trim() === "1";
+  const dryRun = String(req.query.dryRun || req.query.dry || "").trim() === "1";
   const reqId = req.headers["x-request-id"] || "";
-  const ip = req.ip || req.headers["x-forwarded-for"] || req.connection?.remoteAddress;
+  const ip =
+    req.ip || req.headers["x-forwarded-for"] || req.connection?.remoteAddress;
 
   try {
     const size = Buffer.byteLength(JSON.stringify(req.body || {}));
-    console.log(`[edds] --> POST /services/edds debug=${debug} ip=${ip} reqId=${reqId} size=${size}b`);
+    console.log(
+      `[ЕДДС] Запрос POST /services/edds debug=${debug} dryRun=${dryRun} ip=${ip} reqId=${reqId} размер=${size} байт`
+    );
   } catch {
-    console.log(`[edds] --> POST /services/edds debug=${debug} ip=${ip} reqId=${reqId} size=?`);
+    console.log(
+      `[ЕДДС] Запрос POST /services/edds debug=${debug} dryRun=${dryRun} ip=${ip} reqId=${reqId} размер=?`
+    );
   }
 
   const authHeader = req.headers["authorization"] || "";
@@ -42,59 +52,73 @@ router.post("/", async (req, res) => {
       headers: { Authorization: authHeader },
     });
   } catch (e) {
-    console.log("[edds] auth failed:", e?.response?.status, e?.response?.data || e.message);
+    console.log(
+      "[ЕДДС] Ошибка авторизации:",
+      e?.response?.status,
+      e?.response?.data || e.message
+    );
     return res.status(403).json({ ok: false, error: "Доступ запрещён" });
   }
 
-  try {
-    const token = process.env.EDDS_TOKEN;
-    console.log(`[edds] EDDS_TOKEN present=${!!process.env.EDDS_TOKEN} value=${maskToken(process.env.EDDS_TOKEN || "")}`);
-    if (!token) {
-      return res
-        .status(500)
-        .json({ ok: false, error: "EDDS_TOKEN не задан в .env" });
-    }
+  if (!EDDS_URL) {
+    return res
+      .status(500)
+      .json({ ok: false, error: "EDDS_URL не задан в .env" });
+  }
+  if (!EDDS_TOKEN && !dryRun) {
+    return res
+      .status(500)
+      .json({ ok: false, error: "EDDS_TOKEN не задан в .env" });
+  }
 
-    const payload = req.body ?? {};
+  const payload = req.body ?? {};
+
+  try {
+    const rawStr = JSON.stringify(payload, null, 2);
+    console.log(
+      `[ЕДДС] Входящий JSON (${Buffer.byteLength(
+        rawStr,
+        "utf8"
+      )} байт):\n${rawStr}`
+    );
+  } catch (e) {
+    console.log(`[ЕДДС] Входящий JSON не читается: ${e.message}`);
+  }
+
+  if (dryRun) {
+    console.log(`[ЕДДС] Режим DRY RUN — внешний запрос не выполняется`);
+    return res.json({ ok: true, dryRun: true, debug, preview: payload });
+  }
+
+  try {
     const jsonEscaped = jsonForShell(payload);
 
-    try {
-      const rawStr = JSON.stringify(payload, null, 2);
-      console.log(`[edds] incoming JSON (${Buffer.byteLength(rawStr, 'utf8')}b):\n${rawStr}`);
-    } catch (e) {
-      console.log(`[edds] incoming JSON: <unprintable> ${e.message}`);
-    }
-
-    try {
-      const preview = JSON.stringify(payload).slice(0, 400);
-      console.log(`[edds] payload: ${preview}${preview.length === 400 ? "…" : ""}`);
-    } catch (e) {
-      console.log(`[edds] payload: <unprintable> ${e.message}`);
-    }
-
     if (debug) {
-      console.log(`[edds] curl (redacted): curl -sS -X POST -H "Content-Type: application/json" -H "HTTP-X-API-TOKEN: ${maskToken(token)}" -d '<payload>' "${EDDS_URL}" --insecure`);
+      console.log(
+        `[ЕДДС] Выполняется curl (токен скрыт): curl -sS -X POST -H "Content-Type: application/json" -H "HTTP-X-API-TOKEN: ${maskToken(
+          EDDS_TOKEN
+        )}" -d '<payload>' "${EDDS_URL}" --insecure`
+      );
     }
 
     const command =
       `curl -sS -X POST ` +
       `-H "Content-Type: application/json" ` +
-      `-H "HTTP-X-API-TOKEN: ${token}" ` +
+      `-H "HTTP-X-API-TOKEN: ${EDDS_TOKEN}" ` +
       `-d '${jsonEscaped}' ` +
       `"${EDDS_URL}" --insecure`;
 
     exec(command, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
-      console.log("[edds] RAW stdout:", stdout?.toString());
       const outClip = clipLog(stdout);
       const errClip = clipLog(stderr);
 
       if (err) {
         const code = err.code != null ? err.code : "unknown";
-        console.error(`[edds] curl ERROR code=${code} stderr=${errClip}`);
-        if (debug) console.error(`[edds] stdout=${outClip}`);
+        console.error(`[ЕДДС] Ошибка curl, код=${code}, stderr=${errClip}`);
+        if (debug) console.error(`[ЕДДС] stdout=${outClip}`);
         return res.status(502).json({
           ok: false,
-          error: "curl error",
+          error: "Ошибка при выполнении curl",
           message: err.message,
           code,
           stderr: errClip,
@@ -102,12 +126,11 @@ router.post("/", async (req, res) => {
         });
       }
 
-      console.log(`[edds] curl OK stdout=${outClip}`);
-      console.log("[edds] RAW stdout:", stdout?.toString());
+      console.log(`[ЕДДС] Ответ curl: ${outClip}`);
 
       try {
         const parsed = JSON.parse(stdout);
-        console.log('[edds] parsed response:', parsed);
+        console.log("[ЕДДС] Распарсенный ответ:", parsed);
         return res.json(debug ? { ...parsed, _raw: outClip } : parsed);
       } catch {
         return res.json({ raw: stdout?.toString() });
