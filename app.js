@@ -7,17 +7,31 @@ require("dotenv").config();
 const app = express();
 const port = process.env.PORT || 5000;
 
+app.use((req, res, next) => {
+  const origin = req.headers.origin || "*";
+  res.header("Access-Control-Allow-Origin", origin);
+  res.header("Vary", "Origin");
+  res.header(
+    "Access-Control-Allow-Methods",
+    "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+  );
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Authorization,Content-Type,X-Requested-With"
+  );
+  res.header("Access-Control-Allow-Credentials", "true");
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
+
 app.use(bodyParser.json({ limit: "2mb" }));
 app.use(bodyParser.urlencoded({ extended: true, limit: "2mb" }));
 
-// Роуты
 app.use("/services/modus", modus);
 app.use("/services/edds", eddsRoutes);
 
 app.listen(port, () => {
-  console.log(
-    `Приложение запущено на ${port} порту и каким-то чудом работает`
-  );
+  console.log(`Приложение запущено на ${port} порту и каким-то чудом работает`);
 });
 
 // const express = require('express')
