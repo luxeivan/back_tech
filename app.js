@@ -2,6 +2,7 @@ const express = require('express')
 const auth = require('./services/auth')
 const bodyParser = require('body-parser')
 const modus = require('./routers/modus')
+const eddsRoutes = require('./routers/edds');
 const router = express.Router();
 const app = express()
 
@@ -19,6 +20,7 @@ app.get('/', (req, res) => {
 
 //Прием данных от Модус
 app.use("/services/modus", modus);
+app.use('/services/edds', eddsRoutes);
 
 // app.post('/services/modus', (req, res) => {
 //     const authorization = req.get("Authorization")
