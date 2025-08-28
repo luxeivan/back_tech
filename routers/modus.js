@@ -7,17 +7,26 @@ const secretModus = process.env.SECRET_FOR_MODUS;
 
 // Достаём Bearer-токен из заголовка и сравниваем только значение
 const isAuthorized = (req) => {
-  const raw = (req.get("authorization") || req.get("Authorization") || "").trim();
+  const raw = (
+    req.get("authorization") ||
+    req.get("Authorization") ||
+    ""
+  ).trim();
   const match = /^Bearer\s+(.+)$/i.exec(raw);
   const token = match ? match[1].trim() : "";
   const ok = token && token === String(secretModus || "");
   if (!ok) {
     // Временный диагностический лог (замаскирован):
-    const mask = (s) => (s ? `${s.slice(0,4)}…${s.slice(-4)}` : "<empty>");
-    console.warn("[modus] Forbidden: token=", mask(token), " expected=", mask(String(secretModus || "")));
+    const mask = (s) => (s ? `${s.slice(0, 4)}…${s.slice(-4)}` : "<empty>");
+    console.warn(
+      "[modus] Forbidden: token=",
+      mask(token),
+      " expected=",
+      mask(String(secretModus || ""))
+    );
   }
   return ok;
-}
+};
 
 const loginStrapi = process.env.LOGIN_STRAPI;
 const passwordStrapi = process.env.PASSWORD_STRAPI;
@@ -52,16 +61,18 @@ router.put("/", async (req, res) => {
       return res.status(403).json({ status: "Forbidden" });
     }
 
-    if (!req.body?.data || !Array.isArray(req.body.data) || req.body.data.length === 0) {
-      return res
-        .status(400)
-        .json({ status: "error", message: "Не хватает требуемых данных (ожидается data: массив)" });
+    const items = req.body.data || req.body.Data;
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({
+        status: "error",
+        message:
+          "Не хватает требуемых данных (ожидается Data или data: массив)",
+      });
     }
 
     const mapItem = (item) => {
       const status = (item.STATUS_NAME || "").toString().trim().toLowerCase();
-      const isActive = status === "открыта"; 
-
+      const isActive = status === "открыта";
       return {
         guid: item.VIOLATION_GUID_STR,
         number: `${item.F81_010_NUMBER}`,
@@ -82,27 +93,35 @@ router.put("/", async (req, res) => {
       Object.keys(next).forEach((key) => {
         const prevVal = current?.[key];
         const nextVal = next[key];
-        const areEqual =
+        const eq =
           typeof nextVal === "object" && nextVal !== null
             ? JSON.stringify(prevVal) === JSON.stringify(nextVal)
             : prevVal === nextVal;
-        if (!areEqual) patch[key] = nextVal;
+        if (!eq) patch[key] = nextVal;
       });
       return patch;
     };
 
     const jwt = await getJwt();
     if (!jwt) {
-      return res.status(500).json({ status: "error", message: "Не удалось авторизоваться в Strapi" });
+      return res
+        .status(500)
+        .json({
+          status: "error",
+          message: "Не удалось авторизоваться в Strapi",
+        });
     }
 
-    const items = req.body.data;
     const results = await items.reduce(async (prevPromise, rawItem, index) => {
       const acc = await prevPromise;
       const mapped = mapItem(rawItem);
 
       if (!mapped.guid) {
-        acc.push({ success: false, index: index + 1, error: "Не передан GUID записи" });
+        acc.push({
+          success: false,
+          index: index + 1,
+          error: "Не передан GUID записи",
+        });
         return acc;
       }
 
@@ -121,14 +140,25 @@ router.put("/", async (req, res) => {
 
         if (!documentId) {
           console.warn(`[modus] Не найдена запись по guid=${mapped.guid}`);
-          acc.push({ success: false, index: index + 1, status: "not_found", error: "Запись с таким GUID не найдена" });
+          acc.push({
+            success: false,
+            index: index + 1,
+            status: "not_found",
+            error: "Запись с таким GUID не найдена",
+          });
           return acc;
         }
 
         const patch = buildPatch(current, mapped);
 
         if (Object.keys(patch).length === 0) {
-          acc.push({ success: true, index: index + 1, id, updated: false, message: "Изменений нет" });
+          acc.push({
+            success: true,
+            index: index + 1,
+            id: documentId,
+            updated: false,
+            message: "Изменений нет",
+          });
           return acc;
         }
 
@@ -138,9 +168,17 @@ router.put("/", async (req, res) => {
           { headers: { Authorization: `Bearer ${jwt}` } }
         );
 
-        acc.push({ success: true, index: index + 1, id: upd?.data?.data?.id || documentId, updated: true });
+        acc.push({
+          success: true,
+          index: index + 1,
+          id: upd?.data?.data?.id || documentId,
+          updated: true,
+        });
       } catch (e) {
-        const msg = e?.response?.data?.error?.message || e?.message || "Неизвестная ошибка";
+        const msg =
+          e?.response?.data?.error?.message ||
+          e?.message ||
+          "Неизвестная ошибка";
         acc.push({ success: false, index: index + 1, error: msg });
       }
 
