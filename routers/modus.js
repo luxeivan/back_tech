@@ -83,6 +83,7 @@ router.put("/", async (req, res) => {
         description: item.F81_042_DISPNAME,
         recoveryFactDateTime: item.F81_290_RECOVERYDATETIME,
         dispCenter: item.DISPCENTER_NAME_,
+        STATUS_NAME: (item.STATUS_NAME || "").toString().trim(),
         isActive,
         data: item,
       };
@@ -136,7 +137,8 @@ router.put("/", async (req, res) => {
 
         const found = search?.data?.data?.[0];
         const documentId = found?.documentId || found?.id;
-        const current = found?.attributes || {};
+        // Strapi now returns flattened fields at the top level
+        const current = found || {};
 
         if (!documentId) {
           console.warn(`[modus] Не найдена запись по guid=${mapped.guid}`);
@@ -258,6 +260,8 @@ router.post("/", async (req, res) => {
         description: item.F81_042_DISPNAME,
         recoveryFactDateTime: item.F81_290_RECOVERYDATETIME,
         dispCenter: item.DISPCENTER_NAME_,
+        STATUS_NAME: (item.STATUS_NAME || "").toString().trim(),
+        isActive: ((item.STATUS_NAME || "").toString().trim().toLowerCase() === "открыта"),
         data: item,
       };
     });
