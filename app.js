@@ -2,6 +2,10 @@ const express = require("express");
 const bodyParser = require("body-parser");
 const modus = require("./routers/modus");
 const eddsRoutes = require("./routers/edds");
+
+const webhooks = require("./routers/webhooks");
+const { sseHandler, broadcast } = require("./services/sse");
+
 require("dotenv").config();
 
 const app = express();
@@ -29,6 +33,18 @@ app.use(bodyParser.urlencoded({ extended: true, limit: "2mb" }));
 
 app.use("/services/modus", modus);
 app.use("/services/edds", eddsRoutes);
+
+app.use("/api/webhooks", webhooks);
+app.get("/api/event", sseHandler);
+app.post("/api/event", (req, res) => {
+  try {
+    broadcast({ type: "manual", payload: req.body, timestamp: Date.now() });
+    res.json({ message: "Событие разослано клиентам" });
+  } catch (e) {
+    console.error("❗️ SSE POST error:", e);
+    res.status(500).json({ error: "Ошибка рассылки события" });
+  }
+});
 
 app.listen(port, () => {
   console.log(`Приложение запущено на ${port} порту и каким-то чудом работает`);
