@@ -34,7 +34,7 @@ app.use(bodyParser.urlencoded({ extended: true, limit: "2mb" }));
 app.use("/services/modus", modus);
 app.use("/services/edds", eddsRoutes);
 
-app.use("/api/webhooks", webhooks);
+app.use("/services/webhooks", webhooks);
 app.get("/api/event", sseHandler);
 app.post("/api/event", (req, res) => {
   try {
