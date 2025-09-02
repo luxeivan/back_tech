@@ -1,5 +1,6 @@
 const express = require("express");
 const axios = require("axios");
+const { broadcast } = require("../services/sse");
 require("dotenv").config();
 
 const router = express.Router();
@@ -170,6 +171,21 @@ router.put("/", async (req, res) => {
           { headers: { Authorization: `Bearer ${jwt}` } }
         );
 
+        // Рассылка в SSE — обновление ТН
+        try {
+          broadcast({
+            type: "tn-upsert",
+            source: "modus",
+            action: "update",
+            id: documentId,
+            guid: mapped.guid,
+            patch,
+            timestamp: Date.now(),
+          });
+        } catch (e) {
+          console.error("SSE broadcast error (update):", e?.message);
+        }
+
         acc.push({
           success: true,
           index: index + 1,
@@ -224,6 +240,20 @@ router.post("/", async (req, res) => {
         });
 
         console.log(`Элемент ${index + 1} успешно отправлен`);
+
+        // Рассылка в SSE — создание ТН
+        try {
+          broadcast({
+            type: "tn-upsert",
+            source: "modus",
+            action: "create",
+            id: response.data?.data?.id,
+            entry: { ...item, id: response.data?.data?.id },
+            timestamp: Date.now(),
+          });
+        } catch (e) {
+          console.error("SSE broadcast error (create):", e?.message);
+        }
       } catch (error) {
         console.error(
           `Ошибка при отправке элемента ${index + 1}:`,
