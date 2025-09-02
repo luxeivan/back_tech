@@ -2,43 +2,48 @@ const express = require("express");
 const router = express.Router();
 const { broadcast } = require("../services/sse");
 
-// Простой ping, удобно для кнопки Trigger в Strapi
-router.get("/", (req, res) => {
-  console.log("🔍 Вебхук: GET-проверка доступности");
-  res.status(200).json({ message: "Эндпоинт вебхука доступен" });
-});
-
-// Прием событий от Strapi
-router.post("/", (req, res) => {
+router.all("/", (req, res) => {
   try {
-    const payload = req.body;
-    console.log("📬 Вебхук: получен POST от Strapi");
-    console.log("📦 Полезная нагрузка:", JSON.stringify(payload, null, 2));
-    const uidOrModel = String(payload?.uid || payload?.model || "");
-    const looksLikeTN =
-      uidOrModel.includes("teh-narusheniya") || uidOrModel.includes("tn");
+    const method = req.method.toUpperCase();
 
-    if (!looksLikeTN) {
-      console.log("⚠️ Вебхук: это не ТН, пропускаем");
-      return res.json({ skipped: true });
+    if (method === "GET" || method === "HEAD") {
+      console.log("🔍 Вебхук: проверка доступности (", method, ")");
+      return res.status(200).json({ message: "Эндпоинт вебхука доступен" });
     }
 
-    console.log("✔️ ТН событие:", payload?.event);
+    if (method === "POST") {
+      const payload = req.body;
+      console.log("📬 Вебхук: получен POST от Strapi");
+      console.log("📦 Полезная нагрузка:", JSON.stringify(payload, null, 2));
 
-    // Разошлём всем подключенным клиентам (SSE)
-    broadcast({
-      type: "strapi-webhook",
-      event: payload?.event,
-      uid: payload?.uid,
-      model: payload?.model,
-      entry: payload?.entry,
-      timestamp: Date.now(),
-    });
+      const uidOrModel = String(payload?.uid || payload?.model || "");
+      const looksLikeTN =
+        uidOrModel.includes("teh-narusheniya") || uidOrModel.includes("tn");
 
-    res.json({ message: "Вебхук принят" });
+      if (!looksLikeTN) {
+        console.log("⚠️ Вебхук: это не ТН, пропускаем");
+        return res.json({ skipped: true });
+      }
+
+      console.log("✔️ ТН событие:", payload?.event);
+
+      broadcast({
+        type: "strapi-webhook",
+        event: payload?.event,
+        uid: payload?.uid,
+        model: payload?.model,
+        entry: payload?.entry,
+        timestamp: Date.now(),
+      });
+
+      return res.json({ message: "Вебхук принят" });
+    }
+
+    // На всякий — остальные методы завершаем 204
+    return res.sendStatus(204);
   } catch (e) {
     console.error("❗️ Вебхук: ошибка обработки:", e);
-    res.status(500).json({ error: "Ошибка обработки вебхука" });
+    return res.status(500).json({ error: "Ошибка обработки вебхука" });
   }
 });
 
