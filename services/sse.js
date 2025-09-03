@@ -1,14 +1,20 @@
 const clients = new Map();
 
 function safeRemove(id, res) {
-  try { res.end(); } catch {}
+  try {
+    res.end();
+  } catch {}
   clients.delete(id);
 }
 
 function broadcast(payload) {
   const data = `data: ${JSON.stringify(payload)}\n\n`;
+  console.log("Data", data);
   for (const [id, res] of clients) {
     try {
+      console.log("Новый id", id);
+      console.log("Новый res", res);
+      console.log("Новый data", data);
       res.write("event: message\n");
       res.write(data);
     } catch (e) {
@@ -16,7 +22,7 @@ function broadcast(payload) {
       safeRemove(id, res);
     }
   }
-  console.log(`📡 SSE: отправлено ${clients.size} клиентам`);
+  console.log(`📡 SSE: отправленоооооооооо ${clients.size} клиентам`);
 }
 
 function sseHandler(req, res) {
@@ -28,7 +34,9 @@ function sseHandler(req, res) {
 
   const id = Date.now() + Math.random();
   clients.set(id, res);
-  console.log(`📡 SSE: клиент подключен (${id}). Всего клиентов: ${clients.size}`);
+  console.log(
+    `📡 SSE: клиент подключен (${id}). Всего клиентов: ${clients.size}`
+  );
 
   // Приветственное сообщение
   res.write("event: message\n");
