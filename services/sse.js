@@ -13,14 +13,14 @@ function broadcast(payload) {
   for (const [id, res] of clients) {
     try {
       res.write("event: message\n");
-      // res.write(data);
-      res.write(123);
+      res.write(data);
+      // res.write(123);
     } catch (e) {
       console.error("SSE writer error, отключаю клиента:", id, e?.message);
       safeRemove(id, res);
     }
   }
-  console.log(`📡 SSE: отправленоооооооооо ${clients.size} клиентам`);
+  console.log(`📡 SSE: отправлено${clients.size} клиентам`);
 }
 
 function sseHandler(req, res) {
