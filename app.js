@@ -35,8 +35,8 @@ app.use("/services/modus", modus);
 app.use("/services/edds", eddsRoutes);
 
 app.use("/services/webhooks", webhooks);
-app.get("/api/event", sseHandler);
-app.post("/api/event", (req, res) => {
+app.get("/services/event", sseHandler);
+app.post("/services/event", (req, res) => {
   try {
     broadcast({ type: "manual", payload: req.body, timestamp: Date.now() });
     res.json({ message: "Событие разослано клиентам" });

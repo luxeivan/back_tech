@@ -12,11 +12,9 @@ function broadcast(payload) {
   console.log("Data", data);
   for (const [id, res] of clients) {
     try {
-      console.log("Новый id", id);
-      console.log("Новый res", res);
-      console.log("Новый data", data);
       res.write("event: message\n");
-      res.write(data);
+      // res.write(data);
+      res.write(123);
     } catch (e) {
       console.error("SSE writer error, отключаю клиента:", id, e?.message);
       safeRemove(id, res);
