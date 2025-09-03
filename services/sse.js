@@ -20,7 +20,7 @@ function broadcast(payload) {
       safeRemove(id, res);
     }
   }
-  console.log(`📡 SSE: отправлено${clients.size} клиентам`);
+  console.log(`📡 SSE: отправлено ${clients.size} клиентам`);
 }
 
 function sseHandler(req, res) {
