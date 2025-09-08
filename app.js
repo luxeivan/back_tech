@@ -29,8 +29,8 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(bodyParser.json({ limit: "2mb" }));
-app.use(bodyParser.urlencoded({ extended: true, limit: "2mb" }));
+app.use(bodyParser.json({ limit: "20mb" }));
+app.use(bodyParser.urlencoded({ extended: true, limit: "20mb" }));
 
 app.use("/services/modus", modus);
 app.use("/services/edds", eddsRoutes);

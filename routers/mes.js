@@ -222,7 +222,7 @@ async function mesCheckStatus({ session, idRegistry }) {
 // ===== РОУТЫ =====
 
 // Отправка: принимает tn/tns (старый формат) ИЛИ "плоский" MES-пейлоад; собирает vl_registry и грузит в СУВК
-router.post("/upload", express.json({ limit: "2mb" }), async (req, res) => {
+router.post("/upload", express.json({ limit: "20mb" }), async (req, res) => {
   try {
     const body = req.body || {};
     let items = [];
