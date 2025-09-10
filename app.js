@@ -3,6 +3,7 @@ const bodyParser = require("body-parser");
 const modus = require("./routers/modus");
 const eddsRoutes = require("./routers/edds");
 const mesRoutes = require("./routers/mes");
+import aiRouter from "./routes/ai.js";
 
 const webhooks = require("./routers/webhooks");
 const { sseHandler, broadcast } = require("./services/sse");
@@ -35,7 +36,7 @@ app.use(bodyParser.urlencoded({ extended: true, limit: "20mb" }));
 app.use("/services/modus", modus);
 app.use("/services/edds", eddsRoutes);
 app.use("/services/mes", mesRoutes);
-
+app.use("/services/ai", aiRouter);
 
 app.use("/services/webhooks", webhooks);
 app.get("/services/event", sseHandler);
