@@ -1,67 +1,117 @@
-import express from "express";
-import axios from "axios";
-import { randomUUID } from "node:crypto";
+"use strict";
+
+const express = require("express");
+const axios = require("axios");
+const { randomUUID } = require("node:crypto");
 
 const router = express.Router();
 
-// ====== Logging helpers ======
+/** ===================== ВСПОМОГАТЕЛЬНОЕ ЛОГИРОВАНИЕ ===================== */
 const LOG_PREFIX = "[AI]";
-const MAX_PROMPT_LOG = 4000; // avoid flooding logs
-const MAX_ANSWER_LOG = 800;
-const log = (...args) => console.log(new Date().toISOString(), LOG_PREFIX, ...args);
+const MAX_PROMPT_LOG = 5000; // чтобы не залить логи километровыми промптами
+const MAX_ANSWER_LOG = 1500;
+const log = (...args) =>
+  console.log(new Date().toISOString(), LOG_PREFIX, ...args);
 const trimForLog = (s, n) =>
-  typeof s === "string" && s.length > n ? s.slice(0, n) + `…(+${s.length - n})` : s;
+  typeof s === "string" && s.length > n
+    ? s.slice(0, n) + `…(+${s.length - n})`
+    : s;
 
-// ====== Prompt/Models config ======
+/** ===================== НАСТРОЙКИ ПРОМПТА/МОДЕЛЕЙ ===================== */
 const COMMON_SYS =
-  "Вы — дружелюбный AI-аналитик технологических нарушений. " +
-  "Кратко, по делу, без лишней воды. Чёткие формулировки на русском.";
+  "Вы — дружелюбный AI‑аналитик технологических нарушений в МО. " +
+  "Готовьте краткие выводы для руководства: без воды, без Markdown и без кода. " +
+  "Строго на русском языке. Формулировки чёткие, по пунктам.";
 
 const MODELS = [
-  "openai/gpt-4o-mini",
-  "anthropic/claude-3-haiku-20240307",
-  "mistralai/mistral-7b-instruct",
+  "openai/gpt-4o-mini",                 // основной
+  "anthropic/claude-3-haiku-20240307",  // фоллбек 1
+  "mistralai/mistral-7b-instruct",      // фоллбек 2
 ];
 
 function buildPrompt(mode, metrics) {
   const head =
     "Ниже метрики по технологическим нарушениям в JSON. " +
-    "Сформируйте ответ для руководства: короткие пункты, числа, без Markdown-разметки, без кода.\n";
+    "Сформируйте лаконичный ответ для руководства: короткие пункты, цифры, без Markdown и без кода.\n";
   const body = JSON.stringify(metrics);
+
   if (mode === "recs") {
     return (
       head +
-      "Задача: дайте 5 приоритезированных рекомендаций, опираясь на метрики.\n" +
+      "Задача: дайте 5 приоритезированных рекомендаций, опираясь на метрики (укажите, на каких числах основано). \n" +
       body
     );
   }
   if (mode === "anomalies") {
-    return head + "Задача: кратко перечислите аномалии из metrics.outliers с пояснениями.\n" + body;
+    return (
+      head +
+      "Задача: кратко перечислите аномалии из metrics.outliers с пояснениями, почему это аномалия. \n" +
+      body
+    );
   }
-  return head + "Задача: дайте краткое резюме и ключевые выводы.\n" + body;
+  // summary (по умолчанию)
+  return (
+    head +
+    "Задача: дайте краткое резюме: сколько ТН, где концентрация, динамика, узкие места, 1‑2 конкретных вывода. \n" +
+    body
+  );
 }
 
-router.post("/analysis", async (req, res) => {
-  const { metrics, mode = "summary" } = req.body || {};
-  const reqId = randomUUID().slice(0, 8);
+/** ===================== CORS PREFLIGHT ===================== */
+router.options("/analysis", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization"
+  );
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  return res.sendStatus(204);
+});
 
+/** ===================== ПИНГ (для быстрой проверки маршрута) ===================== */
+router.get("/ping", (req, res) => {
+  const reqId = randomUUID().slice(0, 8);
+  log(`[${reqId}] GET /ai/ping — маршрут доступен`);
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  return res.json({ ok: true, ts: Date.now() });
+});
+
+/** ===================== ОСНОВНОЙ МАРШРУТ АНАЛИТИКИ ===================== */
+router.post("/analysis", async (req, res) => {
+  const reqId = randomUUID().slice(0, 8);
+  const { metrics, mode = "summary" } = req.body || {};
+
+  log(`[${reqId}] POST /ai/analysis — входящий запрос`);
   if (!metrics) {
-    log(`[${reqId}] /ai/analysis -> 400 Missing metrics`);
+    log(`[${reqId}] ❌ Ошибка: не переданы metrics`);
     return res.status(400).json({ error: "Missing metrics" });
   }
 
-  // Build prompt & initial request log
+  if (!process.env.OPENROUTER_API_KEY) {
+    log(
+      `[${reqId}] ⚠️ Предупреждение: переменная окружения OPENROUTER_API_KEY не установлена`
+    );
+  }
+
+  // Формируем промпт и печатаем его полностью (с ограничением, чтобы не забить логи)
   const prompt = buildPrompt(mode, metrics);
   const keys = Object.keys(metrics || {});
-  log(`[${reqId}] /ai/analysis accepted: mode=${mode}; metricsKeys=${keys.length ? keys.join(",") : "—"}`);
-  log(`[${reqId}] -> OpenRouter prompt (${prompt.length} chars):\n` + trimForLog(prompt, MAX_PROMPT_LOG));
+  log(
+    `[${reqId}] Принято: режим="${mode}", ключей в metrics=${keys.length ? keys.join(",") : "—"}`
+  );
+  log(
+    `[${reqId}] → Промпт для OpenRouter (${prompt.length} симв.):\n` +
+      trimForLog(prompt, MAX_PROMPT_LOG)
+  );
 
   let answer = null;
   let usedModel = null;
 
   for (const model of MODELS) {
     const t0 = Date.now();
-    log(`[${reqId}] -> calling OpenRouter model=${model} url=https://openrouter.ai/api/v1/chat/completions`);
+    log(
+      `[${reqId}] → Вызов OpenRouter: модель="${model}", url=https://openrouter.ai/api/v1/chat/completions`
+    );
     try {
       const { data } = await axios.post(
         "https://openrouter.ai/api/v1/chat/completions",
@@ -80,44 +130,64 @@ router.post("/analysis", async (req, res) => {
           timeout: 20000,
         }
       );
+
       answer = data?.choices?.[0]?.message?.content?.trim();
       usedModel = model;
       const ms = Date.now() - t0;
+
       if (answer) {
-        log(`[${reqId}] <- model=${model} OK ${ms}ms; answerLen=${answer.length}`);
+        log(
+          `[${reqId}] ← OK от модели "${model}" за ${ms}мс; длина ответа=${answer.length}`
+        );
         break;
       } else {
-        log(`[${reqId}] <- model=${model} empty answer ${ms}ms`);
+        log(
+          `[${reqId}] ← Пустой ответ от модели "${model}" за ${ms}мс — пробуем следующую`
+        );
       }
     } catch (e) {
       const ms = Date.now() - t0;
       const status = e?.response?.status || "ERR";
-      log(`[${reqId}] x model=${model} ${ms}ms status=${status} msg=${e?.message}`);
+      log(
+        `[${reqId}] ⛔ Ошибка запроса к модели "${model}" за ${ms}мс; status=${status}; message=${e?.message}`
+      );
       try {
         if (e?.response?.data) {
-          const body = typeof e.response.data === "string" ? e.response.data : JSON.stringify(e.response.data);
-          log(`[${reqId}]   responseBody: ` + trimForLog(body, 600));
+          const body =
+            typeof e.response.data === "string"
+              ? e.response.data
+              : JSON.stringify(e.response.data);
+          log(`[${reqId}]   Тело ошибки: ` + trimForLog(body, 800));
         }
-      } catch {}
+      } catch {
+        /* ignore */
+      }
     }
   }
 
   if (!answer) {
-    log(`[${reqId}] all models failed — returning fallback text`);
-    // мягкий фоллбек — чтоб фронт не пустел
-    return res
-      .status(200)
-      .json({ text: "LLM временно недоступен. Используйте локальное резюме на клиенте." });
+    log(
+      `[${reqId}] Все модели вернули ошибку/пусто — отдаем мягкий фоллбек, чтобы фронт не ломался`
+    );
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    return res.status(200).json({
+      text:
+        "LLM временно недоступен. Используйте локальное резюме на клиенте или повторите попытку позже.",
+    });
   }
 
-  log(`[${reqId}] returning model=${usedModel}; answerPreview:\n` + trimForLog(answer, MAX_ANSWER_LOG));
+  // Короткий предпросмотр ответа
+  log(
+    `[${reqId}] Возвращаю результат; модель="${usedModel}". Предпросмотр ответа:\n` +
+      trimForLog(answer, MAX_ANSWER_LOG)
+  );
 
-  // CORS & debug headers for frontend
+  // CORS + отладочные заголовки
   res.setHeader("Access-Control-Allow-Origin", "*");
   if (usedModel) res.setHeader("X-AI-Model", usedModel);
   res.setHeader("X-AI-Request-Id", reqId);
 
-  res.json({ text: answer });
+  return res.json({ text: answer });
 });
 
-export default router;
+module.exports = router;
