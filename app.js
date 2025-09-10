@@ -3,7 +3,7 @@ const bodyParser = require("body-parser");
 const modus = require("./routers/modus");
 const eddsRoutes = require("./routers/edds");
 const mesRoutes = require("./routers/mes");
-import aiRouter from "./routes/ai.js";
+const aiRouter = require("./routers/ai");
 
 const webhooks = require("./routers/webhooks");
 const { sseHandler, broadcast } = require("./services/sse");
