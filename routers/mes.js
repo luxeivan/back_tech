@@ -8,10 +8,7 @@ const dayjs = require("dayjs");
 const AUTH_BASE = process.env.MES_AUTH_URL || process.env.MES_BASE_URL;
 const LOAD_BASE = process.env.MES_LOAD_URL || process.env.MES_BASE_URL;
 
-// Быстрая валидация конфигурации на старте (логируем, но не падаем)
 (function logMesEndpoints() {
-  const a = AUTH_BASE ? new URL(AUTH_BASE).pathname : "—";
-  const l = LOAD_BASE ? new URL(LOAD_BASE).pathname : "—";
   try {
     console.log(`[MES] AUTH_BASE: ${AUTH_BASE}`);
   } catch (_) {}
@@ -24,30 +21,38 @@ const router = express.Router();
 
 const MES_LOGIN = process.env.MES_LOGIN;
 const MES_PASSWORD = process.env.MES_PASSWORD;
-
-// Коды по их спецификации (дефолты — МОЭ)
 const SYS_CONTACT = process.env.MES_SYSTEM_CONTACT || "102"; // 1=РМР, 2=МОЭ
 const KD_CHANNEL = process.env.MES_CHANNEL || "3"; // 3=ЕЛКК ФЛ
 const KD_ORG = process.env.MES_ORG_CODE || "2"; // 2=МОЭ
 
-// --- Утилиты ---
+/* ---------------- utils ---------------- */
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function withRetry(fn, { attempts = 3, baseDelay = 1200 } = {}) {
+  let lastErr;
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      if (i === attempts) break;
+      await sleep(baseDelay * i); // линейный backoff: 1.2s, 2.4s, 3.6s
+    }
+  }
+  throw lastErr;
+}
+
 function toIsoT(v) {
   if (!v) return null;
   const d = dayjs(v);
   return d.isValid() ? d.format("YYYY-MM-DD[T]HH:mm:ss") : null;
-}
-function toHuman(v, withTime = false) {
-  if (!v) return null;
-  const d = dayjs(v);
-  if (!d.isValid()) return null;
-  return withTime ? d.format("YYYY-MM-DD HH:mm:ss") : d.format("YYYY-MM-DD");
 }
 function clean(v) {
   if (v === undefined || v === null || v === "" || v === "—") return null;
   return String(v);
 }
 
-// --- Шаг 1: auth (получить session) ---
+/* ---------------- auth ---------------- */
 async function mesAuth() {
   if (!AUTH_BASE || !MES_LOGIN || !MES_PASSWORD) {
     throw new Error("MES_* не настроены в .env");
@@ -57,26 +62,30 @@ async function mesAuth() {
     login: MES_LOGIN,
     pwd_password: MES_PASSWORD,
   };
-  const { data } = await axios.get(AUTH_BASE, { params, timeout: 15000 });
+
+  // Было timeout 15000 → увеличил до 45000 + ретраи
+  const { data } = await withRetry(
+    () => axios.get(AUTH_BASE, { params, timeout: 45000 }),
+    { attempts: 3, baseDelay: 1500 }
+  );
+
   const session = data?.data?.[0]?.session;
   if (!session) throw new Error("Не получили session от СУВК");
   return session;
 }
 
-// --- Маппинг KD_TP_NOTIFICATION (тип уведомления) ---
+/* ---------------- mapping ---------------- */
 function mapNotification(tn) {
   const raw = tn?.data?.data || {};
   const type = clean(raw.VIOLATION_TYPE || tn?.data?.type) || "";
   const status = clean(raw.STATUS_NAME || tn?.data?.STATUS_NAME) || "";
   const t = type.toLowerCase();
   const s = status.toLowerCase();
-
-  if (t.includes("план") || t === "п") return "3"; // плановое отключение
-  if (s.includes("запитан") || s.includes("закрыт")) return "2"; // восстановление
-  return "1"; // аварийное отключение
+  if (t.includes("план") || t === "п") return "3";
+  if (s.includes("запитан") || s.includes("закрыт")) return "2";
+  return "1";
 }
 
-// --- Вытянуть первый ФИАС дома (GUID_FIAS_HOUSE) ---
 function firstFiasHouse(tn) {
   const raw = tn?.data?.data || {};
   const val = clean(
@@ -91,11 +100,8 @@ function firstFiasHouse(tn) {
   );
 }
 
-// --- Построить строку реестра из "плоского" MES-пейлоада ---
 function buildRegistryItemFromMesPayload(p, idx = 1) {
   const fias = clean(p.fias) || clean(p.Guid2) || clean(p.FIAS_LIST) || "";
-
-  // Маппинг типа уведомления
   const st = (clean(p.status) || "").toLowerCase();
   const cond = (clean(p.condition) || "").toLowerCase();
   let kdNotif = "1";
@@ -106,21 +112,21 @@ function buildRegistryItemFromMesPayload(p, idx = 1) {
     id_regline_ext: String(p.id_regline_ext || idx),
     kd_tp_client: 1,
     KD_TP_NOTIFICATION: kdNotif,
-    KD_ORG: KD_ORG,
+    KD_ORG,
   };
 
   if (fias !== "") item.GUID_FIAS_HOUSE = fias;
 
   const dateOff = toIsoT(p.date_off);
-  const datePlanOn = toIsoT(p.date_on_plan);
-  const dateFactOn = toIsoT(p.date_on_fact);
+  const datePlan = toIsoT(p.date_on_plan);
+  const dateFact = toIsoT(p.date_on_fact);
 
   if (dateOff) item.DT_OUTAGE_TIME_PLANNED = dateOff;
   if (kdNotif === "2") {
-    if (dateFactOn) item.DT_RESTORATION_TIME_PLANNED = dateFactOn;
-    else if (datePlanOn) item.DT_RESTORATION_TIME_PLANNED = datePlanOn;
-  } else if (datePlanOn) {
-    item.DT_RESTORATION_TIME_PLANNED = datePlanOn;
+    if (dateFact) item.DT_RESTORATION_TIME_PLANNED = dateFact;
+    else if (datePlan) item.DT_RESTORATION_TIME_PLANNED = datePlan;
+  } else if (datePlan) {
+    item.DT_RESTORATION_TIME_PLANNED = datePlan;
   }
 
   const reason = clean(p.massage);
@@ -129,48 +135,42 @@ function buildRegistryItemFromMesPayload(p, idx = 1) {
   return item;
 }
 
-// --- Построить одну строку реестра (vl_registry[]) ---
 function buildRegistryItem(tn, idx = 1) {
   const raw = tn?.data?.data || {};
   const obj = tn?.data || {};
 
   const dateOff = toIsoT(raw.F81_060_EVENTDATETIME || obj.createDateTime);
-  const datePlanOn = toIsoT(
+  const datePlan = toIsoT(
     raw.F81_070_RESTOR_SUPPLAYDATETIME || obj.recoveryPlanDateTime
   );
-  const dateFactOn = toIsoT(
-    raw.F81_290_RECOVERYDATETIME || obj.recoveryDateTime
-  );
+  const dateFact = toIsoT(raw.F81_290_RECOVERYDATETIME || obj.recoveryDateTime);
   const reason = (
     clean(obj.description) ||
     clean(raw.DESCRIPTION) ||
     ""
   ).toLowerCase();
   const kdNotif = mapNotification(tn);
-  const fias = firstFiasHouse(tn);
+
   const item = {
-    id_regline_ext: String(obj.documentId || obj.id || idx), // внешний id строки
-    kd_tp_client: 1, // 1 = ФЛ (дефолт)
-    KD_TP_NOTIFICATION: kdNotif, // обязателен
-    KD_ORG: KD_ORG, // 2 = МОЭ
+    id_regline_ext: String(obj.documentId || obj.id || idx),
+    kd_tp_client: 1,
+    KD_TP_NOTIFICATION: kdNotif,
+    KD_ORG,
   };
 
-  // Даты
   if (dateOff) item.DT_OUTAGE_TIME_PLANNED = dateOff;
   if (kdNotif === "2") {
-    // восстановление
-    if (dateFactOn) item.DT_RESTORATION_TIME_PLANNED = dateFactOn;
-    else if (datePlanOn) item.DT_RESTORATION_TIME_PLANNED = datePlanOn;
-  } else if (datePlanOn) {
-    item.DT_RESTORATION_TIME_PLANNED = datePlanOn;
+    if (dateFact) item.DT_RESTORATION_TIME_PLANNED = dateFact;
+    else if (datePlan) item.DT_RESTORATION_TIME_PLANNED = datePlan;
+  } else if (datePlan) {
+    item.DT_RESTORATION_TIME_PLANNED = datePlan;
   }
-
-  if (reason) item.NM_REASON = reason; // примечание: нижний регистр
+  if (reason) item.NM_REASON = reason;
 
   return item;
 }
 
-// --- Шаг 2: upload реестра ---
+/* ---------------- upload + status ---------------- */
 async function mesUploadRegistry(items) {
   const session = await mesAuth();
 
@@ -178,9 +178,9 @@ async function mesUploadRegistry(items) {
     action: "upload",
     query: "FwdRegistryLoad",
     session,
-    id_registry_ext: String(Date.now()).slice(-9), // внешний id реестра
-    kd_system_contact: SYS_CONTACT, // 2 = МОЭ
-    kd_channel: KD_CHANNEL, // 3 = ЕЛКК ФЛ
+    id_registry_ext: String(Date.now()).slice(-9),
+    kd_system_contact: SYS_CONTACT,
+    kd_channel: KD_CHANNEL,
     dt_campaign_beg: dayjs().format("YYYY-MM-DD"),
     dt_campaign_end: dayjs().add(3, "day").format("YYYY-MM-DD"),
     id_facility: "1",
@@ -193,21 +193,23 @@ async function mesUploadRegistry(items) {
     contentType: "application/json",
   });
 
-  const { data } = await axios.post(LOAD_BASE, form, {
-    params,
-    headers: form.getHeaders(),
-    timeout: 30000,
-    maxBodyLength: Infinity,
-  });
+  // Было timeout 30000 → поднял до 60000 + ретраи
+  const { data } = await withRetry(
+    () =>
+      axios.post(LOAD_BASE, form, {
+        params,
+        headers: form.getHeaders(),
+        timeout: 60000,
+        maxBodyLength: Infinity,
+      }),
+    { attempts: 3, baseDelay: 1500 }
+  );
 
   const idRegistry = data?.data?.[0]?.id_registry;
-  if (!idRegistry) {
-    throw new Error("Не получили id_registry в ответе СУВК");
-  }
+  if (!idRegistry) throw new Error("Не получили id_registry в ответе СУВК");
   return { idRegistry, session, raw: data };
 }
 
-// --- Шаг 3: проверка статуса ---
 async function mesCheckStatus({ session, idRegistry }) {
   const { data } = await axios.get(LOAD_BASE, {
     params: {
@@ -215,28 +217,22 @@ async function mesCheckStatus({ session, idRegistry }) {
       session,
       id_registry: idRegistry,
     },
-    timeout: 15000,
+    timeout: 30000,
   });
   return data;
 }
 
-// ===== РОУТЫ =====
-
-// Отправка: принимает tn/tns (старый формат) ИЛИ "плоский" MES-пейлоад; собирает vl_registry и грузит в СУВК
+/* ---------------- routes ---------------- */
 router.post("/upload", express.json({ limit: "20mb" }), async (req, res) => {
   try {
     const body = req.body || {};
     let items = [];
 
-    // Вариант 1: старый формат (tn/tns)
     const list = Array.isArray(body?.tns)
       ? body.tns
       : [body?.tn].filter(Boolean);
-    if (list.length) {
-      items = list.map((tn, i) => buildRegistryItem(tn, i + 1));
-    }
+    if (list.length) items = list.map((tn, i) => buildRegistryItem(tn, i + 1));
 
-    // Вариант 2: "плоский" MES-пейлоад (date_off...condition + fias/Guid2/FIAS_LIST)
     const looksLikeMes =
       body &&
       (body.date_off ||
@@ -246,18 +242,17 @@ router.post("/upload", express.json({ limit: "20mb" }), async (req, res) => {
         body.fias ||
         body.Guid2 ||
         body.FIAS_LIST);
-    if (!items.length && looksLikeMes) {
+    if (!items.length && looksLikeMes)
       items = [buildRegistryItemFromMesPayload(body, 1)];
-    }
 
     if (!items.length) {
       return res.status(400).json({
         ok: false,
-        message: "Передай tn/tns или MES-поля (date_off/.../condition) + fias",
+        message:
+          "Передай tn/tns или MES-поля (date_off/.../condition) + fias/Guid2/FIAS_LIST",
       });
     }
 
-    // Имитация только ЯВНО: ?dryRun=1 (переменная окружения игнорируется)
     if (req.query.dryRun === "1") {
       const fakeId = `TEST-${Date.now()}`;
       console.log(
@@ -278,14 +273,22 @@ router.post("/upload", express.json({ limit: "20mb" }), async (req, res) => {
 
     return res.json({ ok: true, id_registry: idRegistry, session });
   } catch (e) {
-    console.error("Ошибка UPLOAD MES:", e?.message);
-    return res
-      .status(502)
-      .json({ ok: false, message: e?.message || "Ошибка загрузки" });
+    const status = e?.response?.status || 502;
+    const details = e?.response?.data;
+    console.error(
+      "Ошибка UPLOAD MES:",
+      e?.message,
+      details ? ` | details: ${JSON.stringify(details)}` : ""
+    );
+    return res.status(status).json({
+      ok: false,
+      message: e?.message || "Ошибка загрузки",
+      code: e?.code,
+      details,
+    });
   }
 });
 
-// Проверка статуса по session и id_registry
 router.get("/status", async (req, res) => {
   try {
     const session = req.query.session;
@@ -298,14 +301,18 @@ router.get("/status", async (req, res) => {
     const data = await mesCheckStatus({ session, idRegistry });
     return res.json({ ok: true, data });
   } catch (e) {
-    console.error("Ошибка CHECK MES:", e?.message);
+    const status = e?.response?.status || 502;
     return res
-      .status(502)
-      .json({ ok: false, message: e?.message || "Ошибка проверки статуса" });
+      .status(status)
+      .json({
+        ok: false,
+        message: e?.message || "Ошибка проверки статуса",
+        code: e?.code,
+        details: e?.response?.data,
+      });
   }
 });
 
-// Простая проверка конфигурации и доступности
 router.get("/ping", async (req, res) => {
   try {
     if (!AUTH_BASE && !LOAD_BASE)
@@ -321,6 +328,24 @@ router.get("/ping", async (req, res) => {
     return res
       .status(500)
       .json({ ok: false, message: e?.message || "ping failed" });
+  }
+});
+
+// Диагностика авторизации
+router.get("/auth-test", async (_req, res) => {
+  try {
+    const session = await mesAuth();
+    return res.json({ ok: true, session });
+  } catch (e) {
+    const status = e?.response?.status || 502;
+    return res
+      .status(status)
+      .json({
+        ok: false,
+        message: e?.message,
+        code: e?.code,
+        details: e?.response?.data,
+      });
   }
 });
 
