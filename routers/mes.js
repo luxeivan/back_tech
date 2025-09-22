@@ -5,9 +5,23 @@ const axios = require("axios");
 const FormData = require("form-data");
 const dayjs = require("dayjs");
 
+const AUTH_BASE = process.env.MES_AUTH_URL || process.env.MES_BASE_URL;
+const LOAD_BASE = process.env.MES_LOAD_URL || process.env.MES_BASE_URL;
+
+// Быстрая валидация конфигурации на старте (логируем, но не падаем)
+(function logMesEndpoints() {
+  const a = AUTH_BASE ? new URL(AUTH_BASE).pathname : "—";
+  const l = LOAD_BASE ? new URL(LOAD_BASE).pathname : "—";
+  try {
+    console.log(`[MES] AUTH_BASE: ${AUTH_BASE}`);
+  } catch (_) {}
+  try {
+    console.log(`[MES] LOAD_BASE: ${LOAD_BASE}`);
+  } catch (_) {}
+})();
+
 const router = express.Router();
 
-const BASE = process.env.MES_BASE_URL;
 const MES_LOGIN = process.env.MES_LOGIN;
 const MES_PASSWORD = process.env.MES_PASSWORD;
 
@@ -35,7 +49,7 @@ function clean(v) {
 
 // --- Шаг 1: auth (получить session) ---
 async function mesAuth() {
-  if (!BASE || !MES_LOGIN || !MES_PASSWORD) {
+  if (!AUTH_BASE || !MES_LOGIN || !MES_PASSWORD) {
     throw new Error("MES_* не настроены в .env");
   }
   const params = {
@@ -43,7 +57,7 @@ async function mesAuth() {
     login: MES_LOGIN,
     pwd_password: MES_PASSWORD,
   };
-  const { data } = await axios.get(BASE, { params, timeout: 15000 });
+  const { data } = await axios.get(AUTH_BASE, { params, timeout: 15000 });
   const session = data?.data?.[0]?.session;
   if (!session) throw new Error("Не получили session от СУВК");
   return session;
@@ -80,9 +94,6 @@ function firstFiasHouse(tn) {
 // --- Построить строку реестра из "плоского" MES-пейлоада ---
 function buildRegistryItemFromMesPayload(p, idx = 1) {
   const fias = clean(p.fias) || clean(p.Guid2) || clean(p.FIAS_LIST) || "";
-  //   if (!fias) {
-  //     throw new Error("Нет GUID_FIAS_HOUSE — добавь поле 'fias' (или Guid2/FIAS_LIST) в тело запроса");
-  //   }
 
   // Маппинг типа уведомления
   const st = (clean(p.status) || "").toLowerCase();
@@ -94,12 +105,11 @@ function buildRegistryItemFromMesPayload(p, idx = 1) {
   const item = {
     id_regline_ext: String(p.id_regline_ext || idx),
     kd_tp_client: 1,
-    // GUID_FIAS_HOUSE: fias,
     KD_TP_NOTIFICATION: kdNotif,
     KD_ORG: KD_ORG,
   };
 
-  if(fias !== "" ) item.GUID_FIAS_HOUSE = fias;
+  if (fias !== "") item.GUID_FIAS_HOUSE = fias;
 
   const dateOff = toIsoT(p.date_off);
   const datePlanOn = toIsoT(p.date_on_plan);
@@ -138,17 +148,9 @@ function buildRegistryItem(tn, idx = 1) {
   ).toLowerCase();
   const kdNotif = mapNotification(tn);
   const fias = firstFiasHouse(tn);
-
-//   if (!fias) {
-//     throw new Error(
-//       "Нет GUID_FIAS_HOUSE (FIAS_LIST пустой) — строка реестра не может быть собрана"
-//     );
-//   }
-
   const item = {
     id_regline_ext: String(obj.documentId || obj.id || idx), // внешний id строки
     kd_tp_client: 1, // 1 = ФЛ (дефолт)
-    // GUID_FIAS_HOUSE: fias, 
     KD_TP_NOTIFICATION: kdNotif, // обязателен
     KD_ORG: KD_ORG, // 2 = МОЭ
   };
@@ -186,13 +188,12 @@ async function mesUploadRegistry(items) {
   };
 
   const form = new FormData();
-  // важен именно multipart с именем поля vl_registry:
   form.append("vl_registry", Buffer.from(JSON.stringify(items, null, 2)), {
     filename: "registry.json",
     contentType: "application/json",
   });
 
-  const { data } = await axios.post(BASE, form, {
+  const { data } = await axios.post(LOAD_BASE, form, {
     params,
     headers: form.getHeaders(),
     timeout: 30000,
@@ -208,7 +209,7 @@ async function mesUploadRegistry(items) {
 
 // --- Шаг 3: проверка статуса ---
 async function mesCheckStatus({ session, idRegistry }) {
-  const { data } = await axios.get(BASE, {
+  const { data } = await axios.get(LOAD_BASE, {
     params: {
       query: "FwdRegistryCheckStatus",
       session,
@@ -250,17 +251,14 @@ router.post("/upload", express.json({ limit: "20mb" }), async (req, res) => {
     }
 
     if (!items.length) {
-      return res
-        .status(400)
-        .json({
-          ok: false,
-          message:
-            "Передай tn/tns или MES-поля (date_off/.../condition) + fias",
-        });
+      return res.status(400).json({
+        ok: false,
+        message: "Передай tn/tns или MES-поля (date_off/.../condition) + fias",
+      });
     }
 
-    // Режим имитации отправки: ?dryRun=1 или MES_FAKE=1 — не дергаем внешний сервис
-    if (req.query.dryRun === "1" || process.env.MES_FAKE === "1") {
+    // Имитация только ЯВНО: ?dryRun=1 (переменная окружения игнорируется)
+    if (req.query.dryRun === "1") {
       const fakeId = `TEST-${Date.now()}`;
       console.log(
         `МосЭнергоСбыт DRY-RUN: строк реестра = ${items.length}, id_registry = ${fakeId}`
@@ -304,6 +302,25 @@ router.get("/status", async (req, res) => {
     return res
       .status(502)
       .json({ ok: false, message: e?.message || "Ошибка проверки статуса" });
+  }
+});
+
+// Простая проверка конфигурации и доступности
+router.get("/ping", async (req, res) => {
+  try {
+    if (!AUTH_BASE && !LOAD_BASE)
+      return res
+        .status(500)
+        .json({ ok: false, message: "MES_* URL не настроены" });
+    return res.json({
+      ok: true,
+      AUTH_BASE: !!AUTH_BASE,
+      LOAD_BASE: !!LOAD_BASE,
+    });
+  } catch (e) {
+    return res
+      .status(500)
+      .json({ ok: false, message: e?.message || "ping failed" });
   }
 });
 
