@@ -101,15 +101,21 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
       };
 
       if (existing) {
-        // обновляем только недостающие поля
+        // обновляем недостающие поля и/или устаревший JSON "all"
         const existingAttrs = existing?.attributes || existing;
         const existingId = existing?.documentId || existing?.id;
         const patch = {};
 
+        const jsonEq = (a, b) => {
+          try { return JSON.stringify(a ?? null) === JSON.stringify(b ?? null); }
+          catch { return false; }
+        };
+
         if (!existingAttrs?.fullAddress && payload.fullAddress) patch.fullAddress = payload.fullAddress;
         if (!existingAttrs?.lat && payload.lat) patch.lat = payload.lat;
         if (!existingAttrs?.lon && payload.lon) patch.lon = payload.lon;
-        if (!existingAttrs?.all && payload.all) patch.all = payload.all;
+        // Если all отсутствует, пустой {} или отличается — обновляем
+        if (payload.all && !jsonEq(existingAttrs?.all, payload.all)) patch.all = payload.all;
 
         if (Object.keys(patch).length) {
           await axios.put(

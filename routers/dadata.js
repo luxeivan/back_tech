@@ -31,7 +31,7 @@ async function fetchByFias(fiasId) {
       fullAddress: s.unrestricted_value || s.value || null,
       lat: s?.data?.geo_lat || null,
       lon: s?.data?.geo_lon || null,
-      all: s, // полный объект подсказки DaData (может пригодиться)
+      all: data, // полный ответ DaData (со списком suggestions и др.)
     };
   } catch (e) {
     const code = e?.response?.status || e?.code || "";
