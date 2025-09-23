@@ -2,6 +2,7 @@ const express = require("express");
 const axios = require("axios");
 const { broadcast } = require("../services/sse");
 require("dotenv").config();
+const { fetchByFias } = require("./dadata");
 
 const router = express.Router();
 const secretModus = process.env.SECRET_FOR_MODUS;
@@ -53,6 +54,63 @@ async function getJwt() {
   } catch (error) {
     console.log(error);
     return false;
+  }
+}
+
+// --- адреса по FIAS -------------------------------------------------------
+/** Вернуть массив GUID-ов FIAS из «сырых» данных МОДУС */
+function extractFiasList(rawItem) {
+  const raw =
+    rawItem?.FIAS_LIST ||
+    rawItem?.data?.FIAS_LIST ||
+    rawItem?.data?.data?.FIAS_LIST ||
+    "";
+  return Array.from(
+    new Set(
+      String(raw)
+        .split(/[;,]/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+    )
+  );
+}
+
+/**
+ * На каждый FIAS:
+ * - если нет такого адреса в Strapi → берём из DaData координаты и полный адрес
+ * - сохраняем в коллекцию "Адрес" (API uid: /api/adresses)
+ */
+async function upsertAddressesInStrapi(fiasIds, jwt) {
+  for (const fiasId of fiasIds) {
+    try {
+      // уже есть?
+      const found = await axios.get(`${urlStrapi}/api/adresses`, {
+        headers: { Authorization: `Bearer ${jwt}` },
+        params: { "filters[fiasId][$eq]": fiasId, "pagination[pageSize]": 1 },
+      });
+      if (Array.isArray(found?.data?.data) && found.data.data.length) continue;
+
+      // тянем из DaData
+      const info = await fetchByFias(fiasId);
+      const payload = {
+        fiasId,
+        ...(info?.fullAddress ? { fullAddress: info.fullAddress } : {}),
+        ...(info?.lat ? { lat: String(info.lat) } : {}),
+        ...(info?.lon ? { lon: String(info.lon) } : {}),
+      };
+
+      await axios.post(
+        `${urlStrapi}/api/adresses`,
+        { data: payload },
+        { headers: { Authorization: `Bearer ${jwt}` } }
+      );
+    } catch (e) {
+      console.warn(
+        "[modus] upsertAddressesInStrapi error:",
+        fiasId,
+        e?.response?.status || e?.code || e?.message
+      );
+    }
   }
 }
 
@@ -240,6 +298,16 @@ router.post("/", async (req, res) => {
         });
 
         console.log(`Элемент ${index + 1} успешно отправлен`);
+
+        // Заполняем коллекцию "Адрес" по FIAS из поступившей ТН
+        try {
+          const fiasIds = extractFiasList(item);
+          if (fiasIds.length) {
+            await upsertAddressesInStrapi(fiasIds, jwt);
+          }
+        } catch (e) {
+          console.warn("[modus] address enrichment skipped:", e?.message);
+        }
 
         // Рассылка в SSE — создание ТН
         try {
