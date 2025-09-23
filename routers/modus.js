@@ -78,13 +78,13 @@ function extractFiasList(rawItem) {
 /**
  * На каждый FIAS:
  * - если нет такого адреса в Strapi → берём из DaData координаты и полный адрес
- * - сохраняем в коллекцию "Адрес" (API uid: /api/adresses)
+ * - сохраняем в коллекцию "Адрес" (API uid: /api/adress)
  */
 async function upsertAddressesInStrapi(fiasIds, jwt) {
   for (const fiasId of fiasIds) {
     try {
       // уже есть?
-      const found = await axios.get(`${urlStrapi}/api/adresses`, {
+      const found = await axios.get(`${urlStrapi}/api/adress`, {
         headers: { Authorization: `Bearer ${jwt}` },
         params: { "filters[fiasId][$eq]": fiasId, "pagination[pageSize]": 1 },
       });
@@ -100,7 +100,7 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
       };
 
       await axios.post(
-        `${urlStrapi}/api/adresses`,
+        `${urlStrapi}/api/adress`,
         { data: payload },
         { headers: { Authorization: `Bearer ${jwt}` } }
       );
