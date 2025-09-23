@@ -83,22 +83,45 @@ function extractFiasList(rawItem) {
 async function upsertAddressesInStrapi(fiasIds, jwt) {
   for (const fiasId of fiasIds) {
     try {
-      // уже есть?
-      const found = await axios.get(`${urlStrapi}/api/adress`, {
+      // ищем существующую запись по fiasId
+      const search = await axios.get(`${urlStrapi}/api/adress`, {
         headers: { Authorization: `Bearer ${jwt}` },
         params: { "filters[fiasId][$eq]": fiasId, "pagination[pageSize]": 1 },
       });
-      if (Array.isArray(found?.data?.data) && found.data.data.length) continue;
+      const existing = Array.isArray(search?.data?.data) ? search.data.data[0] : null;
 
-      // тянем из DaData
+      // подтягиваем из DaData всё, что можем
       const info = await fetchByFias(fiasId);
       const payload = {
         fiasId,
         ...(info?.fullAddress ? { fullAddress: info.fullAddress } : {}),
         ...(info?.lat ? { lat: String(info.lat) } : {}),
         ...(info?.lon ? { lon: String(info.lon) } : {}),
+        ...(info?.all ? { all: info.all } : {}),
       };
 
+      if (existing) {
+        // обновляем только недостающие поля
+        const existingAttrs = existing?.attributes || existing;
+        const existingId = existing?.documentId || existing?.id;
+        const patch = {};
+
+        if (!existingAttrs?.fullAddress && payload.fullAddress) patch.fullAddress = payload.fullAddress;
+        if (!existingAttrs?.lat && payload.lat) patch.lat = payload.lat;
+        if (!existingAttrs?.lon && payload.lon) patch.lon = payload.lon;
+        if (!existingAttrs?.all && payload.all) patch.all = payload.all;
+
+        if (Object.keys(patch).length) {
+          await axios.put(
+            `${urlStrapi}/api/adress/${existingId}`,
+            { data: patch },
+            { headers: { Authorization: `Bearer ${jwt}` } }
+          );
+        }
+        continue;
+      }
+
+      // если не нашли — создаём
       await axios.post(
         `${urlStrapi}/api/adress`,
         { data: payload },
