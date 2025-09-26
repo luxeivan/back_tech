@@ -80,7 +80,7 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
   const ids = Array.from(new Set((fiasIds || []).map((x) => String(x).trim()).filter(Boolean)));
   if (!ids.length) return;
 
-  const CONCURRENCY = 8; // не душим DaData и Strapi
+  const CONCURRENCY = Number(process.env.DADATA_CONCURRENCY || 2); // не душим DaData и Strapi
   const queue = ids.slice();
 
   async function worker() {
