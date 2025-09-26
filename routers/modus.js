@@ -32,10 +32,7 @@ const isAuthorized = (req) => {
 
 const loginStrapi = process.env.LOGIN_STRAPI;
 const passwordStrapi = process.env.PASSWORD_STRAPI;
-
 const urlStrapi = process.env.URL_STRAPI;
-
-// const jwt = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MSwiaWF0IjoxNzU2MTkyNTQxLCJleHAiOjE3NTg3ODQ1NDF9.Ouh4ddcvu4EuDe0kAgt48EMqa4SvDcCQr4klfsHztxA"
 
 async function getJwt() {
   try {
@@ -44,8 +41,6 @@ async function getJwt() {
       password: passwordStrapi,
     });
     if (res.data) {
-      console.log(res.data);
-
       let jwt = "";
       return res.data.jwt;
     } else {
@@ -73,6 +68,43 @@ function extractFiasList(rawItem) {
         .filter(Boolean)
     )
   );
+}
+
+function jsonEq(a, b) {
+  try { return JSON.stringify(a ?? null) === JSON.stringify(b ?? null); }
+  catch { return false; }
+}
+
+function mapModusItem(item) {
+  const status = (item.STATUS_NAME || "").toString().trim().toLowerCase();
+  const isActive = status === "открыта";
+  return {
+    guid: item.VIOLATION_GUID_STR,
+    number: `${item.F81_010_NUMBER}`,
+    energoObject: item.F81_041_ENERGOOBJECTNAME,
+    createDateTime: item.F81_060_EVENTDATETIME,
+    recoveryPlanDateTime: item.CREATE_DATETIME,
+    addressList: item.ADDRESS_LIST,
+    description: item.F81_042_DISPNAME,
+    recoveryFactDateTime: item.F81_290_RECOVERYDATETIME,
+    dispCenter: item.DISPCENTER_NAME_,
+    STATUS_NAME: (item.STATUS_NAME || "").toString().trim(),
+    isActive,
+    data: item,
+  };
+}
+
+function buildPatch(current, next) {
+  const patch = {};
+  Object.keys(next).forEach((key) => {
+    const prevVal = current?.[key];
+    const nextVal = next[key];
+    const eq = typeof nextVal === "object" && nextVal !== null
+      ? jsonEq(prevVal, nextVal)
+      : prevVal === nextVal;
+    if (!eq) patch[key] = nextVal;
+  });
+  return patch;
 }
 
 /**
@@ -106,11 +138,6 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
         const existingId = existing?.documentId || existing?.id;
         const patch = {};
 
-        const jsonEq = (a, b) => {
-          try { return JSON.stringify(a ?? null) === JSON.stringify(b ?? null); }
-          catch { return false; }
-        };
-
         if (!existingAttrs?.fullAddress && payload.fullAddress) patch.fullAddress = payload.fullAddress;
         if (!existingAttrs?.lat && payload.lat) patch.lat = payload.lat;
         if (!existingAttrs?.lon && payload.lon) patch.lon = payload.lon;
@@ -127,12 +154,17 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
         continue;
       }
 
-      // если не нашли — создаём
-      await axios.post(
-        `${urlStrapi}/api/adress`,
-        { data: payload },
-        { headers: { Authorization: `Bearer ${jwt}` } }
-      );
+      // если не нашли — создаём только когда есть данные из DaData (чтобы не плодить пустые строки)
+      if (info) {
+        await axios.post(
+          `${urlStrapi}/api/adress`,
+          { data: payload },
+          { headers: { Authorization: `Bearer ${jwt}` } }
+        );
+      } else {
+        // пропускаем пустые записи — попробуем позже повторно
+        continue;
+      }
     } catch (e) {
       console.warn(
         "[modus] upsertAddressesInStrapi error:",
@@ -143,6 +175,48 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
   }
 }
 
+async function upsertTnInStrapi(mapped, jwt) {
+  if (!mapped?.guid) return { success: false, error: "Не передан GUID записи" };
+
+  // ищем существующую запись по guid
+  const search = await axios.get(`${urlStrapi}/api/teh-narusheniyas`, {
+    headers: { Authorization: `Bearer ${jwt}` },
+    params: { "filters[guid][$eq]": mapped.guid, "pagination[pageSize]": 1 },
+  });
+  const found = search?.data?.data?.[0] || null;
+  const documentId = found?.documentId || found?.id;
+  const current = found || {};
+
+  if (documentId) {
+    const patch = buildPatch(current, mapped);
+    if (Object.keys(patch).length) {
+      await axios.put(
+        `${urlStrapi}/api/teh-narusheniyas/${documentId}`,
+        { data: patch },
+        { headers: { Authorization: `Bearer ${jwt}` } }
+      );
+      try {
+        broadcast({ type: "tn-upsert", source: "modus", action: "update", id: documentId, guid: mapped.guid, patch, timestamp: Date.now() });
+      } catch {}
+      return { success: true, id: documentId, updated: true };
+    }
+    return { success: true, id: documentId, updated: false };
+  }
+
+  // создаём
+  const created = await axios.post(
+    `${urlStrapi}/api/teh-narusheniyas`,
+    { data: { ...mapped } },
+    { headers: { Authorization: `Bearer ${jwt}` } }
+  );
+  const newId = created?.data?.data?.id;
+  try {
+    broadcast({ type: "tn-upsert", source: "modus", action: "create", id: newId, entry: { ...mapped, id: newId }, timestamp: Date.now() });
+  } catch {}
+  return { success: true, id: newId, created: true };
+}
+
+// --- PUT /services/modus --------------------------------------------------
 router.put("/", async (req, res) => {
   try {
     if (!isAuthorized(req)) {
@@ -158,132 +232,28 @@ router.put("/", async (req, res) => {
       });
     }
 
-    const mapItem = (item) => {
-      const status = (item.STATUS_NAME || "").toString().trim().toLowerCase();
-      const isActive = status === "открыта";
-      return {
-        guid: item.VIOLATION_GUID_STR,
-        number: `${item.F81_010_NUMBER}`,
-        energoObject: item.F81_041_ENERGOOBJECTNAME,
-        createDateTime: item.F81_060_EVENTDATETIME,
-        recoveryPlanDateTime: item.CREATE_DATETIME,
-        addressList: item.ADDRESS_LIST,
-        description: item.F81_042_DISPNAME,
-        recoveryFactDateTime: item.F81_290_RECOVERYDATETIME,
-        dispCenter: item.DISPCENTER_NAME_,
-        STATUS_NAME: (item.STATUS_NAME || "").toString().trim(),
-        isActive,
-        data: item,
-      };
-    };
-
-    const buildPatch = (current, next) => {
-      const patch = {};
-      Object.keys(next).forEach((key) => {
-        const prevVal = current?.[key];
-        const nextVal = next[key];
-        const eq =
-          typeof nextVal === "object" && nextVal !== null
-            ? JSON.stringify(prevVal) === JSON.stringify(nextVal)
-            : prevVal === nextVal;
-        if (!eq) patch[key] = nextVal;
-      });
-      return patch;
-    };
-
     const jwt = await getJwt();
     if (!jwt) {
       return res
         .status(500)
-        .json({
-          status: "error",
-          message: "Не удалось авторизоваться в Strapi",
-        });
+        .json({ status: "error", message: "Не удалось авторизоваться в Strapi" });
     }
 
     const results = await items.reduce(async (prevPromise, rawItem, index) => {
       const acc = await prevPromise;
-      const mapped = mapItem(rawItem);
+      const mapped = mapModusItem(rawItem);
 
       if (!mapped.guid) {
-        acc.push({
-          success: false,
-          index: index + 1,
-          error: "Не передан GUID записи",
-        });
+        acc.push({ success: false, index: index + 1, error: "Не передан GUID записи" });
         return acc;
       }
 
       try {
-        const search = await axios.get(`${urlStrapi}/api/teh-narusheniyas`, {
-          headers: { Authorization: `Bearer ${jwt}` },
-          params: {
-            "filters[guid][$eq]": mapped.guid,
-            "pagination[pageSize]": 1,
-          },
-        });
-
-        const found = search?.data?.data?.[0];
-        const documentId = found?.documentId || found?.id;
-        // Strapi now returns flattened fields at the top level
-        const current = found || {};
-
-        if (!documentId) {
-          console.warn(`[modus] Не найдена запись по guid=${mapped.guid}`);
-          acc.push({
-            success: false,
-            index: index + 1,
-            status: "not_found",
-            error: "Запись с таким GUID не найдена",
-          });
-          return acc;
-        }
-
-        const patch = buildPatch(current, mapped);
-
-        if (Object.keys(patch).length === 0) {
-          acc.push({
-            success: true,
-            index: index + 1,
-            id: documentId,
-            updated: false,
-            message: "Изменений нет",
-          });
-          return acc;
-        }
-
-        const upd = await axios.put(
-          `${urlStrapi}/api/teh-narusheniyas/${documentId}`,
-          { data: patch },
-          { headers: { Authorization: `Bearer ${jwt}` } }
-        );
-
-        // Рассылка в SSE — обновление ТН
-        try {
-          broadcast({
-            type: "tn-upsert",
-            source: "modus",
-            action: "update",
-            id: documentId,
-            guid: mapped.guid,
-            patch,
-            timestamp: Date.now(),
-          });
-        } catch (e) {
-          console.error("SSE broadcast error (update):", e?.message);
-        }
-
-        acc.push({
-          success: true,
-          index: index + 1,
-          id: upd?.data?.data?.id || documentId,
-          updated: true,
-        });
+        // upsert по guid
+        const r = await upsertTnInStrapi(mapped, jwt);
+        acc.push({ success: true, index: index + 1, id: r.id, updated: !!r.updated, created: !!r.created });
       } catch (e) {
-        const msg =
-          e?.response?.data?.error?.message ||
-          e?.message ||
-          "Неизвестная ошибка";
+        const msg = e?.response?.data?.error?.message || e?.message || "Неизвестная ошибка";
         acc.push({ success: false, index: index + 1, error: msg });
       }
 
@@ -297,110 +267,58 @@ router.put("/", async (req, res) => {
   }
 });
 
+// --- POST /services/modus -------------------------------------------------
 router.post("/", async (req, res) => {
   const authorization = req.get("Authorization");
 
-  async function sendDataSequentially(dataArray) {
-    const jwt = await getJwt();
-    return dataArray.reduce(async (previousPromise, item, index) => {
-      const accumulatedResults = await previousPromise;
-      try {
-        console.log(`Отправка элемента ${index + 1} из ${dataArray.length}`);
-        const response = await axios.post(
-          `${urlStrapi}/api/teh-narusheniyas`,
-          {
-            data: {
-              ...item,
-            },
-          },
-          {
-            headers: {
-              Authorization: `Bearer ${jwt}`,
-            },
-          }
-        );
-        accumulatedResults.push({
-          success: true,
-          // data: item,
-          id: response.data?.data.id,
-          index: index + 1,
-        });
-
-        console.log(`Элемент ${index + 1} успешно отправлен`);
-
-        // Заполняем коллекцию "Адрес" по FIAS из поступившей ТН
-        try {
-          const fiasIds = extractFiasList(item);
-          if (fiasIds.length) {
-            await upsertAddressesInStrapi(fiasIds, jwt);
-          }
-        } catch (e) {
-          console.warn("[modus] address enrichment skipped:", e?.message);
-        }
-
-        // Рассылка в SSE — создание ТН
-        try {
-          broadcast({
-            type: "tn-upsert",
-            source: "modus",
-            action: "create",
-            id: response.data?.data?.id,
-            entry: { ...item, id: response.data?.data?.id },
-            timestamp: Date.now(),
-          });
-        } catch (e) {
-          console.error("SSE broadcast error (create):", e?.message);
-        }
-      } catch (error) {
-        console.error(
-          `Ошибка при отправке элемента ${index + 1}:`,
-          error.message
-        );
-        accumulatedResults.push({
-          success: false,
-          // data: item,
-          error: error.message,
-          // id: response.data?.data.id,
-          index: index + 1,
-        });
-      }
-
-      return accumulatedResults;
-    }, Promise.resolve([]));
+  if (authorization !== `Bearer ${secretModus}`) {
+    return res.status(403).json({ status: "Forbidden" });
   }
 
-  if (authorization === `Bearer ${secretModus}`) {
-    if (!req.body?.Data) {
-      return res
-        .status(400)
-        .json({ status: "error", message: "Не хватает требуемых данных" });
-    }
-    const data = req.body.Data;
-    const prepareData = data.map((item) => {
-      return {
-        guid: item.VIOLATION_GUID_STR,
-        number: `${item.F81_010_NUMBER}`,
-        energoObject: item.F81_041_ENERGOOBJECTNAME,
-        createDateTime: item.F81_060_EVENTDATETIME,
-        recoveryPlanDateTime: item.CREATE_DATETIME,
-        addressList: item.ADDRESS_LIST,
-        description: item.F81_042_DISPNAME,
-        recoveryFactDateTime: item.F81_290_RECOVERYDATETIME,
-        dispCenter: item.DISPCENTER_NAME_,
-        STATUS_NAME: (item.STATUS_NAME || "").toString().trim(),
-        isActive: ((item.STATUS_NAME || "").toString().trim().toLowerCase() === "открыта"),
-        data: item,
-      };
-    });
-    const results = await sendDataSequentially(prepareData);
+  if (!req.body?.Data) {
+    return res.status(400).json({ status: "error", message: "Не хватает требуемых данных" });
+  }
 
-    if (results) {
-      return res.json({ status: "ok", results });
-    } else {
-      return res.status(500).json({ status: "error" });
+  const data = req.body.Data;
+  const prepareData = data.map(mapModusItem);
+
+  try {
+    const jwt = await getJwt();
+    if (!jwt) {
+      return res.status(500).json({ status: "error", message: "Не удалось авторизоваться в Strapi" });
     }
-  } else {
-    res.status(403).json({ status: "Forbidden" });
+
+    const fiasSet = new Set();
+    const results = [];
+
+    for (let i = 0; i < prepareData.length; i++) {
+      const mapped = prepareData[i];
+      try {
+        const r = await upsertTnInStrapi(mapped, jwt);
+        results.push({ success: true, index: i + 1, id: r.id, created: !!r.created, updated: !!r.updated });
+        // соберём FIAS из "сырых" данных для фоновой обработки
+        try { extractFiasList(mapped.data).forEach((id) => fiasSet.add(id)); } catch {}
+      } catch (error) {
+        console.error(`Ошибка при сохранении элемента ${i + 1}:`, error.message);
+        results.push({ success: false, index: i + 1, error: error.message });
+      }
+    }
+
+    // Быстрый ответ МОДУСу
+    res.json({ status: "ok", results });
+
+    // Фоновое заполнение коллекции "Адрес" — уже после ответа клиенту
+    setImmediate(async () => {
+      try {
+        const ids = Array.from(fiasSet);
+        if (ids.length) await upsertAddressesInStrapi(ids, jwt);
+      } catch (e) {
+        console.warn("[modus] background address enrichment error:", e?.message || e);
+      }
+    });
+  } catch (e) {
+    console.error("[modus] POST processing failed:", e?.message || e);
+    return res.status(500).json({ status: "error", message: e?.message || "Внутренняя ошибка сервера" });
   }
 });
 
