@@ -32,17 +32,17 @@ function sseHandler(req, res) {
 
   const id = Date.now() + Math.random();
   clients.set(id, res);
-  console.log(
-    `📡 SSE: клиент подключен (${id}). Всего клиентов: ${clients.size}`
-  );
+  // console.log(
+  //   `📡 SSE: клиент подключен (${id}). Всего клиентов: ${clients.size}`
+  // );
 
   // Приветственное сообщение
   res.write("event: message\n");
   res.write(`data: ${JSON.stringify({ message: "Подключено к SSE" })}\n\n`);
 
   req.on("close", () => {
-    console.log(`📴 SSE: клиент отключен (${id})`);
-    safeRemove(id, res);
+    // console.log(`📴 SSE: клиент отключен (${id})`);
+    // safeRemove(id, res);
   });
 }
 

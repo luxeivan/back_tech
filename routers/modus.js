@@ -90,7 +90,7 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
   // );
 
   if (!ids.length) {
-    console.log("[upsertAddressesInStrapi] Нет FIAS кодов для обработки");
+    // console.log("[upsertAddressesInStrapi] Нет FIAS кодов для обработки");
     return;
   }
 
@@ -162,10 +162,10 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
           ...(info?.all ? { all: info.all } : {}),
         };
 
-        console.log(
-          `[upsertAddressesInStrapi] Подготовленный payload для FIAS ${fiasId}:`,
-          payload
-        );
+        // console.log(
+        //   `[upsertAddressesInStrapi] Подготовленный payload для FIAS ${fiasId}:`,
+        //   payload
+        // );
 
         if (existing) {
           const existingAttrs = existing?.attributes || existing;
@@ -187,10 +187,10 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
             patch.all = payload.all;
 
           if (Object.keys(patch).length) {
-            console.log(
-              `[upsertAddressesInStrapi] Обновляем адрес для FIAS: ${fiasId}`,
-              patch
-            );
+            // console.log(
+            //   `[upsertAddressesInStrapi] Обновляем адрес для FIAS: ${fiasId}`,
+            //   patch
+            // );
             const updateResponse = await axios.put(
               `${urlStrapi}/api/adress/${existingId}`,
               { data: patch },
@@ -248,7 +248,7 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
     worker
   );
   await Promise.all(workers);
-  console.log("[upsertAddressesInStrapi] Завершена обработка всех FIAS кодов");
+  // console.log("[upsertAddressesInStrapi] Завершена обработка всех FIAS кодов");
 }
 
 // Остальной код остается без изменений...
