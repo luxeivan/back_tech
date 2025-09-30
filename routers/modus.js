@@ -134,9 +134,9 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
         }
 
         // Тянем DaData
-        console.log(
-          `[upsertAddressesInStrapi] Запрашиваем данные из DaData для FIAS: ${fiasId}`
-        );
+        // console.log(
+        //   `[upsertAddressesInStrapi] Запрашиваем данные из DaData для FIAS: ${fiasId}`
+        // );
         const info = await fetchByFias(fiasId);
 
         if (info) {

@@ -13,7 +13,7 @@ const auth = {
             if (res.data) {
                 return res.data
             } else {
-                // console.log(res.data);                
+                console.log(res.data);                
                 return false
             }
         } catch (error) {
