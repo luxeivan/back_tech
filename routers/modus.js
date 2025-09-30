@@ -84,10 +84,10 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
     new Set((fiasIds || []).map((x) => String(x).trim()).filter(Boolean))
   );
 
-  console.log(
-    `[upsertAddressesInStrapi] Начало обработки FIAS кодов: ${ids.length} штук`,
-    ids
-  );
+  // console.log(
+  //   `[upsertAddressesInStrapi] Начало обработки FIAS кодов: ${ids.length} штук`,
+  //   ids
+  // );
 
   if (!ids.length) {
     console.log("[upsertAddressesInStrapi] Нет FIAS кодов для обработки");
@@ -100,23 +100,23 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
   async function worker() {
     while (queue.length) {
       const fiasId = queue.shift();
-      console.log(`[upsertAddressesInStrapi] Обрабатываем FIAS: ${fiasId}`);
+      // console.log(`[upsertAddressesInStrapi] Обрабатываем FIAS: ${fiasId}`);
 
       try {
         // Ищем существующую запись
-        console.log(
-          `[upsertAddressesInStrapi] Ищем существующий адрес для FIAS: ${fiasId}`
-        );
+        // console.log(
+        //   `[upsertAddressesInStrapi] Ищем существующий адрес для FIAS: ${fiasId}`
+        // );
         const search = await axios.get(`${urlStrapi}/api/adress`, {
           headers: { Authorization: `Bearer ${jwt}` },
           params: { "filters[fiasId][$eq]": fiasId, "pagination[pageSize]": 1 },
         });
 
-        console.log(
-          `[upsertAddressesInStrapi] Ответ от Strapi при поиске:`,
-          search.status,
-          search.data
-        );
+        // console.log(
+        //   `[upsertAddressesInStrapi] Ответ от Strapi при поиске:`,
+        //   search.status,
+        //   search.data
+        // );
 
         const existing = Array.isArray(search?.data?.data)
           ? search.data.data[0]
@@ -216,19 +216,19 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
           continue;
         }
 
-        console.log(
-          `[upsertAddressesInStrapi] Создаем новый адрес для FIAS: ${fiasId}`,
-          payload
-        );
+        // console.log(
+        //   `[upsertAddressesInStrapi] Создаем новый адрес для FIAS: ${fiasId}`,
+        //   payload
+        // );
         const createResponse = await axios.post(
           `${urlStrapi}/api/adress`,
           { data: payload },
           { headers: { Authorization: `Bearer ${jwt}` } }
         );
-        console.log(
-          `[upsertAddressesInStrapi] Адрес успешно создан для FIAS: ${fiasId}`,
-          createResponse.status
-        );
+        // console.log(
+        //   `[upsertAddressesInStrapi] Адрес успешно создан для FIAS: ${fiasId}`,
+        //   createResponse.status
+        // );
       } catch (e) {
         console.error(
           `[upsertAddressesInStrapi] Ошибка при обработке FIAS ${fiasId}:`,
