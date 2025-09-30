@@ -132,6 +132,13 @@ router.post("/analysis", async (req, res) => {
       trimForLog(prompt, MAX_PROMPT_LOG)
   );
 
+  // Полный промпт и метрики без обрезки — для отладки
+  log(`[${reqId}] → Полный промпт (без обрезки):\n${prompt}`);
+  log(
+    `[${reqId}] → Метрики (beautified JSON):\n` +
+      JSON.stringify(metrics, null, 2)
+  );
+
   let answer = null;
   let usedModel = null;
 
@@ -141,15 +148,23 @@ router.post("/analysis", async (req, res) => {
       `[${reqId}] → Вызов OpenRouter: модель="${model}", url=https://openrouter.ai/api/v1/chat/completions`
     );
     try {
+      const payload = {
+        model,
+        messages: [
+          { role: "system", content: COMMON_SYS },
+          { role: "user", content: prompt },
+        ],
+      };
+
+      // Логируем полный payload, который уходит в OpenRouter
+      log(
+        `[${reqId}] → Полный payload для OpenRouter:\n` +
+          JSON.stringify(payload, null, 2)
+      );
+
       const { data } = await axios.post(
         "https://openrouter.ai/api/v1/chat/completions",
-        {
-          model,
-          messages: [
-            { role: "system", content: COMMON_SYS },
-            { role: "user", content: prompt },
-          ],
-        },
+        payload,
         {
           headers: {
             Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
@@ -220,6 +235,7 @@ router.post("/analysis", async (req, res) => {
 });
 
 module.exports = router;
+
 
 // "use strict";
 
