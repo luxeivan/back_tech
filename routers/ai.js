@@ -22,10 +22,20 @@ const COMMON_SYS =
   "Только русский язык. Никаких тегов, спецсимволов, Markdown/HTML, префиксов вида <s>, </s>, [OUT]/[IN] или эмодзи. " +
   "Ответ — чистый текст по пунктам, каждая мысль с новой строки.";
 
+// const MODELS = [
+//   "openai/gpt-4o-mini",
+//   "anthropic/claude-3-haiku-20240307",
+//   "mistralai/mistral-7b-instruct",
+// ];
+
 const MODELS = [
-  "openai/gpt-4o-mini", // основной
-  "anthropic/claude-3-haiku-20240307", // фоллбек 1
-  "mistralai/mistral-7b-instruct", // фоллбек 2
+  "deepseek/deepseek-chat",
+  "deepseek/deepseek-coder",
+  "openai/gpt-4o-mini",
+  "anthropic/claude-3-haiku-20240307",
+  "meta-llama/llama-3-70b-instruct",
+  "google/gemini-pro",
+  "mistralai/mistral-7b-instruct",
 ];
 
 function buildPrompt(mode, metrics) {
