@@ -7,7 +7,6 @@ const { fetchByFias } = require("./dadata");
 const router = express.Router();
 const secretModus = process.env.SECRET_FOR_MODUS;
 
-// Достаём Bearer-токен из заголовка и сравниваем только значение
 const isAuthorized = (req) => {
   const raw = (
     req.get("authorization") ||
@@ -50,8 +49,6 @@ async function getJwt() {
   }
 }
 
-// --- адреса по FIAS -------------------------------------------------------
-/** Вернуть массив GUID-ов FIAS из «сырых» данных МОДУС */
 function extractFiasList(rawItem) {
   const raw =
     rawItem?.FIAS_LIST ||
@@ -74,11 +71,6 @@ function extractFiasList(rawItem) {
   return fiasCodes;
 }
 
-/**
- * На каждый FIAS:
- * - если нет такого адреса в Strapi → берём из DaData координаты и полный адрес
- * - сохраняем в коллекцию "Адрес" (API uid: /api/adress)
- */
 async function upsertAddressesInStrapi(fiasIds, jwt) {
   const ids = Array.from(
     new Set((fiasIds || []).map((x) => String(x).trim()).filter(Boolean))
@@ -251,7 +243,6 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
   // console.log("[upsertAddressesInStrapi] Завершена обработка всех FIAS кодов");
 }
 
-// Остальной код остается без изменений...
 router.put("/", async (req, res) => {
   try {
     if (!isAuthorized(req)) {
@@ -451,17 +442,70 @@ router.post("/", async (req, res) => {
           console.log(
             `[POST] Отправка элемента ${index + 1} из ${dataArray.length}`
           );
-          const response = await axios.post(
-            `${urlStrapi}/api/teh-narusheniyas`,
-            { data: { ...item } },
-            { headers: { Authorization: `Bearer ${jwt}` } }
-          );
+
+          const headers = { Authorization: `Bearer ${jwt}` };
+
+          // 1) Проверка на дубликат по GUID — если есть, делаем update вместо create
+          let created = false;
+          let updated = false;
+          let docId = null;
+
+          try {
+            if (item?.guid) {
+              const search = await axios.get(
+                `${urlStrapi}/api/teh-narusheniyas`,
+                {
+                  headers,
+                  params: {
+                    "filters[guid][$eq]": item.guid,
+                    "pagination[pageSize]": 1,
+                  },
+                }
+              );
+              const found = Array.isArray(search?.data?.data)
+                ? search.data.data[0]
+                : null;
+              if (found) docId = found.documentId || found.id;
+            }
+          } catch (e) {
+            console.warn(
+              `[POST] Не удалось выполнить проверку на дубликат по GUID=${item?.guid}:`,
+              e?.response?.status || e?.message
+            );
+          }
+
+          let response;
+          if (docId) {
+            console.log(
+              `[POST] Дубликат по GUID=${item.guid} — обновляем запись id=${docId} (PUT)`
+            );
+            response = await axios.put(
+              `${urlStrapi}/api/teh-narusheniyas/${docId}`,
+              { data: { ...item } },
+              { headers }
+            );
+            updated = true;
+          } else {
+            response = await axios.post(
+              `${urlStrapi}/api/teh-narusheniyas`,
+              { data: { ...item } },
+              { headers }
+            );
+            created = true;
+            docId = response?.data?.data?.id || null;
+          }
+
           accumulatedResults.push({
             success: true,
-            id: response.data?.data.id,
+            id: docId || response?.data?.data?.id,
             index: index + 1,
+            updated,
+            created,
           });
-          console.log(`[POST] Элемент ${index + 1} успешно отправлен`);
+
+          console.log(
+            `[POST] Элемент ${index + 1} ${created ? "создан" : "обновлён"}`
+          );
 
           // Копим FIAS — обработаем одним фоном
           try {
@@ -475,18 +519,29 @@ router.post("/", async (req, res) => {
             console.warn("[POST] Пропущено извлечение адресов:", e?.message);
           }
 
-          // Рассылка в SSE — создание ТН
+          // Рассылка в SSE — создание/обновление ТН
           try {
-            broadcast({
-              type: "tn-upsert",
-              source: "modus",
-              action: "create",
-              id: response.data?.data?.id,
-              entry: { ...item, id: response.data?.data?.id },
-              timestamp: Date.now(),
-            });
+            if (created) {
+              broadcast({
+                type: "tn-upsert",
+                source: "modus",
+                action: "create",
+                id: docId,
+                entry: { ...item, id: docId },
+                timestamp: Date.now(),
+              });
+            } else if (updated) {
+              broadcast({
+                type: "tn-upsert",
+                source: "modus",
+                action: "update",
+                id: docId,
+                entry: { ...item, id: docId },
+                timestamp: Date.now(),
+              });
+            }
           } catch (e) {
-            console.error("Ошибка SSE broadcast (create):", e?.message);
+            console.error("Ошибка SSE broadcast (create/update):", e?.message);
           }
         } catch (error) {
           console.error(
