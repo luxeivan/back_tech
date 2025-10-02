@@ -6,6 +6,7 @@ const router = express.Router();
 
 const EDDS_URL = process.env.EDDS_URL;
 const EDDS_TOKEN = process.env.EDDS_TOKEN;
+const EDDS_URL_PUT = process.env.EDDS_URL_PUT; 
 
 function jsonForShell(data) {
   return JSON.stringify(data).replace(/'/g, `'\\''`);
@@ -23,6 +24,69 @@ function clipLog(s, limit = 1500) {
   return str.length > limit
     ? `${str.slice(0, limit)}… (${str.length} символов)`
     : str;
+}
+
+function runCurl(url, payload, { debug } = {}) {
+  return new Promise((resolve) => {
+    try {
+      const jsonEscaped = jsonForShell(payload);
+      if (debug) {
+        console.log(
+          `[ЕДДС] Выполняется curl (токен скрыт): curl -sS -X POST -H "Content-Type: application/json" -H "HTTP-X-API-TOKEN: ${maskToken(
+            EDDS_TOKEN
+          )}" -d '<payload>' "${url}" --insecure`
+        );
+      }
+      const command =
+        `curl -sS -X POST ` +
+        `-H "Content-Type: application/json" ` +
+        `-H "HTTP-X-API-TOKEN: ${EDDS_TOKEN}" ` +
+        `-d '${jsonEscaped}' ` +
+        `"${url}" --insecure`;
+
+      exec(command, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+        const outClip = clipLog(stdout);
+        const errClip = clipLog(stderr);
+
+        if (err) {
+          const code = err.code != null ? err.code : "unknown";
+          console.error(`[ЕДДС] Ошибка curl, код=${code}, stderr=${errClip}`);
+          if (debug) console.error(`[ЕДДС] stdout=${outClip}`);
+          return resolve({
+            ok: false,
+            code,
+            stdout: outClip,
+            stderr: errClip,
+          });
+        }
+
+        console.log(`[ЕДДС] Ответ curl: ${outClip}`);
+        let parsed = null;
+        try {
+          parsed = JSON.parse(stdout);
+          console.log("[ЕДДС] Распарсенный ответ:", parsed);
+        } catch {
+          /* raw only */
+        }
+        return resolve({ ok: true, parsed, stdout: outClip });
+      });
+    } catch (e) {
+      return resolve({ ok: false, error: e.message });
+    }
+  });
+}
+
+function isDuplicateError(resp) {
+  try {
+    const msg = String(
+      (resp && resp.parsed && (resp.parsed.message || resp.parsed.error)) ||
+        resp?.stdout ||
+        ""
+    );
+    return /существует|уже существует/i.test(msg);
+  } catch {
+    return false;
+  }
 }
 
 router.post("/", async (req, res) => {
@@ -91,51 +155,59 @@ router.post("/", async (req, res) => {
   }
 
   try {
-    const jsonEscaped = jsonForShell(payload);
+    const mode = String(req.query.mode || "").trim().toLowerCase();
+    const forceUpdate = mode === "update" || String(req.query.update || "") === "1";
+    const forceCreate = mode === "create" || String(req.query.create || "") === "1";
 
-    if (debug) {
-      console.log(
-        `[ЕДДС] Выполняется curl (токен скрыт): curl -sS -X POST -H "Content-Type: application/json" -H "HTTP-X-API-TOKEN: ${maskToken(
-          EDDS_TOKEN
-        )}" -d '<payload>' "${EDDS_URL}" --insecure`
-      );
+    if (forceUpdate && !EDDS_URL_PUT) {
+      return res.status(500).json({ ok: false, error: "EDDS_URL_PUT не задан в .env" });
     }
 
-    const command =
-      `curl -sS -X POST ` +
-      `-H "Content-Type: application/json" ` +
-      `-H "HTTP-X-API-TOKEN: ${EDDS_TOKEN}" ` +
-      `-d '${jsonEscaped}' ` +
-      `"${EDDS_URL}" --insecure`;
+    const primaryUrl = forceUpdate ? (EDDS_URL_PUT || EDDS_URL) : EDDS_URL;
+    const fallbackUrl = !forceUpdate && !forceCreate && EDDS_URL_PUT ? EDDS_URL_PUT : null;
 
-    exec(command, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
-      const outClip = clipLog(stdout);
-      const errClip = clipLog(stderr);
+    // Первый вызов: обычно create.php (или сразу update.php при принудительном режиме)
+    const resp1 = await runCurl(primaryUrl, payload, { debug });
 
-      if (err) {
-        const code = err.code != null ? err.code : "unknown";
-        console.error(`[ЕДДС] Ошибка curl, код=${code}, stderr=${errClip}`);
-        if (debug) console.error(`[ЕДДС] stdout=${outClip}`);
+    // Если exec упал — отдаём 502
+    if (!resp1.ok && !fallbackUrl) {
+      return res.status(502).json({
+        ok: false,
+        error: "Ошибка при выполнении curl",
+        code: resp1.code,
+        stderr: resp1.stderr,
+        ...(debug ? { stdout: resp1.stdout } : {}),
+      });
+    }
+
+    // Авто‑фоллбек: если create вернул "уже существует" — пробуем update.php
+    if (
+      resp1.ok &&
+      resp1.parsed &&
+      resp1.parsed.success === false &&
+      fallbackUrl &&
+      isDuplicateError(resp1)
+    ) {
+      console.log("[ЕДДС] Похоже, инцидент уже существует — пробуем update.php…");
+      const resp2 = await runCurl(fallbackUrl, payload, { debug });
+
+      if (!resp2.ok) {
         return res.status(502).json({
           ok: false,
-          error: "Ошибка при выполнении curl",
-          message: err.message,
-          code,
-          stderr: errClip,
-          ...(debug ? { stdout: outClip } : {}),
+          error: "Ошибка при выполнении curl (update)",
+          code: resp2.code,
+          stderr: resp2.stderr,
+          ...(debug ? { stdout: resp2.stdout } : {}),
         });
       }
 
-      console.log(`[ЕДДС] Ответ curl: ${outClip}`);
+      const out2 = resp2.parsed || { raw: resp2.stdout };
+      return res.json(debug ? { ...out2, _via: "update" } : out2);
+    }
 
-      try {
-        const parsed = JSON.parse(stdout);
-        console.log("[ЕДДС] Распарсенный ответ:", parsed);
-        return res.json(debug ? { ...parsed, _raw: outClip } : parsed);
-      } catch {
-        return res.json({ raw: stdout?.toString() });
-      }
-    });
+    // Иначе — отдаём ответ первого вызова
+    const out1 = (resp1 && (resp1.parsed || { raw: resp1.stdout })) || { ok: false };
+    return res.json(debug ? { ...out1, _via: forceUpdate ? "update" : "create" } : out1);
   } catch (e) {
     return res.status(500).json({ ok: false, error: e.message });
   }
