@@ -302,12 +302,10 @@ router.put("/", async (req, res) => {
 
     const jwt = await getJwt();
     if (!jwt) {
-      return res
-        .status(500)
-        .json({
-          status: "error",
-          message: "Не удалось авторизоваться в Strapi",
-        });
+      return res.status(500).json({
+        status: "error",
+        message: "Не удалось авторизоваться в Strapi",
+      });
     }
 
     const fiasSet = new Set();
@@ -451,6 +449,45 @@ router.post("/", async (req, res) => {
           console.log(
             `[POST] Отправка элемента ${index + 1} из ${dataArray.length}`
           );
+
+          // Безопасная проверка дубликатов по GUID — если запись уже есть, POST не выполняем
+          const guid = item?.guid;
+          if (guid) {
+            try {
+              const search = await axios.get(
+                `${urlStrapi}/api/teh-narusheniyas`,
+                {
+                  headers: { Authorization: `Bearer ${jwt}` },
+                  params: {
+                    "filters[guid][$eq]": guid,
+                    "pagination[pageSize]": 1,
+                  },
+                }
+              );
+              const found = search?.data?.data?.[0];
+              if (found) {
+                const existingId = found?.documentId || found?.id;
+                console.warn(
+                  `[POST] Дубликат guid=${guid} — запись уже существует (id=${existingId}). POST пропущен`
+                );
+                accumulatedResults.push({
+                  success: false,
+                  index: index + 1,
+                  status: "duplicate",
+                  error: "Запись с таким GUID уже существует",
+                  guid,
+                  id: existingId,
+                });
+                return accumulatedResults;
+              }
+            } catch (e) {
+              console.warn(
+                `[POST] Не удалось выполнить проверку дубликатов для guid=${guid}:`,
+                e?.response?.status || e?.message
+              );
+            }
+          }
+
           const response = await axios.post(
             `${urlStrapi}/api/teh-narusheniyas`,
             { data: { ...item } },
@@ -548,11 +585,24 @@ router.post("/", async (req, res) => {
     }));
 
     const results = await sendDataSequentially(prepareData);
-    if (results) {
-      return res.json({ status: "ok", results });
-    } else {
+    if (!results) {
       return res.status(500).json({ status: "error" });
     }
+
+    const anyCreated = results.some((r) => r?.success === true);
+    const allDuplicates =
+      results.length > 0 && results.every((r) => r?.status === "duplicate");
+
+    if (allDuplicates && !anyCreated) {
+      // Совместимо с фронтом: явный 409 + подробные результаты
+      return res.status(409).json({
+        status: "duplicate",
+        message: "Запись с таким GUID уже существует",
+        results,
+      });
+    }
+
+    return res.json({ status: "ok", results });
   } else {
     res.status(403).json({ status: "Forbidden" });
   }
