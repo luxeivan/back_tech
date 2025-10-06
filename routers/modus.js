@@ -426,61 +426,59 @@ router.put("/", async (req, res) => {
         );
 
         if (needEdds) {
-          // Resolve correct endpoint regardless of "/api" prefix or mount path.
-          // Allow overriding the endpoint via env (e.g. SELF_EDDS_URL=http://127.0.0.1:3001/services/edds)
-          const host = `${req.protocol}://${req.get("host")}`;
-          const eddsPathFromBase =
-            (req.baseUrl || "").replace(/\/modus(\/)?$/i, "/edds$1") || "/services/edds";
-          const explicitSelf = String(process.env.SELF_EDDS_URL || "").trim();
-
-          const withMode = (u) => (u ? (u.includes("?") ? `${u}&mode=update` : `${u}?mode=update`) : "");
-          const withDebug = (u) => (u ? (u.includes("?") ? `${u}&debug=1` : `${u}?debug=1`) : "");
-
-          const candidates = [
-            withMode(explicitSelf),
-            withMode(`${host}${eddsPathFromBase}`),
-            withMode(`${host}/services/edds`),
-            withMode(`${host}/api/services/edds`),
-          ].filter(Boolean);
-
           const payload = buildEddsPayloadFromModus(mapped);
 
-          // Send in background with simple 404-fallback chain; do not block MODUS response
-          setTimeout(async () => {
-            const clip = (v, n = 500) => {
-              try {
-                const s = typeof v === "string" ? v : JSON.stringify(v);
-                return s && s.length > n ? `${s.slice(0, n)}… (${s.length} bytes)` : s;
-              } catch {
-                return String(v);
-              }
-            };
+          // Prefer explicit endpoint from env, then hit local app directly.
+          const explicitSelf = String(process.env.SELF_EDDS_URL || "").trim();
+          const port = Number(process.env.PORT || process.env.BACK_PORT || 3110);
+          const protocol = req.protocol || "http";
+          const host = req.get("host");
 
+          // Build candidates in the safest order: localhost first (bypasses nginx / external routing),
+          // then same host, then possible /api prefix.
+          const candidates = [
+            explicitSelf && `${explicitSelf}?mode=update&debug=1`,
+            `http://127.0.0.1:${port}/services/edds?mode=update&debug=1`,
+            `http://localhost:${port}/services/edds?mode=update&debug=1`,
+            `${protocol}://${host}/services/edds?mode=update&debug=1`,
+            `${protocol}://${host}/api/services/edds?mode=update&debug=1`,
+          ].filter(Boolean);
+
+          console.log(`[modus→edds] candidates: ${candidates.join(", ")}`);
+
+          // Send in background; log FULL body so мы видим «полный ответ ЕДДС», как и при ручном вызове.
+          setTimeout(async () => {
             let delivered = false;
 
-            for (const baseUrl of candidates) {
-              const url = withDebug(baseUrl);
+            for (const url of candidates) {
               try {
                 const resp = await axios.post(url, payload, {
                   headers: { Authorization: `Bearer ${jwt}` },
                   timeout: 30000,
-                  validateStatus: () => true, // log everything
+                  validateStatus: () => true,
                 });
 
-                const bodyPreview = clip(resp?.data ?? resp?.statusText ?? "");
-                console.log(`[modus→edds] try ${url} → HTTP ${resp?.status}; body=${bodyPreview}`);
+                const body =
+                  typeof resp?.data === "string"
+                    ? resp.data
+                    : JSON.stringify(resp?.data ?? resp?.statusText ?? "", null, 2);
 
-                // If it's anything other than "not found" — consider it a final answer (success or error).
+                // Печатаем до 4000 символов, чтобы было «как с фронта».
+                const bodyClip = body.length > 4000 ? body.slice(0, 4000) + `… (${body.length} chars)` : body;
+
+                console.log(`[modus→edds] try ${url} → HTTP ${resp?.status}; body=${bodyClip}`);
+
+                // Любой ответ, кроме 404 (маршрутизация мимо), считаем финальным (успех/ошибка покажет тело).
                 if (resp?.status !== 404) {
                   if (resp?.status >= 200 && resp?.status < 300) {
                     const claimId = resp?.data?.data?.claim_id ?? resp?.data?.claim_id;
                     console.log(
                       `[modus→edds] ✅ GUID=${mapped.guid} отправлен в ЕДДС (update) через ${url}` +
-                      (claimId ? `; claim_id=${claimId}` : "")
+                        (claimId ? `; claim_id=${claimId}` : "")
                     );
                   } else {
                     console.warn(
-                      `[modus→edds] ⚠ Ответ ЕДДС для GUID=${mapped.guid}: HTTP ${resp?.status}; тело=${bodyPreview}`
+                      `[modus→edds] ⚠ Ответ ЕДДС для GUID=${mapped.guid}: HTTP ${resp?.status}; тело=${bodyClip}`
                     );
                   }
                   delivered = true;
@@ -488,14 +486,12 @@ router.put("/", async (req, res) => {
                 }
               } catch (e) {
                 const code = e?.response?.status || e?.code || e?.message;
-                console.warn(
-                  `[modus→edds] Ошибка запроса ${url} для GUID=${mapped.guid}: ${code}`
-                );
+                console.warn(`[modus→edds] Ошибка запроса ${url} для GUID=${mapped.guid}: ${code}`);
               }
             }
 
             if (!delivered) {
-              console.warn(
+              console.error(
                 `[modus→edds] ❌ Не удалось доставить GUID=${mapped.guid} до /services/edds — все кандидаты вернули 404`
               );
             }
