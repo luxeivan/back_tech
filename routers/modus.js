@@ -228,9 +228,9 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
 
         // Не создаём пустых адресов, если DaData не ответила
         if (!info) {
-          console.log(
-            `[upsertAddressesInStrapi] Пропускаем создание адреса для FIAS: ${fiasId} - нет данных от DaData`
-          );
+          // console.log(
+          //   `[upsertAddressesInStrapi] Пропускаем создание адреса для FIAS: ${fiasId} - нет данных от DaData`
+          // );
           continue;
         }
 
@@ -426,48 +426,78 @@ router.put("/", async (req, res) => {
         );
 
         if (needEdds) {
-          // Resolve correct endpoint regardless of "/api" prefix or mount path
+          // Resolve correct endpoint regardless of "/api" prefix or mount path.
+          // Allow overriding the endpoint via env (e.g. SELF_EDDS_URL=http://127.0.0.1:3001/services/edds)
           const host = `${req.protocol}://${req.get("host")}`;
           const eddsPathFromBase =
             (req.baseUrl || "").replace(/\/modus(\/)?$/i, "/edds$1") || "/services/edds";
+          const explicitSelf = String(process.env.SELF_EDDS_URL || "").trim();
+
+          const withMode = (u) => (u ? (u.includes("?") ? `${u}&mode=update` : `${u}?mode=update`) : "");
+          const withDebug = (u) => (u ? (u.includes("?") ? `${u}&debug=1` : `${u}?debug=1`) : "");
+
           const candidates = [
-            `${host}${eddsPathFromBase}?mode=update`,
-            `${host}/services/edds?mode=update`,
-            `${host}/api/services/edds?mode=update`,
-          ];
+            withMode(explicitSelf),
+            withMode(`${host}${eddsPathFromBase}`),
+            withMode(`${host}/services/edds`),
+            withMode(`${host}/api/services/edds`),
+          ].filter(Boolean);
 
           const payload = buildEddsPayloadFromModus(mapped);
 
           // Send in background with simple 404-fallback chain; do not block MODUS response
           setTimeout(async () => {
-            for (const url of candidates) {
+            const clip = (v, n = 500) => {
+              try {
+                const s = typeof v === "string" ? v : JSON.stringify(v);
+                return s && s.length > n ? `${s.slice(0, n)}… (${s.length} bytes)` : s;
+              } catch {
+                return String(v);
+              }
+            };
+
+            let delivered = false;
+
+            for (const baseUrl of candidates) {
+              const url = withDebug(baseUrl);
               try {
                 const resp = await axios.post(url, payload, {
                   headers: { Authorization: `Bearer ${jwt}` },
                   timeout: 30000,
-                  validateStatus: () => true, // we log everything
+                  validateStatus: () => true, // log everything
                 });
-                console.log(`[modus→edds] try ${url} → HTTP ${resp?.status}`);
-                // if it's anything other than "not found" — stop further attempts
+
+                const bodyPreview = clip(resp?.data ?? resp?.statusText ?? "");
+                console.log(`[modus→edds] try ${url} → HTTP ${resp?.status}; body=${bodyPreview}`);
+
+                // If it's anything other than "not found" — consider it a final answer (success or error).
                 if (resp?.status !== 404) {
                   if (resp?.status >= 200 && resp?.status < 300) {
+                    const claimId = resp?.data?.data?.claim_id ?? resp?.data?.claim_id;
                     console.log(
-                      `[modus→edds] GUID=${mapped.guid} отправлен в ЕДДС (update) через ${url}`
+                      `[modus→edds] ✅ GUID=${mapped.guid} отправлен в ЕДДС (update) через ${url}` +
+                      (claimId ? `; claim_id=${claimId}` : "")
                     );
                   } else {
                     console.warn(
-                      `[modus→edds] Ответ ЕДДС для GUID=${mapped.guid}: HTTP ${resp?.status}; тело=`,
-                      resp?.data || resp?.statusText
+                      `[modus→edds] ⚠ Ответ ЕДДС для GUID=${mapped.guid}: HTTP ${resp?.status}; тело=${bodyPreview}`
                     );
                   }
+                  delivered = true;
                   break;
                 }
               } catch (e) {
+                const code = e?.response?.status || e?.code || e?.message;
                 console.warn(
-                  `[modus→edds] Ошибка запроса ${url} для GUID=${mapped.guid}:`,
-                  e?.response?.status || e?.code || e?.message
+                  `[modus→edds] Ошибка запроса ${url} для GUID=${mapped.guid}: ${code}`
                 );
               }
+            }
+
+            if (!delivered) {
+              console.warn(
+                `[modus→edds] ❌ Не удалось доставить GUID=${mapped.guid} до /services/edds — все кандидаты вернули 404`
+              );
             }
           }, 0);
         }

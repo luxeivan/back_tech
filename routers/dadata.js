@@ -51,7 +51,7 @@ async function fetchByFias(fiasId) {
     let attempt = 0;
     while (true) {
       try {
-        console.log(`[fetchByFias] Попытка ${attempt + 1} для FIAS: ${id}`);
+        // console.log(`[fetchByFias] Попытка ${attempt + 1} для FIAS: ${id}`);
         const { data } = await axios.post(
           "https://suggestions.dadata.ru/suggestions/api/4_1/rs/findById/address",
           { query: id },
@@ -73,9 +73,9 @@ async function fetchByFias(fiasId) {
 
         const s = Array.isArray(data?.suggestions) ? data.suggestions[0] : null;
         if (!s) {
-          console.log(
-            `[fetchByFias] Нет данных в ответе DaData для FIAS: ${id}`
-          );
+          // console.log(
+          //   `[fetchByFias] Нет данных в ответе DaData для FIAS: ${id}`
+          // );
           return null;
         }
 
