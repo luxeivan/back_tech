@@ -829,12 +829,13 @@ router.put("/", async (req, res) => {
 
           // Build candidates in the safest order: localhost first (bypasses nginx / external routing),
           // then same host, then possible /api prefix.
+          const qs = 'debug=1'; // без mode — сначала create, при дубле fallback в update (реализовано в edds.js)
           const candidates = [
-            explicitSelf && `${explicitSelf}?mode=update&debug=1`,
-            `http://127.0.0.1:${port}/services/edds?mode=update&debug=1`,
-            `http://localhost:${port}/services/edds?mode=update&debug=1`,
-            `${protocol}://${host}/services/edds?mode=update&debug=1`,
-            `${protocol}://${host}/api/services/edds?mode=update&debug=1`,
+            explicitSelf && `${explicitSelf}?${qs}`,
+            `http://127.0.0.1:${port}/services/edds?${qs}`,
+            `http://localhost:${port}/services/edds?${qs}`,
+            `${protocol}://${host}/services/edds?${qs}`,
+            `${protocol}://${host}/api/services/edds?${qs}`,
           ].filter(Boolean);
 
           console.log(`[modus→edds] candidates: ${candidates.join(", ")}`);
@@ -872,18 +873,24 @@ router.put("/", async (req, res) => {
 
                 // Любой ответ, кроме 404 (маршрутизация мимо), считаем финальным (успех/ошибка покажет тело).
                 if (resp?.status !== 404) {
-                  if (resp?.status >= 200 && resp?.status < 300) {
-                    const claimId =
-                      resp?.data?.data?.claim_id ?? resp?.data?.claim_id;
+                  const claimId =
+                    resp?.data?.data?.claim_id ?? resp?.data?.claim_id;
+                  const ok =
+                    resp?.status >= 200 &&
+                    resp?.status < 300 &&
+                    (resp?.data?.success === true || !!claimId);
+
+                  if (ok) {
                     console.log(
-                      `[modus→edds] ✅ GUID=${mapped.guid} отправлен в ЕДДС (update) через ${url}` +
+                      `[modus→edds] ✅ GUID=${mapped.guid} отправлен в ЕДДС через ${url}` +
                         (claimId ? `; claim_id=${claimId}` : "")
                     );
                   } else {
                     console.warn(
-                      `[modus→edds] ⚠ Ответ ЕДДС для GUID=${mapped.guid}: HTTP ${resp?.status}; тело=${bodyClip}`
+                      `[modus→edds] ❌ ЕДДС не приняла GUID=${mapped.guid}: HTTP ${resp?.status}; success=${resp?.data?.success}; message=${resp?.data?.message}; тело=${bodyClip}`
                     );
                   }
+
                   delivered = true;
                   break;
                 }
