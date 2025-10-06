@@ -418,34 +418,57 @@ router.put("/", async (req, res) => {
         );
         const nextStatus = norm(mapped?.STATUS_NAME);
         const statusChanged = prevStatus !== nextStatus;
-        const needEdds = statusChanged && isFinalStatus(nextStatus);
+        const nextIsFinal = isFinalStatus(nextStatus);
+        const needEdds = statusChanged && nextIsFinal;
+
+        console.log(
+          `[modus→edds] status change check guid=${mapped.guid}: prev="${prevStatus}" → next="${nextStatus}" changed=${statusChanged} final=${nextIsFinal}`
+        );
 
         if (needEdds) {
-          // Build self base URL from the incoming request (same host)
-          const baseSelf = `${req.protocol}://${req.get("host")}`;
+          // Resolve correct endpoint regardless of "/api" prefix or mount path
+          const host = `${req.protocol}://${req.get("host")}`;
+          const eddsPathFromBase =
+            (req.baseUrl || "").replace(/\/modus(\/)?$/i, "/edds$1") || "/services/edds";
+          const candidates = [
+            `${host}${eddsPathFromBase}?mode=update`,
+            `${host}/services/edds?mode=update`,
+            `${host}/api/services/edds?mode=update`,
+          ];
+
           const payload = buildEddsPayloadFromModus(mapped);
 
-          // Send in background, do not block MODUS response
-          setTimeout(() => {
-            axios
-              .post(`${baseSelf}/services/edds?mode=update`, payload, {
-                headers: { Authorization: `Bearer ${jwt}` },
-                timeout: 30000,
-                // accept any status; we only log here
-                validateStatus: () => true,
-              })
-              .then((resp) => {
-                console.log(
-                  `[modus→edds] GUID=${mapped.guid} отправлен в ЕДДС (update), status=`,
-                  resp?.status
-                );
-              })
-              .catch((e) => {
+          // Send in background with simple 404-fallback chain; do not block MODUS response
+          setTimeout(async () => {
+            for (const url of candidates) {
+              try {
+                const resp = await axios.post(url, payload, {
+                  headers: { Authorization: `Bearer ${jwt}` },
+                  timeout: 30000,
+                  validateStatus: () => true, // we log everything
+                });
+                console.log(`[modus→edds] try ${url} → HTTP ${resp?.status}`);
+                // if it's anything other than "not found" — stop further attempts
+                if (resp?.status !== 404) {
+                  if (resp?.status >= 200 && resp?.status < 300) {
+                    console.log(
+                      `[modus→edds] GUID=${mapped.guid} отправлен в ЕДДС (update) через ${url}`
+                    );
+                  } else {
+                    console.warn(
+                      `[modus→edds] Ответ ЕДДС для GUID=${mapped.guid}: HTTP ${resp?.status}; тело=`,
+                      resp?.data || resp?.statusText
+                    );
+                  }
+                  break;
+                }
+              } catch (e) {
                 console.warn(
-                  `[modus→edds] Не удалось отправить GUID=${mapped.guid} в ЕДДС:`,
+                  `[modus→edds] Ошибка запроса ${url} для GUID=${mapped.guid}:`,
                   e?.response?.status || e?.code || e?.message
                 );
-              });
+              }
+            }
           }, 0);
         }
         // --- /auto-send ---
