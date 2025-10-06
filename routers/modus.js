@@ -31,7 +31,25 @@ const isAuthorized = (req) => {
 
 const loginStrapi = process.env.LOGIN_STRAPI;
 const passwordStrapi = process.env.PASSWORD_STRAPI;
+
 const urlStrapi = process.env.URL_STRAPI;
+
+// --- helpers for auto-sending to EDDS on status change ---
+const norm = (s) => String(s || "").trim().toLowerCase();
+const isFinalStatus = (s) => ["закрыта", "запитана", "удалена"].includes(norm(s));
+
+/** Build minimal EDDS payload from our mapped item (can be replaced with a richer mapper later) */
+function buildEddsPayloadFromModus(mapped) {
+  return {
+    GUID: mapped.guid,
+    STATUS_NAME: mapped.STATUS_NAME,
+    NUMBER: mapped.number,
+    ENERGOOBJECT: mapped.energoObject,
+    EVENT_DATETIME: mapped.createDateTime,
+    RAW: mapped.data || {},
+  };
+}
+// --- /helpers ---
 
 async function getJwt() {
   try {
@@ -251,7 +269,6 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
   // console.log("[upsertAddressesInStrapi] Завершена обработка всех FIAS кодов");
 }
 
-// Остальной код остается без изменений...
 router.put("/", async (req, res) => {
   try {
     if (!isAuthorized(req)) {
@@ -394,6 +411,44 @@ router.put("/", async (req, res) => {
         } catch (e) {
           console.error("SSE broadcast error (update):", e?.message);
         }
+
+        // --- auto-send to EDDS on STATUS change to a final state ---
+        const prevStatus = norm(
+          current?.STATUS_NAME || current?.attributes?.STATUS_NAME
+        );
+        const nextStatus = norm(mapped?.STATUS_NAME);
+        const statusChanged = prevStatus !== nextStatus;
+        const needEdds = statusChanged && isFinalStatus(nextStatus);
+
+        if (needEdds) {
+          // Build self base URL from the incoming request (same host)
+          const baseSelf = `${req.protocol}://${req.get("host")}`;
+          const payload = buildEddsPayloadFromModus(mapped);
+
+          // Send in background, do not block MODUS response
+          setTimeout(() => {
+            axios
+              .post(`${baseSelf}/services/edds?mode=update`, payload, {
+                headers: { Authorization: `Bearer ${jwt}` },
+                timeout: 30000,
+                // accept any status; we only log here
+                validateStatus: () => true,
+              })
+              .then((resp) => {
+                console.log(
+                  `[modus→edds] GUID=${mapped.guid} отправлен в ЕДДС (update), status=`,
+                  resp?.status
+                );
+              })
+              .catch((e) => {
+                console.warn(
+                  `[modus→edds] Не удалось отправить GUID=${mapped.guid} в ЕДДС:`,
+                  e?.response?.status || e?.code || e?.message
+                );
+              });
+          }, 0);
+        }
+        // --- /auto-send ---
 
         acc.push({
           success: true,
@@ -610,6 +665,7 @@ router.post("/", async (req, res) => {
 
 module.exports = router;
 
+
 // const express = require("express");
 // const axios = require("axios");
 // const { broadcast } = require("../services/sse");
@@ -630,12 +686,11 @@ module.exports = router;
 //   const token = match ? match[1].trim() : "";
 //   const ok = token && token === String(secretModus || "");
 //   if (!ok) {
-//     // Временный диагностический лог (замаскирован):
 //     const mask = (s) => (s ? `${s.slice(0, 4)}…${s.slice(-4)}` : "<empty>");
 //     console.warn(
-//       "[modus] Forbidden: token=",
+//       "[modus] Доступ запрещен: token=",
 //       mask(token),
-//       " expected=",
+//       " ожидался=",
 //       mask(String(secretModus || ""))
 //     );
 //   }
@@ -658,7 +713,7 @@ module.exports = router;
 //       return false;
 //     }
 //   } catch (error) {
-//     console.log(error);
+//     console.log("Ошибка авторизации в Strapi:", error);
 //     return false;
 //   }
 // }
@@ -671,7 +726,10 @@ module.exports = router;
 //     rawItem?.data?.FIAS_LIST ||
 //     rawItem?.data?.data?.FIAS_LIST ||
 //     "";
-//   return Array.from(
+
+//   console.log("[extractFiasList] Сырая строка FIAS_LIST:", raw);
+
+//   const fiasCodes = Array.from(
 //     new Set(
 //       String(raw)
 //         .split(/[;,]/)
@@ -679,35 +737,91 @@ module.exports = router;
 //         .filter(Boolean)
 //     )
 //   );
+
+//   console.log("[extractFiasList] Извлеченные FIAS коды:", fiasCodes);
+//   return fiasCodes;
 // }
 
 // /**
 //  * На каждый FIAS:
 //  * - если нет такого адреса в Strapi → берём из DaData координаты и полный адрес
 //  * - сохраняем в коллекцию "Адрес" (API uid: /api/adress)
-//  *
-//  * ВАЖНО: функция ограничивает параллелизм и не создаёт пустых адресов, если DaData не ответила.
 //  */
 // async function upsertAddressesInStrapi(fiasIds, jwt) {
-//   const ids = Array.from(new Set((fiasIds || []).map((x) => String(x).trim()).filter(Boolean)));
-//   if (!ids.length) return;
+//   const ids = Array.from(
+//     new Set((fiasIds || []).map((x) => String(x).trim()).filter(Boolean))
+//   );
 
-//   const CONCURRENCY = Number(process.env.DADATA_CONCURRENCY || 2); // не душим DaData и Strapi
+//   // console.log(
+//   //   `[upsertAddressesInStrapi] Начало обработки FIAS кодов: ${ids.length} штук`,
+//   //   ids
+//   // );
+
+//   if (!ids.length) {
+//     // console.log("[upsertAddressesInStrapi] Нет FIAS кодов для обработки");
+//     return;
+//   }
+
+//   const CONCURRENCY = Number(process.env.DADATA_CONCURRENCY || 2);
 //   const queue = ids.slice();
 
 //   async function worker() {
 //     while (queue.length) {
 //       const fiasId = queue.shift();
+//       // console.log(`[upsertAddressesInStrapi] Обрабатываем FIAS: ${fiasId}`);
+
 //       try {
 //         // Ищем существующую запись
+//         // console.log(
+//         //   `[upsertAddressesInStrapi] Ищем существующий адрес для FIAS: ${fiasId}`
+//         // );
 //         const search = await axios.get(`${urlStrapi}/api/adress`, {
 //           headers: { Authorization: `Bearer ${jwt}` },
 //           params: { "filters[fiasId][$eq]": fiasId, "pagination[pageSize]": 1 },
 //         });
-//         const existing = Array.isArray(search?.data?.data) ? search.data.data[0] : null;
+
+//         // console.log(
+//         //   `[upsertAddressesInStrapi] Ответ от Strapi при поиске:`,
+//         //   search.status,
+//         //   search.data
+//         // );
+
+//         const existing = Array.isArray(search?.data?.data)
+//           ? search.data.data[0]
+//           : null;
+
+//         if (existing) {
+//           console.log(
+//             `[upsertAddressesInStrapi] Найден существующий адрес для FIAS: ${fiasId}`,
+//             existing
+//           );
+//         } else {
+//           console.log(
+//             `[upsertAddressesInStrapi] Адрес для FIAS: ${fiasId} не найден, будет создан новый`
+//           );
+//         }
 
 //         // Тянем DaData
+//         // console.log(
+//         //   `[upsertAddressesInStrapi] Запрашиваем данные из DaData для FIAS: ${fiasId}`
+//         // );
 //         const info = await fetchByFias(fiasId);
+
+//         if (info) {
+//           console.log(
+//             `[upsertAddressesInStrapi] DaData ответила для FIAS: ${fiasId}`,
+//             {
+//               fullAddress: info.fullAddress,
+//               lat: info.lat,
+//               lon: info.lon,
+//             }
+//           );
+//         } else {
+//           console.log(
+//             `[upsertAddressesInStrapi] DaData не вернула данных для FIAS: ${fiasId}`
+//           );
+//         }
+
 //         const payload = {
 //           fiasId,
 //           ...(info?.fullAddress ? { fullAddress: info.fullAddress } : {}),
@@ -716,44 +830,93 @@ module.exports = router;
 //           ...(info?.all ? { all: info.all } : {}),
 //         };
 
+//         // console.log(
+//         //   `[upsertAddressesInStrapi] Подготовленный payload для FIAS ${fiasId}:`,
+//         //   payload
+//         // );
+
 //         if (existing) {
 //           const existingAttrs = existing?.attributes || existing;
 //           const existingId = existing?.documentId || existing?.id;
 //           const patch = {};
 //           const jsonEq = (a, b) => {
-//             try { return JSON.stringify(a ?? null) === JSON.stringify(b ?? null); } catch { return false; }
+//             try {
+//               return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+//             } catch {
+//               return false;
+//             }
 //           };
-//           if (!existingAttrs?.fullAddress && payload.fullAddress) patch.fullAddress = payload.fullAddress;
+
+//           if (!existingAttrs?.fullAddress && payload.fullAddress)
+//             patch.fullAddress = payload.fullAddress;
 //           if (!existingAttrs?.lat && payload.lat) patch.lat = payload.lat;
 //           if (!existingAttrs?.lon && payload.lon) patch.lon = payload.lon;
-//           if (payload.all && !jsonEq(existingAttrs?.all, payload.all)) patch.all = payload.all;
+//           if (payload.all && !jsonEq(existingAttrs?.all, payload.all))
+//             patch.all = payload.all;
 
 //           if (Object.keys(patch).length) {
-//             await axios.put(
+//             // console.log(
+//             //   `[upsertAddressesInStrapi] Обновляем адрес для FIAS: ${fiasId}`,
+//             //   patch
+//             // );
+//             const updateResponse = await axios.put(
 //               `${urlStrapi}/api/adress/${existingId}`,
 //               { data: patch },
 //               { headers: { Authorization: `Bearer ${jwt}` } }
+//             );
+//             console.log(
+//               `[upsertAddressesInStrapi] Адрес успешно обновлен для FIAS: ${fiasId}`,
+//               updateResponse.status
+//             );
+//           } else {
+//             console.log(
+//               `[upsertAddressesInStrapi] Изменений нет, обновление не требуется для FIAS: ${fiasId}`
 //             );
 //           }
 //           continue;
 //         }
 
 //         // Не создаём пустых адресов, если DaData не ответила
-//         if (!info) continue;
+//         if (!info) {
+//           console.log(
+//             `[upsertAddressesInStrapi] Пропускаем создание адреса для FIAS: ${fiasId} - нет данных от DaData`
+//           );
+//           continue;
+//         }
 
-//         await axios.post(
+//         // console.log(
+//         //   `[upsertAddressesInStrapi] Создаем новый адрес для FIAS: ${fiasId}`,
+//         //   payload
+//         // );
+//         const createResponse = await axios.post(
 //           `${urlStrapi}/api/adress`,
 //           { data: payload },
 //           { headers: { Authorization: `Bearer ${jwt}` } }
 //         );
+//         // console.log(
+//         //   `[upsertAddressesInStrapi] Адрес успешно создан для FIAS: ${fiasId}`,
+//         //   createResponse.status
+//         // );
 //       } catch (e) {
-//         console.warn("[modus] upsertAddressesInStrapi error:", fiasId, e?.response?.status || e?.code || e?.message);
+//         console.error(
+//           `[upsertAddressesInStrapi] Ошибка при обработке FIAS ${fiasId}:`,
+//           {
+//             статус: e?.response?.status,
+//             сообщение: e?.message,
+//             данные: e?.response?.data,
+//             url: e?.config?.url,
+//           }
+//         );
 //       }
 //     }
 //   }
 
-//   const workers = Array.from({ length: Math.min(CONCURRENCY, ids.length) }, worker);
+//   const workers = Array.from(
+//     { length: Math.min(CONCURRENCY, ids.length) },
+//     worker
+//   );
 //   await Promise.all(workers);
+//   // console.log("[upsertAddressesInStrapi] Завершена обработка всех FIAS кодов");
 // }
 
 // router.put("/", async (req, res) => {
@@ -766,7 +929,8 @@ module.exports = router;
 //     if (!items || !Array.isArray(items) || items.length === 0) {
 //       return res.status(400).json({
 //         status: "error",
-//         message: "Не хватает требуемых данных (ожидается Data или data: массив)",
+//         message:
+//           "Не хватает требуемых данных (ожидается Data или data: массив)",
 //       });
 //     }
 
@@ -805,7 +969,10 @@ module.exports = router;
 
 //     const jwt = await getJwt();
 //     if (!jwt) {
-//       return res.status(500).json({ status: "error", message: "Не удалось авторизоваться в Strapi" });
+//       return res.status(500).json({
+//         status: "error",
+//         message: "Не удалось авторизоваться в Strapi",
+//       });
 //     }
 
 //     const fiasSet = new Set();
@@ -815,17 +982,36 @@ module.exports = router;
 //       const mapped = mapItem(rawItem);
 
 //       // собираем FIAS из входного элемента
-//       try { extractFiasList(rawItem).forEach((id) => fiasSet.add(id)); } catch {}
+//       try {
+//         const fiasCodes = extractFiasList(rawItem);
+//         console.log(
+//           `[PUT] Извлечены FIAS коды для элемента ${index + 1}:`,
+//           fiasCodes
+//         );
+//         fiasCodes.forEach((id) => fiasSet.add(id));
+//       } catch (e) {
+//         console.warn(
+//           `[PUT] Ошибка при извлечении FIAS для элемента ${index + 1}:`,
+//           e.message
+//         );
+//       }
 
 //       if (!mapped.guid) {
-//         acc.push({ success: false, index: index + 1, error: "Не передан GUID записи" });
+//         acc.push({
+//           success: false,
+//           index: index + 1,
+//           error: "Не передан GUID записи",
+//         });
 //         return acc;
 //       }
 
 //       try {
 //         const search = await axios.get(`${urlStrapi}/api/teh-narusheniyas`, {
 //           headers: { Authorization: `Bearer ${jwt}` },
-//           params: { "filters[guid][$eq]": mapped.guid, "pagination[pageSize]": 1 },
+//           params: {
+//             "filters[guid][$eq]": mapped.guid,
+//             "pagination[pageSize]": 1,
+//           },
 //         });
 
 //         const found = search?.data?.data?.[0];
@@ -834,14 +1020,25 @@ module.exports = router;
 
 //         if (!documentId) {
 //           console.warn(`[modus] Не найдена запись по guid=${mapped.guid}`);
-//           acc.push({ success: false, index: index + 1, status: "not_found", error: "Запись с таким GUID не найдена" });
+//           acc.push({
+//             success: false,
+//             index: index + 1,
+//             status: "not_found",
+//             error: "Запись с таким GUID не найдена",
+//           });
 //           return acc;
 //         }
 
 //         const patch = buildPatch(current, mapped);
 
 //         if (Object.keys(patch).length === 0) {
-//           acc.push({ success: true, index: index + 1, id: documentId, updated: false, message: "Изменений нет" });
+//           acc.push({
+//             success: true,
+//             index: index + 1,
+//             id: documentId,
+//             updated: false,
+//             message: "Изменений нет",
+//           });
 //           return acc;
 //         }
 
@@ -852,24 +1049,50 @@ module.exports = router;
 //         );
 
 //         try {
-//           broadcast({ type: "tn-upsert", source: "modus", action: "update", id: documentId, guid: mapped.guid, patch, timestamp: Date.now() });
+//           broadcast({
+//             type: "tn-upsert",
+//             source: "modus",
+//             action: "update",
+//             id: documentId,
+//             guid: mapped.guid,
+//             patch,
+//             timestamp: Date.now(),
+//           });
 //         } catch (e) {
 //           console.error("SSE broadcast error (update):", e?.message);
 //         }
 
-//         acc.push({ success: true, index: index + 1, id: upd?.data?.data?.id || documentId, updated: true });
+//         acc.push({
+//           success: true,
+//           index: index + 1,
+//           id: upd?.data?.data?.id || documentId,
+//           updated: true,
+//         });
 //       } catch (e) {
-//         const msg = e?.response?.data?.error?.message || e?.message || "Неизвестная ошибка";
+//         const msg =
+//           e?.response?.data?.error?.message ||
+//           e?.message ||
+//           "Неизвестная ошибка";
 //         acc.push({ success: false, index: index + 1, error: msg });
 //       }
 
 //       return acc;
 //     }, Promise.resolve([]));
 
+//     console.log(
+//       `[PUT] Всего собрано уникальных FIAS кодов для фоновой обработки: ${fiasSet.size}`
+//     );
+
 //     // Фоновая обработка адресов — не блокируем ответ
 //     setTimeout(() => {
-//       if (!fiasSet.size) return;
-//       upsertAddressesInStrapi([...fiasSet], jwt).catch((e) => console.warn("[modus] background address upsert failed:", e?.message));
+//       if (!fiasSet.size) {
+//         console.log("[PUT] Нет FIAS кодов для фоновой обработки");
+//         return;
+//       }
+//       console.log("[PUT] Запуск фоновой обработки адресов...");
+//       upsertAddressesInStrapi([...fiasSet], jwt).catch((e) =>
+//         console.warn("[modus] Ошибка фоновой обработки адресов:", e?.message)
+//       );
 //     }, 0);
 
 //     return res.json({ status: "ok", results });
@@ -886,40 +1109,119 @@ module.exports = router;
 //     const jwt = await getJwt();
 //     const fiasSet = new Set();
 
-//     const results = await dataArray.reduce(async (previousPromise, item, index) => {
-//       const accumulatedResults = await previousPromise;
-//       try {
-//         console.log(`Отправка элемента ${index + 1} из ${dataArray.length}`);
-//         const response = await axios.post(
-//           `${urlStrapi}/api/teh-narusheniyas`,
-//           { data: { ...item } },
-//           { headers: { Authorization: `Bearer ${jwt}` } }
-//         );
-//         accumulatedResults.push({ success: true, id: response.data?.data.id, index: index + 1 });
-//         console.log(`Элемент ${index + 1} успешно отправлен`);
-
-//         // Копим FIAS — обработаем одним фоном
-//         try { extractFiasList(item).forEach((id) => fiasSet.add(id)); } catch (e) { console.warn("[modus] address parsing skipped:", e?.message); }
-
-//         // Рассылка в SSE — создание ТН
+//     const results = await dataArray.reduce(
+//       async (previousPromise, item, index) => {
+//         const accumulatedResults = await previousPromise;
 //         try {
-//           broadcast({ type: "tn-upsert", source: "modus", action: "create", id: response.data?.data?.id, entry: { ...item, id: response.data?.data?.id }, timestamp: Date.now() });
-//         } catch (e) {
-//           console.error("SSE broadcast error (create):", e?.message);
-//         }
-//       } catch (error) {
-//         console.error(`Ошибка при отправке элемента ${index + 1}:`, error.message);
-//         accumulatedResults.push({ success: false, error: error.message, index: index + 1 });
-//       }
+//           console.log(
+//             `[POST] Отправка элемента ${index + 1} из ${dataArray.length}`
+//           );
 
-//       return accumulatedResults;
-//     }, Promise.resolve([]));
+//           // Безопасная проверка дубликатов по GUID — если запись уже есть, POST не выполняем
+//           const guid = item?.guid;
+//           if (guid) {
+//             try {
+//               const search = await axios.get(
+//                 `${urlStrapi}/api/teh-narusheniyas`,
+//                 {
+//                   headers: { Authorization: `Bearer ${jwt}` },
+//                   params: {
+//                     "filters[guid][$eq]": guid,
+//                     "pagination[pageSize]": 1,
+//                   },
+//                 }
+//               );
+//               const found = search?.data?.data?.[0];
+//               if (found) {
+//                 const existingId = found?.documentId || found?.id;
+//                 console.warn(
+//                   `[POST] Дубликат guid=${guid} — запись уже существует (id=${existingId}). POST пропущен`
+//                 );
+//                 accumulatedResults.push({
+//                   success: false,
+//                   index: index + 1,
+//                   status: "duplicate",
+//                   error: "Запись с таким GUID уже существует",
+//                   guid,
+//                   id: existingId,
+//                 });
+//                 return accumulatedResults;
+//               }
+//             } catch (e) {
+//               console.warn(
+//                 `[POST] Не удалось выполнить проверку дубликатов для guid=${guid}:`,
+//                 e?.response?.status || e?.message
+//               );
+//             }
+//           }
+
+//           const response = await axios.post(
+//             `${urlStrapi}/api/teh-narusheniyas`,
+//             { data: { ...item } },
+//             { headers: { Authorization: `Bearer ${jwt}` } }
+//           );
+//           accumulatedResults.push({
+//             success: true,
+//             id: response.data?.data.id,
+//             index: index + 1,
+//           });
+//           console.log(`[POST] Элемент ${index + 1} успешно отправлен`);
+
+//           // Копим FIAS — обработаем одним фоном
+//           try {
+//             const fiasCodes = extractFiasList(item);
+//             console.log(
+//               `[POST] Извлечены FIAS коды для элемента ${index + 1}:`,
+//               fiasCodes
+//             );
+//             fiasCodes.forEach((id) => fiasSet.add(id));
+//           } catch (e) {
+//             console.warn("[POST] Пропущено извлечение адресов:", e?.message);
+//           }
+
+//           // Рассылка в SSE — создание ТН
+//           try {
+//             broadcast({
+//               type: "tn-upsert",
+//               source: "modus",
+//               action: "create",
+//               id: response.data?.data?.id,
+//               entry: { ...item, id: response.data?.data?.id },
+//               timestamp: Date.now(),
+//             });
+//           } catch (e) {
+//             console.error("Ошибка SSE broadcast (create):", e?.message);
+//           }
+//         } catch (error) {
+//           console.error(
+//             `[POST] Ошибка при отправке элемента ${index + 1}:`,
+//             error.message
+//           );
+//           accumulatedResults.push({
+//             success: false,
+//             error: error.message,
+//             index: index + 1,
+//           });
+//         }
+
+//         return accumulatedResults;
+//       },
+//       Promise.resolve([])
+//     );
+
+//     console.log(
+//       `[POST] Всего собрано уникальных FIAS кодов для фоновой обработки: ${fiasSet.size}`
+//     );
 
 //     // Фоновая обработка адресов — не блокируем ответ МОДУСу
 //     setTimeout(() => {
-//       if (!fiasSet.size) return;
+//       if (!fiasSet.size) {
+//         console.log("[POST] Нет FIAS кодов для фоновой обработки");
+//         return;
+//       }
+//       console.log("[POST] Запуск фоновой обработки адресов...");
 //       upsertAddressesInStrapi([...fiasSet], jwt).catch((e) =>
-//         console.warn("[modus] background address upsert failed:", e?.message)
+//         console.warn("[POST] Ошибка фоновой обработки адресов:", e?.message)
 //       );
 //     }, 0);
 
@@ -928,7 +1230,9 @@ module.exports = router;
 
 //   if (authorization === `Bearer ${secretModus}`) {
 //     if (!req.body?.Data) {
-//       return res.status(400).json({ status: "error", message: "Не хватает требуемых данных" });
+//       return res
+//         .status(400)
+//         .json({ status: "error", message: "Не хватает требуемых данных" });
 //     }
 //     const data = req.body.Data;
 //     const prepareData = data.map((item) => ({
@@ -942,16 +1246,30 @@ module.exports = router;
 //       recoveryFactDateTime: item.F81_290_RECOVERYDATETIME,
 //       dispCenter: item.DISPCENTER_NAME_,
 //       STATUS_NAME: (item.STATUS_NAME || "").toString().trim(),
-//       isActive: ((item.STATUS_NAME || "").toString().trim().toLowerCase() === "открыта"),
+//       isActive:
+//         (item.STATUS_NAME || "").toString().trim().toLowerCase() === "открыта",
 //       data: item,
 //     }));
 
 //     const results = await sendDataSequentially(prepareData);
-//     if (results) {
-//       return res.json({ status: "ok", results });
-//     } else {
+//     if (!results) {
 //       return res.status(500).json({ status: "error" });
 //     }
+
+//     const anyCreated = results.some((r) => r?.success === true);
+//     const allDuplicates =
+//       results.length > 0 && results.every((r) => r?.status === "duplicate");
+
+//     if (allDuplicates && !anyCreated) {
+//       // Совместимо с фронтом: явный 409 + подробные результаты
+//       return res.status(409).json({
+//         status: "duplicate",
+//         message: "Запись с таким GUID уже существует",
+//         results,
+//       });
+//     }
+
+//     return res.json({ status: "ok", results });
 //   } else {
 //     res.status(403).json({ status: "Forbidden" });
 //   }
