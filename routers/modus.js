@@ -146,9 +146,9 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
             existing
           );
         } else {
-          console.log(
-            `[upsertAddressesInStrapi] Адрес для FIAS: ${fiasId} не найден, будет создан новый`
-          );
+          // console.log(
+          //   `[upsertAddressesInStrapi] Адрес для FIAS: ${fiasId} не найден, будет создан новый`
+          // );
         }
 
         // Тянем DaData
@@ -158,14 +158,14 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
         const info = await fetchByFias(fiasId);
 
         if (info) {
-          console.log(
-            `[upsertAddressesInStrapi] DaData ответила для FIAS: ${fiasId}`,
-            {
-              fullAddress: info.fullAddress,
-              lat: info.lat,
-              lon: info.lon,
-            }
-          );
+          // console.log(
+          //   `[upsertAddressesInStrapi] DaData ответила для FIAS: ${fiasId}`,
+          //   {
+          //     fullAddress: info.fullAddress,
+          //     lat: info.lat,
+          //     lon: info.lon,
+          //   }
+          // );
         } else {
           console.log(
             `[upsertAddressesInStrapi] DaData не вернула данных для FIAS: ${fiasId}`

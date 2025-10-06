@@ -21,7 +21,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function fetchByFias(fiasId) {
   const id = String(fiasId || "").trim();
-  console.log(`[fetchByFias] Запрос данных для FIAS: ${id}`);
+  // console.log(`[fetchByFias] Запрос данных для FIAS: ${id}`);
 
   if (!id) {
     console.log(`[fetchByFias] Пустой FIAS код`);
@@ -43,7 +43,7 @@ async function fetchByFias(fiasId) {
     const now = Date.now();
     const wait = Math.max(0, MIN_INTERVAL_MS - (now - lastCallTs));
     if (wait) {
-      console.log(`[fetchByFias] Ждем ${wait} мс для соблюдения RPS`);
+      // console.log(`[fetchByFias] Ждем ${wait} мс для соблюдения RPS`);
       await sleep(wait);
     }
     lastCallTs = Date.now();
@@ -66,10 +66,10 @@ async function fetchByFias(fiasId) {
           }
         );
 
-        console.log(`[fetchByFias] Ответ от DaData для FIAS ${id}:`, {
-          status: "OK",
-          suggestions_count: data?.suggestions?.length || 0,
-        });
+        // console.log(`[fetchByFias] Ответ от DaData для FIAS ${id}:`, {
+        //   status: "OK",
+        //   suggestions_count: data?.suggestions?.length || 0,
+        // });
 
         const s = Array.isArray(data?.suggestions) ? data.suggestions[0] : null;
         if (!s) {
@@ -86,11 +86,11 @@ async function fetchByFias(fiasId) {
           all: data,
         };
 
-        console.log(`[fetchByFias] Успешный ответ для FIAS ${id}:`, {
-          fullAddress: result.fullAddress,
-          lat: result.lat,
-          lon: result.lon,
-        });
+        // console.log(`[fetchByFias] Успешный ответ для FIAS ${id}:`, {
+        //   fullAddress: result.fullAddress,
+        //   lat: result.lat,
+        //   lon: result.lon,
+        // });
 
         return result;
       } catch (e) {
