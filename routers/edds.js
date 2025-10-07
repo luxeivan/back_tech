@@ -142,7 +142,6 @@ function runCurl(url, payload, { debug } = {}) {
       const command =
         `curl -sS -X POST ` +
         `-H "Content-Type: application/json" ` +
-        `-H "Accept: application/json" ` +
         `-H "HTTP-X-API-TOKEN: ${EDDS_TOKEN}" ` +
         `-d '${jsonEscaped}' ` +
         `"${url}" --insecure`;
@@ -150,9 +149,6 @@ function runCurl(url, payload, { debug } = {}) {
       exec(command, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
         const outClip = clipLog(stdout);
         const errClip = clipLog(stderr);
-        const looksLikeHtml = /^\s*<!doctype html|^\s*<html/i.test(
-          String(stdout)
-        );
 
         if (err) {
           const code = err.code != null ? err.code : "unknown";
@@ -173,19 +169,6 @@ function runCurl(url, payload, { debug } = {}) {
           console.log("[ЕДДС] Распарсенный ответ:", parsed);
         } catch {
           /* raw only */
-        }
-        if (!parsed && looksLikeHtml) {
-          // Сигнализируем роутеру, что ответ не JSON
-          return resolve({
-            ok: true,
-            parsed: {
-              success: false,
-              message: "HTML response from remote",
-              data: [],
-              raw: outClip,
-            },
-            stdout: outClip,
-          });
         }
         return resolve({ ok: true, parsed, stdout: outClip });
       });
@@ -295,19 +278,6 @@ router.post("/", async (req, res) => {
     // Первый вызов: обычно create.php (или сразу update.php при принудительном режиме)
     const resp1 = await runCurl(primaryUrl, payload, { debug });
 
-    // Если ответ не содержит JSON с success полем — продолжаем поток, преобразуем ответ
-    if (
-      resp1.ok &&
-      (!resp1.parsed || typeof resp1.parsed.success === "undefined")
-    ) {
-      resp1.parsed = {
-        success: false,
-        message: "HTML response from remote",
-        data: [],
-        raw: resp1.stdout,
-      };
-      // продолжаем обычный поток, 200 OK
-    }
 
     // Если exec упал — отдаём 502
     if (!resp1.ok && !fallbackUrl) {
@@ -340,19 +310,6 @@ router.post("/", async (req, res) => {
         "[ЕДДС] Похоже, инцидент уже существует — пробуем update.php…"
       );
       const resp2 = await runCurl(fallbackUrl, payload, { debug });
-
-      if (
-        resp2.ok &&
-        (!resp2.parsed || typeof resp2.parsed.success === "undefined")
-      ) {
-        resp2.parsed = {
-          success: false,
-          message: "HTML response from remote (update)",
-          data: [],
-          raw: resp2.stdout,
-        };
-        // продолжаем обычный поток, 200 OK
-      }
 
       if (!resp2.ok) {
         writeJournal({
