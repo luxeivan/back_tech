@@ -73,19 +73,28 @@ async function writeJournal({ target, operation, reqBody, endpoint, result }) {
     const isSuccess = Boolean(result?.parsed && result.parsed.success === true);
 
     // Строго требуемый формат строки
-    const line = `№${tnNumber ?? "—"} - ${guid ?? "—"} - ${human} - ${target}${
-      operation ? "" : ""
-    }`;
+    const line = `№${tnNumber ?? "—"} - ${guid ?? "—"} - ${human} - ${target}${operation ? "" : ""}`;
 
-    await axios.post(
-      `${URL_STRAPI}/api/zhurnal-otpravkis`,
-      { data: { data: line } },
-      {
-        headers: { Authorization: `Bearer ${jwt}` },
-        timeout: 15000,
-      }
-    );
-
+    try {
+      await axios.post(
+        `${URL_STRAPI}/api/zhurnal-otpravkis`,
+        { data: { data: line } },
+        {
+          headers: { Authorization: `Bearer ${jwt}` },
+          timeout: 15000,
+        }
+      );
+    } catch (e1) {
+      // Fallback: если JSON-поле не принимает строку — оборачиваем строку в объект
+      await axios.post(
+        `${URL_STRAPI}/api/zhurnal-otpravkis`,
+        { data: { data: { line } } },
+        {
+          headers: { Authorization: `Bearer ${jwt}` },
+          timeout: 15000,
+        }
+      );
+    }
     console.log(
       "[ЕДДС][journal] запись создана:",
       line,
@@ -286,25 +295,18 @@ router.post("/", async (req, res) => {
     // Первый вызов: обычно create.php (или сразу update.php при принудительном режиме)
     const resp1 = await runCurl(primaryUrl, payload, { debug });
 
-    // Если ответ не содержит JSON с success полем — считаем это ошибкой интеграции
+    // Если ответ не содержит JSON с success полем — продолжаем поток, преобразуем ответ
     if (
       resp1.ok &&
       (!resp1.parsed || typeof resp1.parsed.success === "undefined")
     ) {
-      const errOut = {
+      resp1.parsed = {
         success: false,
-        message: "Сервер ЕДДС вернул не‑JSON или пустой ответ",
+        message: "HTML response from remote",
         data: [],
         raw: resp1.stdout,
       };
-      writeJournal({
-        target: "ЕДДС",
-        operation: forceUpdate ? "update" : "create",
-        reqBody: payload,
-        endpoint: primaryUrl,
-        result: { parsed: errOut },
-      }).catch(() => {});
-      return res.status(502).json(errOut);
+      // продолжаем обычный поток, 200 OK
     }
 
     // Если exec упал — отдаём 502
@@ -343,20 +345,13 @@ router.post("/", async (req, res) => {
         resp2.ok &&
         (!resp2.parsed || typeof resp2.parsed.success === "undefined")
       ) {
-        const errOut2 = {
+        resp2.parsed = {
           success: false,
-          message: "Сервер ЕДДС вернул не‑JSON или пустой ответ (update)",
+          message: "HTML response from remote (update)",
           data: [],
           raw: resp2.stdout,
         };
-        writeJournal({
-          target: "ЕДДС",
-          operation: "update",
-          reqBody: payload,
-          endpoint: fallbackUrl,
-          result: { parsed: errOut2 },
-        }).catch(() => {});
-        return res.status(502).json(errOut2);
+        // продолжаем обычный поток, 200 OK
       }
 
       if (!resp2.ok) {
