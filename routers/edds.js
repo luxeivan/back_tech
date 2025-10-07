@@ -9,6 +9,7 @@ const EDDS_URL = process.env.EDDS_URL;
 const EDDS_TOKEN = process.env.EDDS_TOKEN;
 const EDDS_URL_PUT = process.env.EDDS_URL_PUT;
 
+
 // === Journal (Strapi) helpers =============================================
 const URL_STRAPI = process.env.URL_STRAPI;
 const LOGIN_STRAPI =
@@ -24,40 +25,15 @@ const PASSWORD_STRAPI =
 async function fetchTnNumberByGuid(guid, jwt) {
   if (!guid || !URL_STRAPI || !jwt) return null;
   try {
-    // 1) Try by top-level guid (this field is present in our CT)
-    const qsGuid = encodeURI(
-      `/api/teh-narusheniyas?filters[guid][$eq]=${guid}&pagination[pageSize]=1`
-    );
-    const r = await axios.get(`${URL_STRAPI}${qsGuid}`,
-      { headers: { Authorization: `Bearer ${jwt}` }, timeout: 15000 }
-    );
+    const qs = encodeURI(`/api/teh-narusheniyas?filters[guid][$eq]=${guid}&pagination[pageSize]=1`);
+    const r = await axios.get(`${URL_STRAPI}${qs}`, {
+      headers: { Authorization: `Bearer ${jwt}` },
+      timeout: 15000
+    });
     const entry = Array.isArray(r?.data?.data) && r.data.data[0] ? r.data.data[0] : null;
-    if (entry) {
-      const n = entry.attributes?.number;
-      if (n !== undefined && n !== null && String(n).trim() !== "") {
-        return String(n);
-      }
-    }
-
-    // 2) (fallback) Some items may have only raw JSON with GUID inside; try a loose contains
-    const qsContains = encodeURI(
-      `/api/teh-narusheniyas?filters[data][$contains]=${guid}&pagination[pageSize]=1`
-    );
-    const r2 = await axios.get(`${URL_STRAPI}${qsContains}`,
-      { headers: { Authorization: `Bearer ${jwt}` }, timeout: 15000 }
-    );
-    const entry2 = Array.isArray(r2?.data?.data) && r2.data.data[0] ? r2.data.data[0] : null;
-    if (entry2) {
-      const n = entry2.attributes?.number;
-      if (n !== undefined && n !== null && String(n).trim() !== "") {
-        return String(n);
-      }
-      const raw = entry2.attributes?.data || {};
-      const n2 = raw.F81_010_NUMBER || raw.number;
-      if (n2 !== undefined && n2 !== null) return String(n2);
-    }
-
-    return null;
+    if (!entry) return null;
+    const n = entry.attributes?.number;
+    return (n !== undefined && n !== null && String(n).trim() !== "") ? String(n) : null;
   } catch (e) {
     console.warn("[ЕДДС][journal] Не удалось получить номер ТН из Strapi:", e?.response?.status || e?.message);
     return null;
@@ -158,17 +134,7 @@ async function writeJournal({ target, operation, reqBody, endpoint, result }) {
 
     const guid = reqBody?.incident_id || reqBody?._meta?.guid || null;
 
-    // Try to get TN number from payload meta, otherwise pull from Strapi by GUID
-    let tnNumber =
-      reqBody?.number ||
-      reqBody?.NUMBER ||
-      reqBody?.RAW?.F81_010_NUMBER ||
-      reqBody?._meta?.tn_number ||
-      null;
-
-    if (!tnNumber && guid) {
-      tnNumber = await fetchTnNumberByGuid(guid, jwt);
-    }
+    let tnNumber = await fetchTnNumberByGuid(guid, jwt);
 
     const sentAt = new Date();
     const human = fmtRu(sentAt);
@@ -375,14 +341,16 @@ router.post("/", async (req, res) => {
 
     // Если exec упал — отдаём 502
     if (!resp1.ok && !fallbackUrl) {
-      // log failure to journal
-      writeJournal({
-        target: "ЕДДС",
-        operation: forceUpdate ? "update" : "create",
-        reqBody: payload,
-        endpoint: primaryUrl,
-        result: resp1,
-      }).catch(() => {});
+      // journal async, do not block
+      setImmediate(() => {
+        writeJournal({
+          target: "ЕДДС",
+          operation: forceUpdate ? "update" : "create",
+          reqBody: payload,
+          endpoint: primaryUrl,
+          result: resp1,
+        }).catch(() => {});
+      });
       return res.status(502).json({
         ok: false,
         error: "Ошибка при выполнении curl",
@@ -406,13 +374,15 @@ router.post("/", async (req, res) => {
       const resp2 = await runCurl(fallbackUrl, payload, { debug });
 
       if (!resp2.ok) {
-        writeJournal({
-          target: "ЕДДС",
-          operation: "update",
-          reqBody: payload,
-          endpoint: fallbackUrl,
-          result: resp2,
-        }).catch(() => {});
+        setImmediate(() => {
+          writeJournal({
+            target: "ЕДДС",
+            operation: "update",
+            reqBody: payload,
+            endpoint: fallbackUrl,
+            result: resp2,
+          }).catch(() => {});
+        });
         return res.status(502).json({
           ok: false,
           error: "Ошибка при выполнении curl (update)",
@@ -422,35 +392,32 @@ router.post("/", async (req, res) => {
         });
       }
 
-      writeJournal({
-        target: "ЕДДС",
-        operation: "update",
-        reqBody: payload,
-        endpoint: fallbackUrl,
-        result: resp2,
-      }).catch(() => {});
+      setImmediate(() => {
+        writeJournal({
+          target: "ЕДДС",
+          operation: "update",
+          reqBody: payload,
+          endpoint: fallbackUrl,
+          result: resp2,
+        }).catch(() => {});
+      });
 
       const out2 = resp2.parsed || { raw: resp2.stdout };
       return res.json(debug ? { ...out2, _via: "update" } : out2);
     }
 
-    writeJournal({
-      target: "ЕДДС",
-      operation: forceUpdate ? "update" : "create",
-      reqBody: payload,
-      endpoint: primaryUrl,
-      result: resp1,
-    }).catch(() => {});
-
-    const out1 = resp1?.parsed ?? {
-      success: false,
-      message: "Пустой ответ сервера",
-      data: [],
-      raw: resp1?.stdout,
-    };
-    return res.json(
-      debug ? { ...out1, _via: forceUpdate ? "update" : "create" } : out1
-    );
+    const out1 = (resp1 && (resp1.parsed || { raw: resp1.stdout })) || { ok: false };
+    // journal async, after we have a result; do not block response
+    setImmediate(() => {
+      writeJournal({
+        target: "ЕДДС",
+        operation: forceUpdate ? "update" : "create",
+        reqBody: payload,
+        endpoint: primaryUrl,
+        result: resp1,
+      }).catch(() => {});
+    });
+    return res.json(debug ? { ...out1, _via: forceUpdate ? "update" : "create" } : out1);
   } catch (e) {
     return res.status(500).json({ ok: false, error: e.message });
   }
