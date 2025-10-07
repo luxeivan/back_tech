@@ -20,6 +20,103 @@ const PASSWORD_STRAPI =
   process.env.PASSWORD_STRAPI ||
   process.env.PASSWORD_STRAPI;
 
+// Try to fetch TN number by GUID from Strapi when it's not provided in the payload
+async function fetchTnNumberByGuid(guid, jwt) {
+  if (!guid || !URL_STRAPI || !jwt) return null;
+  try {
+    // 1) Try by top-level guid (this field is present in our CT)
+    const qsGuid = encodeURI(
+      `/api/teh-narusheniyas?filters[guid][$eq]=${guid}&pagination[pageSize]=1`
+    );
+    const r = await axios.get(`${URL_STRAPI}${qsGuid}`,
+      { headers: { Authorization: `Bearer ${jwt}` }, timeout: 15000 }
+    );
+    const entry = Array.isArray(r?.data?.data) && r.data.data[0] ? r.data.data[0] : null;
+    if (entry) {
+      const n = entry.attributes?.number;
+      if (n !== undefined && n !== null && String(n).trim() !== "") {
+        return String(n);
+      }
+    }
+
+    // 2) (fallback) Some items may have only raw JSON with GUID inside; try a loose contains
+    const qsContains = encodeURI(
+      `/api/teh-narusheniyas?filters[data][$contains]=${guid}&pagination[pageSize]=1`
+    );
+    const r2 = await axios.get(`${URL_STRAPI}${qsContains}`,
+      { headers: { Authorization: `Bearer ${jwt}` }, timeout: 15000 }
+    );
+    const entry2 = Array.isArray(r2?.data?.data) && r2.data.data[0] ? r2.data.data[0] : null;
+    if (entry2) {
+      const n = entry2.attributes?.number;
+      if (n !== undefined && n !== null && String(n).trim() !== "") {
+        return String(n);
+      }
+      const raw = entry2.attributes?.data || {};
+      const n2 = raw.F81_010_NUMBER || raw.number;
+      if (n2 !== undefined && n2 !== null) return String(n2);
+    }
+
+    return null;
+  } catch (e) {
+    console.warn("[ЕДДС][journal] Не удалось получить номер ТН из Strapi:", e?.response?.status || e?.message);
+    return null;
+  }
+}
+
+// Get (or create) a SINGLE journal record and return its {id, currentDataArray}
+async function getOrCreateJournalSingle(jwt) {
+  if (!URL_STRAPI || !jwt) return null;
+  try {
+    // Take the first existing record (we'll reuse it every time)
+    const r = await axios.get(
+      `${URL_STRAPI}/api/zhurnal-otpravkis?pagination[page]=1&pagination[pageSize]=1`,
+      { headers: { Authorization: `Bearer ${jwt}` }, timeout: 15000 }
+    );
+    const arr = r?.data?.data || [];
+    if (arr.length > 0) {
+      const item = arr[0];
+      const id = item.id;
+      const dataField = item.attributes?.data;
+      let list = [];
+
+      if (Array.isArray(dataField)) list = dataField.slice();
+      else if (typeof dataField === "string") list = [dataField];
+      else if (dataField && typeof dataField === "object" && Array.isArray(dataField.lines)) list = dataField.lines.slice();
+
+      return { id, list };
+    }
+
+    // Create a new empty record if none exists
+    const c = await axios.post(
+      `${URL_STRAPI}/api/zhurnal-otpravkis`,
+      { data: { data: [] } },
+      { headers: { Authorization: `Bearer ${jwt}` }, timeout: 15000 }
+    );
+    const id = c?.data?.data?.id;
+    return id ? { id, list: [] } : null;
+  } catch (e) {
+    console.warn("[ЕДДС][journal] Не удалось получить/создать запись журнала:", e?.response?.status || e?.message);
+    return null;
+  }
+}
+
+// Append a single line to the single journal JSON array (kept to last 2000 entries)
+async function appendToJournalSingle(line, jwt) {
+  const rec = await getOrCreateJournalSingle(jwt);
+  if (!rec) return;
+  const MAX = 2000;
+  const list = rec.list || [];
+  list.push(line);
+  while (list.length > MAX) list.shift(); // trim from the beginning
+
+  await axios.put(
+    `${URL_STRAPI}/api/zhurnal-otpravkis/${rec.id}`,
+    { data: { data: list } },
+    { headers: { Authorization: `Bearer ${jwt}` }, timeout: 20000 }
+  );
+}
+
 async function getJwt() {
   try {
     const r = await axios.post(
@@ -60,52 +157,49 @@ async function writeJournal({ target, operation, reqBody, endpoint, result }) {
     if (!jwt) return;
 
     const guid = reqBody?.incident_id || reqBody?._meta?.guid || null;
-    const tnNumber =
-      reqBody?._meta?.tn_number ||
+
+    // Try to get TN number from payload meta, otherwise pull from Strapi by GUID
+    let tnNumber =
+      reqBody?.number ||
       reqBody?.NUMBER ||
       reqBody?.RAW?.F81_010_NUMBER ||
+      reqBody?._meta?.tn_number ||
       null;
+
+    if (!tnNumber && guid) {
+      tnNumber = await fetchTnNumberByGuid(guid, jwt);
+    }
 
     const sentAt = new Date();
     const human = fmtRu(sentAt);
 
-    // Успешной считаем только ситуацию, когда на стороне ЕДДС пришел JSON с success:true
-    const isSuccess = Boolean(result?.parsed && result.parsed.success === true);
-
-    // Строго требуемый формат строки
-    const line = `№${tnNumber ?? "—"} - ${guid ?? "—"} - ${human} - ${target}${operation ? "" : ""}`;
-
-    try {
-      await axios.post(
-        `${URL_STRAPI}/api/zhurnal-otpravkis`,
-        { data: { data: line } },
-        {
-          headers: { Authorization: `Bearer ${jwt}` },
-          timeout: 15000,
-        }
-      );
-    } catch (e1) {
-      // Fallback: если JSON-поле не принимает строку — оборачиваем строку в объект
-      await axios.post(
-        `${URL_STRAPI}/api/zhurnal-otpravkis`,
-        { data: { data: { line } } },
-        {
-          headers: { Authorization: `Bearer ${jwt}` },
-          timeout: 15000,
-        }
-      );
+    // Compose message for journal
+    let msg = "";
+    if (result?.parsed) {
+      if (typeof result.parsed.message === "string" && result.parsed.message.trim()) {
+        msg = result.parsed.message.trim();
+      } else if (result.parsed.success === true) {
+        msg = "Данные приняты";
+      } else if (result.parsed.success === false) {
+        msg = "Ошибка";
+      }
+    } else if (typeof result?.stdout === "string" && /<html|<!DOCTYPE/i.test(result.stdout)) {
+      msg = "HTML response from remote";
+    } else if (result?.ok === false) {
+      msg = "curl error";
     }
-    console.log(
-      "[ЕДДС][journal] запись создана:",
-      line,
-      isSuccess ? "(success)" : "(error)"
-    );
+
+    const line = `№${tnNumber ?? "—"} - ${guid ?? "—"} - ${human} - ${target}${msg ? ` - ${msg}` : ""}`;
+
+    // Append into a single JSON record (array of strings)
+    try {
+      await appendToJournalSingle(line, jwt);
+      console.log("[ЕДДС][journal] запись добавлена:", line, result?.parsed?.success ? "(success)" : "(error)");
+    } catch (e1) {
+      console.warn("[ЕДДС][journal] append error:", e1?.response?.status || e1?.message);
+    }
   } catch (e) {
-    console.warn(
-      "[ЕДДС][journal] не удалось создать запись:",
-      e?.response?.status,
-      e?.message
-    );
+    console.warn("[ЕДДС][journal] не удалось создать запись:", e?.response?.status, e?.message);
   }
 }
 // ===========================================================================
