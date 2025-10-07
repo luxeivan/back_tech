@@ -1,174 +1,12 @@
 const { exec } = require("node:child_process");
 const express = require("express");
 const axios = require("axios");
-require("dotenv").config();
 
 const router = express.Router();
 
 const EDDS_URL = process.env.EDDS_URL;
 const EDDS_TOKEN = process.env.EDDS_TOKEN;
 const EDDS_URL_PUT = process.env.EDDS_URL_PUT;
-
-
-// === Journal (Strapi) helpers =============================================
-const URL_STRAPI = process.env.URL_STRAPI;
-const LOGIN_STRAPI =
-  process.env.LOGIN_STRAPI ||
-  process.env.LOGIN_STRAPI ||
-  process.env.LOGIN_STRAPI;
-const PASSWORD_STRAPI =
-  process.env.PASSWORD_STRAPI ||
-  process.env.PASSWORD_STRAPI ||
-  process.env.PASSWORD_STRAPI;
-
-// Try to fetch TN number by GUID from Strapi when it's not provided in the payload
-async function fetchTnNumberByGuid(guid, jwt) {
-  if (!guid || !URL_STRAPI || !jwt) return null;
-  try {
-    const qs = encodeURI(`/api/teh-narusheniyas?filters[guid][$eq]=${guid}&pagination[pageSize]=1`);
-    const r = await axios.get(`${URL_STRAPI}${qs}`, {
-      headers: { Authorization: `Bearer ${jwt}` },
-      timeout: 15000
-    });
-    const entry = Array.isArray(r?.data?.data) && r.data.data[0] ? r.data.data[0] : null;
-    if (!entry) return null;
-    const n = entry.attributes?.number;
-    return (n !== undefined && n !== null && String(n).trim() !== "") ? String(n) : null;
-  } catch (e) {
-    console.warn("[ЕДДС][journal] Не удалось получить номер ТН из Strapi:", e?.response?.status || e?.message);
-    return null;
-  }
-}
-
-// Get (or create) a SINGLE journal record and return its {id, currentDataArray}
-async function getOrCreateJournalSingle(jwt) {
-  if (!URL_STRAPI || !jwt) return null;
-  try {
-    // Take the first existing record (we'll reuse it every time)
-    const r = await axios.get(
-      `${URL_STRAPI}/api/zhurnal-otpravkis?pagination[page]=1&pagination[pageSize]=1`,
-      { headers: { Authorization: `Bearer ${jwt}` }, timeout: 15000 }
-    );
-    const arr = r?.data?.data || [];
-    if (arr.length > 0) {
-      const item = arr[0];
-      const id = item.id;
-      const dataField = item.attributes?.data;
-      let list = [];
-
-      if (Array.isArray(dataField)) list = dataField.slice();
-      else if (typeof dataField === "string") list = [dataField];
-      else if (dataField && typeof dataField === "object" && Array.isArray(dataField.lines)) list = dataField.lines.slice();
-
-      return { id, list };
-    }
-
-    // Create a new empty record if none exists
-    const c = await axios.post(
-      `${URL_STRAPI}/api/zhurnal-otpravkis`,
-      { data: { data: [] } },
-      { headers: { Authorization: `Bearer ${jwt}` }, timeout: 15000 }
-    );
-    const id = c?.data?.data?.id;
-    return id ? { id, list: [] } : null;
-  } catch (e) {
-    console.warn("[ЕДДС][journal] Не удалось получить/создать запись журнала:", e?.response?.status || e?.message);
-    return null;
-  }
-}
-
-// Append a single line to the single journal JSON array (kept to last 2000 entries)
-async function appendToJournalSingle(line, jwt) {
-  const rec = await getOrCreateJournalSingle(jwt);
-  if (!rec) return;
-  const MAX = 2000;
-  const list = rec.list || [];
-  list.push(line);
-  while (list.length > MAX) list.shift(); // trim from the beginning
-
-  await axios.put(
-    `${URL_STRAPI}/api/zhurnal-otpravkis/${rec.id}`,
-    { data: { data: list } },
-    { headers: { Authorization: `Bearer ${jwt}` }, timeout: 20000 }
-  );
-}
-
-async function getJwt() {
-  try {
-    const r = await axios.post(
-      `${URL_STRAPI}/api/auth/local`,
-      {
-        identifier: LOGIN_STRAPI,
-        password: PASSWORD_STRAPI,
-      },
-      { timeout: 15000 }
-    );
-    return r?.data?.jwt || null;
-  } catch (e) {
-    console.warn(
-      "[ЕДДС][journal] Не получил JWT для Strapi:",
-      e?.response?.status || e?.message
-    );
-    return null;
-  }
-}
-
-function fmtRu(dt) {
-  try {
-    const d = new Date(dt);
-    const pad = (n) => String(n).padStart(2, "0");
-    return `${pad(d.getDate())}.${pad(
-      d.getMonth() + 1
-    )}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(
-      d.getSeconds()
-    )}`;
-  } catch {
-    return new Date().toISOString();
-  }
-}
-
-async function writeJournal({ target, operation, reqBody, endpoint, result }) {
-  try {
-    const jwt = await getJwt();
-    if (!jwt) return;
-
-    const guid = reqBody?.incident_id || reqBody?._meta?.guid || null;
-
-    let tnNumber = await fetchTnNumberByGuid(guid, jwt);
-
-    const sentAt = new Date();
-    const human = fmtRu(sentAt);
-
-    // Compose message for journal
-    let msg = "";
-    if (result?.parsed) {
-      if (typeof result.parsed.message === "string" && result.parsed.message.trim()) {
-        msg = result.parsed.message.trim();
-      } else if (result.parsed.success === true) {
-        msg = "Данные приняты";
-      } else if (result.parsed.success === false) {
-        msg = "Ошибка";
-      }
-    } else if (typeof result?.stdout === "string" && /<html|<!DOCTYPE/i.test(result.stdout)) {
-      msg = "HTML response from remote";
-    } else if (result?.ok === false) {
-      msg = "curl error";
-    }
-
-    const line = `№${tnNumber ?? "—"} - ${guid ?? "—"} - ${human} - ${target}${msg ? ` - ${msg}` : ""}`;
-
-    // Append into a single JSON record (array of strings)
-    try {
-      await appendToJournalSingle(line, jwt);
-      console.log("[ЕДДС][journal] запись добавлена:", line, result?.parsed?.success ? "(success)" : "(error)");
-    } catch (e1) {
-      console.warn("[ЕДДС][journal] append error:", e1?.response?.status || e1?.message);
-    }
-  } catch (e) {
-    console.warn("[ЕДДС][journal] не удалось создать запись:", e?.response?.status, e?.message);
-  }
-}
-// ===========================================================================
 
 function jsonForShell(data) {
   return JSON.stringify(data).replace(/'/g, `'\\''`);
@@ -317,40 +155,22 @@ router.post("/", async (req, res) => {
   }
 
   try {
-    const mode = String(req.query.mode || "")
-      .trim()
-      .toLowerCase();
-    const forceUpdate =
-      mode === "update" || String(req.query.update || "") === "1";
-    const forceCreate =
-      mode === "create" || String(req.query.create || "") === "1";
+    const mode = String(req.query.mode || "").trim().toLowerCase();
+    const forceUpdate = mode === "update" || String(req.query.update || "") === "1";
+    const forceCreate = mode === "create" || String(req.query.create || "") === "1";
 
     if (forceUpdate && !EDDS_URL_PUT) {
-      return res
-        .status(500)
-        .json({ ok: false, error: "EDDS_URL_PUT не задан в .env" });
+      return res.status(500).json({ ok: false, error: "EDDS_URL_PUT не задан в .env" });
     }
 
-    const primaryUrl = forceUpdate ? EDDS_URL_PUT || EDDS_URL : EDDS_URL;
-    const fallbackUrl =
-      !forceUpdate && !forceCreate && EDDS_URL_PUT ? EDDS_URL_PUT : null;
+    const primaryUrl = forceUpdate ? (EDDS_URL_PUT || EDDS_URL) : EDDS_URL;
+    const fallbackUrl = !forceUpdate && !forceCreate && EDDS_URL_PUT ? EDDS_URL_PUT : null;
 
     // Первый вызов: обычно create.php (или сразу update.php при принудительном режиме)
     const resp1 = await runCurl(primaryUrl, payload, { debug });
 
-
     // Если exec упал — отдаём 502
     if (!resp1.ok && !fallbackUrl) {
-      // journal async, do not block
-      setImmediate(() => {
-        writeJournal({
-          target: "ЕДДС",
-          operation: forceUpdate ? "update" : "create",
-          reqBody: payload,
-          endpoint: primaryUrl,
-          result: resp1,
-        }).catch(() => {});
-      });
       return res.status(502).json({
         ok: false,
         error: "Ошибка при выполнении curl",
@@ -368,21 +188,10 @@ router.post("/", async (req, res) => {
       fallbackUrl &&
       isDuplicateError(resp1)
     ) {
-      console.log(
-        "[ЕДДС] Похоже, инцидент уже существует — пробуем update.php…"
-      );
+      console.log("[ЕДДС] Похоже, инцидент уже существует — пробуем update.php…");
       const resp2 = await runCurl(fallbackUrl, payload, { debug });
 
       if (!resp2.ok) {
-        setImmediate(() => {
-          writeJournal({
-            target: "ЕДДС",
-            operation: "update",
-            reqBody: payload,
-            endpoint: fallbackUrl,
-            result: resp2,
-          }).catch(() => {});
-        });
         return res.status(502).json({
           ok: false,
           error: "Ошибка при выполнении curl (update)",
@@ -392,31 +201,12 @@ router.post("/", async (req, res) => {
         });
       }
 
-      setImmediate(() => {
-        writeJournal({
-          target: "ЕДДС",
-          operation: "update",
-          reqBody: payload,
-          endpoint: fallbackUrl,
-          result: resp2,
-        }).catch(() => {});
-      });
-
       const out2 = resp2.parsed || { raw: resp2.stdout };
       return res.json(debug ? { ...out2, _via: "update" } : out2);
     }
 
+    // Иначе — отдаём ответ первого вызова
     const out1 = (resp1 && (resp1.parsed || { raw: resp1.stdout })) || { ok: false };
-    // journal async, after we have a result; do not block response
-    setImmediate(() => {
-      writeJournal({
-        target: "ЕДДС",
-        operation: forceUpdate ? "update" : "create",
-        reqBody: payload,
-        endpoint: primaryUrl,
-        result: resp1,
-      }).catch(() => {});
-    });
     return res.json(debug ? { ...out1, _via: forceUpdate ? "update" : "create" } : out1);
   } catch (e) {
     return res.status(500).json({ ok: false, error: e.message });
@@ -424,6 +214,7 @@ router.post("/", async (req, res) => {
 });
 
 module.exports = router;
+
 
 // const { exec } = require("node:child_process");
 // const express = require("express");
