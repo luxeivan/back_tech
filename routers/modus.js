@@ -439,7 +439,6 @@ function buildEddsPayload(tnLike) {
 
   return out;
 }
-// --- /helpers ---
 
 async function getJwt() {
   try {
@@ -458,8 +457,6 @@ async function getJwt() {
   }
 }
 
-// --- адреса по FIAS -------------------------------------------------------
-/** Вернуть массив GUID-ов FIAS из «сырых» данных МОДУС */
 function extractFiasList(rawItem) {
   const raw =
     rawItem?.FIAS_LIST ||
@@ -482,11 +479,6 @@ function extractFiasList(rawItem) {
   return fiasCodes;
 }
 
-/**
- * На каждый FIAS:
- * - если нет такого адреса в Strapi → берём из DaData координаты и полный адрес
- * - сохраняем в коллекцию "Адрес" (API uid: /api/adress)
- */
 async function upsertAddressesInStrapi(fiasIds, jwt) {
   const ids = Array.from(
     new Set((fiasIds || []).map((x) => String(x).trim()).filter(Boolean))
@@ -816,20 +808,14 @@ router.put("/", async (req, res) => {
         );
 
         if (needEdds) {
-          // Build EDDS payload exactly like on the frontend
           const payload = buildEddsPayload({ data: mapped });
-
-          // Prefer explicit endpoint from env, then hit local app directly.
           const explicitSelf = String(process.env.SELF_EDDS_URL || "").trim();
           const port = Number(
             process.env.PORT || process.env.BACK_PORT || 3110
           );
           const protocol = req.protocol || "http";
           const host = req.get("host");
-
-          // Build candidates in the safest order: localhost first (bypasses nginx / external routing),
-          // then same host, then possible /api prefix.
-          const qs = 'debug=1'; // без mode — сначала create, при дубле fallback в update (реализовано в edds.js)
+          const qs = 'debug=1';
           const candidates = [
             explicitSelf && `${explicitSelf}?${qs}`,
             `http://127.0.0.1:${port}/services/edds?${qs}`,
@@ -839,8 +825,6 @@ router.put("/", async (req, res) => {
           ].filter(Boolean);
 
           console.log(`[modus→edds] candidates: ${candidates.join(", ")}`);
-
-          // Send in background; log FULL body so мы видим «полный ответ ЕДДС», как и при ручном вызове.
           setTimeout(async () => {
             let delivered = false;
 
@@ -860,8 +844,6 @@ router.put("/", async (req, res) => {
                         null,
                         2
                       );
-
-                // Печатаем до 4000 символов, чтобы было «как с фронта».
                 const bodyClip =
                   body.length > 4000
                     ? body.slice(0, 4000) + `… (${body.length} chars)`
@@ -870,8 +852,6 @@ router.put("/", async (req, res) => {
                 console.log(
                   `[modus→edds] try ${url} → HTTP ${resp?.status}; body=${bodyClip}`
                 );
-
-                // Любой ответ, кроме 404 (маршрутизация мимо), считаем финальным (успех/ошибка покажет тело).
                 if (resp?.status !== 404) {
                   const claimId =
                     resp?.data?.data?.claim_id ?? resp?.data?.claim_id;
