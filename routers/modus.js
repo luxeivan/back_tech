@@ -523,10 +523,10 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
           : null;
 
         if (existing) {
-          console.log(
-            `[upsertAddressesInStrapi] Найден существующий адрес для FIAS: ${fiasId}`,
-            existing
-          );
+          // console.log(
+          //   `[upsertAddressesInStrapi] Найден существующий адрес для FIAS: ${fiasId}`,
+          //   existing
+          // );
         } else {
           // console.log(
           //   `[upsertAddressesInStrapi] Адрес для FIAS: ${fiasId} не найден, будет создан новый`
@@ -549,9 +549,9 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
           //   }
           // );
         } else {
-          console.log(
-            `[upsertAddressesInStrapi] DaData не вернула данных для FIAS: ${fiasId}`
-          );
+          // console.log(
+          //   `[upsertAddressesInStrapi] DaData не вернула данных для FIAS: ${fiasId}`
+          // );
         }
 
         const payload = {
@@ -596,10 +596,10 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
               { data: patch },
               { headers: { Authorization: `Bearer ${jwt}` } }
             );
-            console.log(
-              `[upsertAddressesInStrapi] Адрес успешно обновлен для FIAS: ${fiasId}`,
-              updateResponse.status
-            );
+            // console.log(
+            //   `[upsertAddressesInStrapi] Адрес успешно обновлен для FIAS: ${fiasId}`,
+            //   updateResponse.status
+            // );
           } else {
             console.log(
               `[upsertAddressesInStrapi] Изменений нет, обновление не требуется для FIAS: ${fiasId}`

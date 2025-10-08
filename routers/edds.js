@@ -24,16 +24,31 @@ const PASSWORD_STRAPI =
 // Try to fetch TN number by GUID from Strapi when it's not provided in the payload
 async function fetchTnNumberByGuid(guid, jwt) {
   if (!guid || !URL_STRAPI || !jwt) return null;
-  try {
-    const qs = encodeURI(`/api/teh-narusheniyas?filters[guid][$eq]=${guid}&pagination[pageSize]=1`);
-    const r = await axios.get(`${URL_STRAPI}${qs}`, {
-      headers: { Authorization: `Bearer ${jwt}` },
-      timeout: 15000
-    });
+
+  const headers = { Authorization: `Bearer ${jwt}` };
+  const tryGet = async (qs) => {
+    const r = await axios.get(`${URL_STRAPI}${qs}`, { headers, timeout: 15000 });
     const entry = Array.isArray(r?.data?.data) && r.data.data[0] ? r.data.data[0] : null;
     if (!entry) return null;
-    const n = entry.attributes?.number;
+    const n = entry.attributes?.number ?? entry.number;
     return (n !== undefined && n !== null && String(n).trim() !== "") ? String(n) : null;
+  };
+
+  try {
+    // 1) Нормальный путь: по верхнеуровневому полю guid
+    const qs1 =
+      `/api/teh-narusheniyas?filters[guid][$eq]=${encodeURIComponent(guid)}&pagination[pageSize]=1`;
+    const byGuid = await tryGet(qs1);
+    if (byGuid) return byGuid;
+
+    // 2) Фолбэк: некоторые старые записи не имеют верхнеуровневого guid,
+    // пробуем строковый поиск по JSON-полю data (по сути ищем VIOLATION_GUID_STR)
+    const qs2 =
+      `/api/teh-narusheniyas?filters[data][$containsi]=${encodeURIComponent(guid)}&pagination[pageSize]=1`;
+    const byJsonContains = await tryGet(qs2);
+    if (byJsonContains) return byJsonContains;
+
+    return null;
   } catch (e) {
     console.warn("[ЕДДС][journal] Не удалось получить номер ТН из Strapi:", e?.response?.status || e?.message);
     return null;
@@ -133,15 +148,22 @@ async function getJwt() {
 
 function fmtRu(dt) {
   try {
-    const d = new Date(dt);
-    const pad = (n) => String(n).padStart(2, "0");
-    return `${pad(d.getDate())}.${pad(
-      d.getMonth() + 1
-    )}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(
-      d.getSeconds()
-    )}`;
+    const d = dt ? new Date(dt) : new Date();
+    // Форматируем строго в часовом поясе Москвы
+    const s = d.toLocaleString("ru-RU", {
+      timeZone: "Europe/Moscow",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+    // toLocaleString для ru-RU возвращает строку вида "08.10.2025, 12:34:56"
+    return s.replace(",", "");
   } catch {
-    return new Date().toISOString();
+    return "";
   }
 }
 
