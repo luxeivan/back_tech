@@ -40,7 +40,7 @@ async function fetchTnNumberByGuid(guid, jwt) {
   }
 }
 
-// Get (or create) a SINGLE journal record and return its {id, currentDataArray}
+// Get (or create) a SINGLE journal record and return its {id, documentId, list}
 async function getOrCreateJournalSingle(jwt) {
   if (!URL_STRAPI || !jwt) return null;
   try {
@@ -53,14 +53,15 @@ async function getOrCreateJournalSingle(jwt) {
     if (arr.length > 0) {
       const item = arr[0];
       const id = item.id;
-      const dataField = item.attributes?.data;
+      const documentId = item.documentId || item.documentID || item.document_id || null;
+      const dataField = item.data ?? item.attributes?.data;
       let list = [];
 
       if (Array.isArray(dataField)) list = dataField.slice();
       else if (typeof dataField === "string") list = [dataField];
       else if (dataField && typeof dataField === "object" && Array.isArray(dataField.lines)) list = dataField.lines.slice();
 
-      return { id, list };
+      return { id, documentId, list };
     }
 
     // Create a new empty record if none exists
@@ -70,7 +71,8 @@ async function getOrCreateJournalSingle(jwt) {
       { headers: { Authorization: `Bearer ${jwt}` }, timeout: 15000 }
     );
     const id = c?.data?.data?.id;
-    return id ? { id, list: [] } : null;
+    const documentId = c?.data?.data?.documentId || null;
+    return id ? { id, documentId, list: [] } : null;
   } catch (e) {
     console.warn("[ЕДДС][journal] Не удалось получить/создать запись журнала:", e?.response?.status || e?.message);
     return null;
@@ -84,13 +86,29 @@ async function appendToJournalSingle(line, jwt) {
   const MAX = 2000;
   const list = rec.list || [];
   list.push(line);
-  while (list.length > MAX) list.shift(); // trim from the beginning
+  while (list.length > MAX) list.shift();
 
-  await axios.put(
-    `${URL_STRAPI}/api/zhurnal-otpravkis/${rec.id}`,
-    { data: { data: list } },
-    { headers: { Authorization: `Bearer ${jwt}` }, timeout: 20000 }
-  );
+  const targetId = rec.documentId || rec.id; // Prefer documentId in Strapi v5
+  const urlBase = `${URL_STRAPI}/api/zhurnal-otpravkis`;
+
+  try {
+    await axios.put(
+      `${urlBase}/${targetId}`,
+      { data: { data: list } },
+      { headers: { Authorization: `Bearer ${jwt}` }, timeout: 20000 }
+    );
+  } catch (e) {
+    // Fallback: if we tried documentId and Strapi expects numeric id, try rec.id
+    if (rec.documentId && rec.id && e?.response?.status === 404) {
+      await axios.put(
+        `${urlBase}/${rec.id}`,
+        { data: { data: list } },
+        { headers: { Authorization: `Bearer ${jwt}` }, timeout: 20000 }
+      );
+    } else {
+      throw e;
+    }
+  }
 }
 
 async function getJwt() {
