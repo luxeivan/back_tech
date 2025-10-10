@@ -751,6 +751,13 @@ router.put("/", async (req, res) => {
         const documentId = found?.documentId || found?.id;
         const current = found || {};
 
+        // Определяем, является ли это событием смены статуса в финальный
+        const prevStatus = norm(current?.STATUS_NAME || current?.attributes?.STATUS_NAME);
+        const nextStatus = norm(mapped?.STATUS_NAME);
+        const statusChanged = prevStatus !== nextStatus;
+        const nextIsFinal = isFinalStatus(nextStatus);
+        const needEdds = statusChanged && nextIsFinal;
+
         if (!documentId) {
           console.warn(`[modus] Не найдена запись по guid=${mapped.guid}`);
           acc.push({
@@ -762,7 +769,22 @@ router.put("/", async (req, res) => {
           return acc;
         }
 
-        const patch = buildPatch(current, mapped);
+        let patch;
+        if (needEdds) {
+          // При финальной смене статуса — НЕ затираем «ручные» поля и «data» от МОДУСа.
+          // Обновляем только статус и isActive.
+          patch = {};
+          if (current?.STATUS_NAME !== mapped.STATUS_NAME) {
+            patch.STATUS_NAME = mapped.STATUS_NAME;
+          }
+          const nextIsActive = nextStatus === "открыта";
+          if (current?.isActive !== nextIsActive) {
+            patch.isActive = nextIsActive;
+          }
+        } else {
+          // Обычный режим: принимаем уточнения от МОДУС
+          patch = buildPatch(current, mapped);
+        }
 
         if (Object.keys(patch).length === 0) {
           acc.push({
@@ -796,18 +818,9 @@ router.put("/", async (req, res) => {
         }
 
         // --- auto-send to EDDS on STATUS change to a final state ---
-        const prevStatus = norm(
-          current?.STATUS_NAME || current?.attributes?.STATUS_NAME
-        );
-        const nextStatus = norm(mapped?.STATUS_NAME);
-        const statusChanged = prevStatus !== nextStatus;
-        const nextIsFinal = isFinalStatus(nextStatus);
-        const needEdds = statusChanged && nextIsFinal;
-
         console.log(
           `[modus→edds] status change check guid=${mapped.guid}: prev="${prevStatus}" → next="${nextStatus}" changed=${statusChanged} final=${nextIsFinal}`
         );
-
         if (needEdds) {
           // 1) Берём актуальную запись из Strapi как источник истины
           let strapiTn = null;
