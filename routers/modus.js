@@ -191,6 +191,7 @@ function buildEddsPayload(tnLike) {
   const fioWork = "Оперативный дежурный САЦ";
   const fioPhone = "84957803976";
   const descriptionSrc =
+    obj.description ??
     raw.REASON_OPER ??
     obj.REASON_OPER ??
     raw.reason_oper ??
@@ -808,11 +809,46 @@ router.put("/", async (req, res) => {
         );
 
         if (needEdds) {
-          const payload = buildEddsPayload({ data: mapped });
+          // 1) Берём актуальную запись из Strapi как источник истины
+          let strapiTn = null;
+          try {
+            const rFull = await axios.get(`${urlStrapi}/api/teh-narusheniyas`, {
+              headers: { Authorization: `Bearer ${jwt}` },
+              params: {
+                "filters[guid][$eq]": mapped.guid,
+                "pagination[pageSize]": 1,
+                populate: "*",
+              },
+            });
+            const full = rFull?.data?.data?.[0];
+            strapiTn = full?.attributes || full || null;
+          } catch (e) {
+            console.warn(
+              `[modus→edds] Не удалось подтянуть полную запись из Strapi по guid=${mapped.guid}:`,
+              e?.response?.status || e?.message
+            );
+          }
+
+          // если что-то пошло не так — используем хотя бы то, что есть
+          if (!strapiTn) {
+            strapiTn = { ...mapped };
+          }
+
+          // 2) Поверх подменяем ТОЛЬКО статусные/временные поля из входящего события
+          const mergedForPayload = { ...strapiTn };
+          if (mapped?.STATUS_NAME != null) mergedForPayload.STATUS_NAME = mapped.STATUS_NAME;
+          if (mapped?.recoveryFactDateTime != null)
+            mergedForPayload.recoveryFactDateTime = mapped.recoveryFactDateTime;
+          if (mapped?.recoveryPlanDateTime != null)
+            mergedForPayload.recoveryPlanDateTime = mapped.recoveryPlanDateTime;
+          if (mapped?.createDateTime != null)
+            mergedForPayload.createDateTime = mapped.createDateTime;
+
+          // 3) Строим payload для ЕДДС из Strapi-версии (manual edits сохраняются)
+          const payload = buildEddsPayload({ data: mergedForPayload });
+
           const explicitSelf = String(process.env.SELF_EDDS_URL || "").trim();
-          const port = Number(
-            process.env.PORT || process.env.BACK_PORT || 3110
-          );
+          const port = Number(process.env.PORT || process.env.BACK_PORT || 3110);
           const protocol = req.protocol || "http";
           const host = req.get("host");
           const qs = 'debug=1';
@@ -839,22 +875,15 @@ router.put("/", async (req, res) => {
                 const body =
                   typeof resp?.data === "string"
                     ? resp.data
-                    : JSON.stringify(
-                        resp?.data ?? resp?.statusText ?? "",
-                        null,
-                        2
-                      );
+                    : JSON.stringify(resp?.data ?? resp?.statusText ?? "", null, 2);
                 const bodyClip =
-                  body.length > 4000
-                    ? body.slice(0, 4000) + `… (${body.length} chars)`
-                    : body;
+                  body.length > 4000 ? body.slice(0, 4000) + `… (${body.length} chars)` : body;
 
                 console.log(
                   `[modus→edds] try ${url} → HTTP ${resp?.status}; body=${bodyClip}`
                 );
                 if (resp?.status !== 404) {
-                  const claimId =
-                    resp?.data?.data?.claim_id ?? resp?.data?.claim_id;
+                  const claimId = resp?.data?.data?.claim_id ?? resp?.data?.claim_id;
                   const ok =
                     resp?.status >= 200 &&
                     resp?.status < 300 &&
