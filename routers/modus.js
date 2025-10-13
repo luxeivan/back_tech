@@ -859,6 +859,20 @@ router.put("/", async (req, res) => {
 
           // 3) Строим payload для ЕДДС из Strapi-версии (manual edits сохраняются)
           const payload = buildEddsPayload({ data: mergedForPayload });
+          // --- debug snapshot of what exactly we send (and from what) ---
+          try {
+            const dbg = {
+              mergedForPayload,     // включает .data со Strapi (ручные правки видны здесь)
+              eddsPayload: payload, // итоговый JSON, уходящий в /services/edds
+            };
+            const snap = JSON.stringify(dbg);
+            const snapClip =
+              snap.length > 4000 ? snap.slice(0, 4000) + `… (${snap.length} chars)` : snap;
+            console.log(`[modus→edds] payload snapshot: ${snapClip}`);
+          } catch (e) {
+            console.warn("[modus→edds] Не удалось сформировать debug snapshot:", e?.message);
+          }
+          // --- /debug snapshot ---
 
           const explicitSelf = String(process.env.SELF_EDDS_URL || "").trim();
           const port = Number(process.env.PORT || process.env.BACK_PORT || 3110);
