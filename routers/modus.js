@@ -166,7 +166,7 @@ function buildEddsPayload(tnLike) {
   const type =
     TYPE_MAP[typeSrc] || TYPE_MAP[String(typeSrc || "").trim()] || null;
 
-  const statusSrc = raw.STATUS_NAME || obj.status || obj.STATUS_NAME || null;
+  const statusSrc = obj.STATUS_NAME || obj.status || raw.STATUS_NAME || null;
   const status =
     STATUS_NAME_MAP[
       String(statusSrc || "")
@@ -190,12 +190,13 @@ function buildEddsPayload(tnLike) {
 
   const fioWork = "Оперативный дежурный САЦ";
   const fioPhone = "84957803976";
+  // Приоритет: ручное описание из Strapi.raw (REASON_OPER), затем варианты регистра, затем верхнеуровневое описание
   const descriptionSrc =
-    obj.description ??
     raw.REASON_OPER ??
     obj.REASON_OPER ??
     raw.reason_oper ??
     obj.reason_oper ??
+    obj.description ??
     null;
   const description = clean(descriptionSrc);
 
@@ -971,7 +972,7 @@ router.put("/", async (req, res) => {
     // Фоновая обработка адресов — не блокируем ответ
     setTimeout(() => {
       if (!fiasSet.size) {
-        console.log("[PUT] Нет FIAS кодов для фоновой обработки");
+        // console.log("[PUT] Нет FIAS кодов для фоновой обработки");
         return;
       }
       console.log("[PUT] Запуск фоновой обработки адресов...");
@@ -998,9 +999,9 @@ router.post("/", async (req, res) => {
       async (previousPromise, item, index) => {
         const accumulatedResults = await previousPromise;
         try {
-          console.log(
-            `[POST] Отправка элемента ${index + 1} из ${dataArray.length}`
-          );
+          // console.log(
+          //   `[POST] Отправка элемента ${index + 1} из ${dataArray.length}`
+          // );
 
           // Безопасная проверка дубликатов по GUID — если запись уже есть, POST не выполняем
           const guid = item?.guid;
@@ -1019,9 +1020,9 @@ router.post("/", async (req, res) => {
               const found = search?.data?.data?.[0];
               if (found) {
                 const existingId = found?.documentId || found?.id;
-                console.warn(
-                  `[POST] Дубликат guid=${guid} — запись уже существует (id=${existingId}). POST пропущен`
-                );
+                // console.warn(
+                //   `[POST] Дубликат guid=${guid} — запись уже существует (id=${existingId}). POST пропущен`
+                // );
                 accumulatedResults.push({
                   success: false,
                   index: index + 1,
@@ -1101,7 +1102,7 @@ router.post("/", async (req, res) => {
     // Фоновая обработка адресов — не блокируем ответ МОДУСу
     setTimeout(() => {
       if (!fiasSet.size) {
-        console.log("[POST] Нет FIAS кодов для фоновой обработки");
+        // console.log("[POST] Нет FIAS кодов для фоновой обработки");
         return;
       }
       console.log("[POST] Запуск фоновой обработки адресов...");
