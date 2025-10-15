@@ -196,7 +196,7 @@ function buildEddsPayload(tnLike) {
   //   null;
   // const description = clean(descriptionSrc);
 
-  const description = clean(obj?.description) || "Электропробой";
+  const description = clean(obj?.description);
 
   const resources = Array.isArray(obj.resources) ? obj.resources : [5];
 
@@ -453,6 +453,24 @@ async function getJwt() {
   } catch (error) {
     console.log("Ошибка авторизации в Strapi:", error);
     return false;
+  }
+}
+
+// Helper to fetch description from Strapi by ID
+async function fetchTnDescriptionById(id, jwt) {
+  if (!id || !jwt) return undefined;
+  try {
+    const r = await axios.get(`${urlStrapi}/api/teh-narusheniyas/${id}`, {
+      headers: { Authorization: `Bearer ${jwt}` },
+      params: { 'fields[0]': 'description' },
+      timeout: 15000,
+    });
+    const d = r?.data?.data;
+    const attrs = d?.attributes || d || {};
+    return attrs?.description;
+  } catch (e) {
+    console.warn("[POST] Не удалось получить description из Strapi:", e?.response?.status || e?.message);
+    return undefined;
   }
 }
 
@@ -958,11 +976,14 @@ router.post("/", async (req, res) => {
             { headers: { Authorization: `Bearer ${jwt}` } }
           );
 
-          // Достаём реальные данные из ответа Strapi (v4/v5)
+          // Достаём реальные данные из ответа Strapi (v4/v5) и тянем дефолт из самой Strapi (без хардкода)
           const created = response?.data?.data;
           const createdId = created?.id || created?.documentId;
           const createdAttrs = created?.attributes || {};
-          const descriptionFromStrapi = createdAttrs?.description ?? "Электропробой";
+          let descriptionFromStrapi = createdAttrs?.description;
+          if (descriptionFromStrapi == null && createdId) {
+            descriptionFromStrapi = await fetchTnDescriptionById(createdId, jwt);
+          }
 
           accumulatedResults.push({
             success: true,
