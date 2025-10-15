@@ -33,7 +33,6 @@ const passwordStrapi = process.env.PASSWORD_STRAPI;
 
 const urlStrapi = process.env.URL_STRAPI;
 
-
 const norm = (s) =>
   String(s || "")
     .trim()
@@ -154,7 +153,6 @@ function buildMkdFromFiasList(str) {
 }
 
 function buildEddsPayload(tnLike) {
-  // Accepts { data: mapped } (preferred) or mapped itself.
   const obj = tnLike?.data ? tnLike.data : tnLike;
   if (!obj) return null;
   const raw = obj?.data || {};
@@ -189,15 +187,16 @@ function buildEddsPayload(tnLike) {
 
   const fioWork = "Оперативный дежурный САЦ";
   const fioPhone = "84957803976";
-  // Приоритет: ручное описание из Strapi.raw (REASON_OPER), затем варианты регистра, затем верхнеуровневое описание
-  const descriptionSrc =
-    raw.REASON_OPER ??
-    obj.REASON_OPER ??
-    raw.reason_oper ??
-    obj.reason_oper ??
-    obj.description ??
-    null;
-  const description = clean(descriptionSrc);
+  // const descriptionSrc =
+  //   raw.REASON_OPER ??
+  //   obj.REASON_OPER ??
+  //   raw.reason_oper ??
+  //   obj.reason_oper ??
+  //   obj.description ??
+  //   null;
+  // const description = clean(descriptionSrc);
+
+  const description = clean(obj?.description) || "Электропробой";
 
   const resources = Array.isArray(obj.resources) ? obj.resources : [5];
 
@@ -237,7 +236,6 @@ function buildEddsPayload(tnLike) {
     ),
   };
 
-  // --- Social objects mapping (from raw.SocialObjects) ---
   const socials = Array.isArray(raw.SocialObjects) ? raw.SocialObjects : [];
   function toKeyBySocialTyp(t) {
     const s = String(t || "").toLowerCase();
@@ -465,8 +463,6 @@ function extractFiasList(rawItem) {
     rawItem?.data?.data?.FIAS_LIST ||
     "";
 
-  console.log("[extractFiasList] Сырая строка FIAS_LIST:", raw);
-
   const fiasCodes = Array.from(
     new Set(
       String(raw)
@@ -476,7 +472,6 @@ function extractFiasList(rawItem) {
     )
   );
 
-  console.log("[extractFiasList] Извлеченные FIAS коды:", fiasCodes);
   return fiasCodes;
 }
 
@@ -484,7 +479,6 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
   const ids = Array.from(
     new Set((fiasIds || []).map((x) => String(x).trim()).filter(Boolean))
   );
-
 
   if (!ids.length) {
     return;
@@ -496,58 +490,22 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
   async function worker() {
     while (queue.length) {
       const fiasId = queue.shift();
-      // console.log(`[upsertAddressesInStrapi] Обрабатываем FIAS: ${fiasId}`);
-
       try {
-        // Ищем существующую запись
-        // console.log(
-        //   `[upsertAddressesInStrapi] Ищем существующий адрес для FIAS: ${fiasId}`
-        // );
         const search = await axios.get(`${urlStrapi}/api/adress`, {
           headers: { Authorization: `Bearer ${jwt}` },
           params: { "filters[fiasId][$eq]": fiasId, "pagination[pageSize]": 1 },
         });
-
-        // console.log(
-        //   `[upsertAddressesInStrapi] Ответ от Strapi при поиске:`,
-        //   search.status,
-        //   search.data
-        // );
-
         const existing = Array.isArray(search?.data?.data)
           ? search.data.data[0]
           : null;
-
         if (existing) {
-          // console.log(
-          //   `[upsertAddressesInStrapi] Найден существующий адрес для FIAS: ${fiasId}`,
-          //   existing
-          // );
         } else {
-          // console.log(
-          //   `[upsertAddressesInStrapi] Адрес для FIAS: ${fiasId} не найден, будет создан новый`
-          // );
         }
 
-        // Тянем DaData
-        // console.log(
-        //   `[upsertAddressesInStrapi] Запрашиваем данные из DaData для FIAS: ${fiasId}`
-        // );
         const info = await fetchByFias(fiasId);
 
         if (info) {
-          // console.log(
-          //   `[upsertAddressesInStrapi] DaData ответила для FIAS: ${fiasId}`,
-          //   {
-          //     fullAddress: info.fullAddress,
-          //     lat: info.lat,
-          //     lon: info.lon,
-          //   }
-          // );
         } else {
-          // console.log(
-          //   `[upsertAddressesInStrapi] DaData не вернула данных для FIAS: ${fiasId}`
-          // );
         }
 
         const payload = {
@@ -557,11 +515,6 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
           ...(info?.lon ? { lon: String(info.lon) } : {}),
           ...(info?.all ? { all: info.all } : {}),
         };
-
-        // console.log(
-        //   `[upsertAddressesInStrapi] Подготовленный payload для FIAS ${fiasId}:`,
-        //   payload
-        // );
 
         if (existing) {
           const existingAttrs = existing?.attributes || existing;
@@ -583,19 +536,11 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
             patch.all = payload.all;
 
           if (Object.keys(patch).length) {
-            // console.log(
-            //   `[upsertAddressesInStrapi] Обновляем адрес для FIAS: ${fiasId}`,
-            //   patch
-            // );
             const updateResponse = await axios.put(
               `${urlStrapi}/api/adress/${existingId}`,
               { data: patch },
               { headers: { Authorization: `Bearer ${jwt}` } }
             );
-            // console.log(
-            //   `[upsertAddressesInStrapi] Адрес успешно обновлен для FIAS: ${fiasId}`,
-            //   updateResponse.status
-            // );
           } else {
             console.log(
               `[upsertAddressesInStrapi] Изменений нет, обновление не требуется для FIAS: ${fiasId}`
@@ -604,27 +549,14 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
           continue;
         }
 
-        // Не создаём пустых адресов, если DaData не ответила
         if (!info) {
-          // console.log(
-          //   `[upsertAddressesInStrapi] Пропускаем создание адреса для FIAS: ${fiasId} - нет данных от DaData`
-          // );
           continue;
         }
-
-        // console.log(
-        //   `[upsertAddressesInStrapi] Создаем новый адрес для FIAS: ${fiasId}`,
-        //   payload
-        // );
         const createResponse = await axios.post(
           `${urlStrapi}/api/adress`,
           { data: payload },
           { headers: { Authorization: `Bearer ${jwt}` } }
         );
-        // console.log(
-        //   `[upsertAddressesInStrapi] Адрес успешно создан для FIAS: ${fiasId}`,
-        //   createResponse.status
-        // );
       } catch (e) {
         console.error(
           `[upsertAddressesInStrapi] Ошибка при обработке FIAS ${fiasId}:`,
@@ -644,7 +576,6 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
     worker
   );
   await Promise.all(workers);
-  // console.log("[upsertAddressesInStrapi] Завершена обработка всех FIAS кодов");
 }
 
 router.put("/", async (req, res) => {
@@ -672,7 +603,7 @@ router.put("/", async (req, res) => {
         createDateTime: item.F81_060_EVENTDATETIME,
         recoveryPlanDateTime: item.CREATE_DATETIME,
         addressList: item.ADDRESS_LIST,
-        description: item.F81_042_DISPNAME,
+        // description: item.F81_042_DISPNAME,
         recoveryFactDateTime: item.F81_290_RECOVERYDATETIME,
         dispCenter: item.DISPCENTER_NAME_,
         STATUS_NAME: (item.STATUS_NAME || "").toString().trim(),
@@ -708,14 +639,8 @@ router.put("/", async (req, res) => {
     const results = await items.reduce(async (prevPromise, rawItem, index) => {
       const acc = await prevPromise;
       const mapped = mapItem(rawItem);
-
-      // собираем FIAS из входного элемента
       try {
         const fiasCodes = extractFiasList(rawItem);
-        console.log(
-          `[PUT] Извлечены FIAS коды для элемента ${index + 1}:`,
-          fiasCodes
-        );
         fiasCodes.forEach((id) => fiasSet.add(id));
       } catch (e) {
         console.warn(
@@ -747,16 +672,15 @@ router.put("/", async (req, res) => {
         const current = found || {};
         const currentAttrs = current?.attributes || current || {};
         const currentRaw = currentAttrs?.data || current?.data || {};
-
-        // Определяем, является ли это событием смены статуса в финальный
-        const prevStatus = norm(current?.STATUS_NAME || current?.attributes?.STATUS_NAME);
+        const prevStatus = norm(
+          current?.STATUS_NAME || current?.attributes?.STATUS_NAME
+        );
         const nextStatus = norm(mapped?.STATUS_NAME);
         const statusChanged = prevStatus !== nextStatus;
         const nextIsFinal = isFinalStatus(nextStatus);
         const needEdds = statusChanged && nextIsFinal;
 
         if (!documentId) {
-          console.warn(`[modus] Не найдена запись по guid=${mapped.guid}`);
           acc.push({
             success: false,
             index: index + 1,
@@ -768,9 +692,6 @@ router.put("/", async (req, res) => {
 
         let patch;
         if (needEdds) {
-          // При финальной смене статуса — НЕ затираем «ручные» поля и «data» от МОДУСа.
-          // Обновляем только статус и isActive + синхронизируем вложенное поле data.STATUS_NAME,
-          // чтобы в Strapi не висело старое значение ("открыта").
           patch = {};
           if (currentAttrs?.STATUS_NAME !== mapped.STATUS_NAME) {
             patch.STATUS_NAME = mapped.STATUS_NAME;
@@ -779,12 +700,13 @@ router.put("/", async (req, res) => {
           if (currentAttrs?.isActive !== nextIsActive) {
             patch.isActive = nextIsActive;
           }
-          // Синхронизация статуса во вложенных "сырых" данных (data.STATUS_NAME)
           if ((currentRaw?.STATUS_NAME || "") !== mapped.STATUS_NAME) {
-            patch.data = { ...(currentRaw || {}), STATUS_NAME: mapped.STATUS_NAME };
+            patch.data = {
+              ...(currentRaw || {}),
+              STATUS_NAME: mapped.STATUS_NAME,
+            };
           }
         } else {
-          // Обычный режим: принимаем уточнения от МОДУС
           patch = buildPatch(current, mapped);
         }
 
@@ -818,13 +740,7 @@ router.put("/", async (req, res) => {
         } catch (e) {
           console.error("SSE broadcast error (update):", e?.message);
         }
-
-        // --- auto-send to EDDS on STATUS change to a final state ---
-        console.log(
-          `[modus→edds] status change check guid=${mapped.guid}: prev="${prevStatus}" → next="${nextStatus}" changed=${statusChanged} final=${nextIsFinal}`
-        );
         if (needEdds) {
-          // 1) Берём актуальную запись из Strapi как источник истины
           let strapiTn = null;
           try {
             const rFull = await axios.get(`${urlStrapi}/api/teh-narusheniyas`, {
@@ -844,43 +760,45 @@ router.put("/", async (req, res) => {
             );
           }
 
-          // если что-то пошло не так — используем хотя бы то, что есть
           if (!strapiTn) {
             strapiTn = { ...mapped };
           }
 
-          // 2) Поверх подменяем ТОЛЬКО статусные/временные поля из входящего события
           const mergedForPayload = { ...strapiTn };
-          if (mapped?.STATUS_NAME != null) mergedForPayload.STATUS_NAME = mapped.STATUS_NAME;
+          if (mapped?.STATUS_NAME != null)
+            mergedForPayload.STATUS_NAME = mapped.STATUS_NAME;
           if (mapped?.recoveryFactDateTime != null)
             mergedForPayload.recoveryFactDateTime = mapped.recoveryFactDateTime;
           if (mapped?.recoveryPlanDateTime != null)
             mergedForPayload.recoveryPlanDateTime = mapped.recoveryPlanDateTime;
           if (mapped?.createDateTime != null)
             mergedForPayload.createDateTime = mapped.createDateTime;
-
-          // 3) Строим payload для ЕДДС из Strapi-версии (manual edits сохраняются)
           const payload = buildEddsPayload({ data: mergedForPayload });
-          // --- debug snapshot of what exactly we send (and from what) ---
           try {
             const dbg = {
-              mergedForPayload,     // включает .data со Strapi (ручные правки видны здесь)
-              eddsPayload: payload, // итоговый JSON, уходящий в /services/edds
+              mergedForPayload,
+              eddsPayload: payload,
             };
             const snap = JSON.stringify(dbg);
             const snapClip =
-              snap.length > 4000 ? snap.slice(0, 4000) + `… (${snap.length} chars)` : snap;
+              snap.length > 4000
+                ? snap.slice(0, 4000) + `… (${snap.length} chars)`
+                : snap;
             console.log(`[modus→edds] payload snapshot: ${snapClip}`);
           } catch (e) {
-            console.warn("[modus→edds] Не удалось сформировать debug snapshot:", e?.message);
+            console.warn(
+              "[modus→edds] Не удалось сформировать debug snapshot:",
+              e?.message
+            );
           }
-          // --- /debug snapshot ---
 
           const explicitSelf = String(process.env.SELF_EDDS_URL || "").trim();
-          const port = Number(process.env.PORT || process.env.BACK_PORT || 3110);
+          const port = Number(
+            process.env.PORT || process.env.BACK_PORT || 3110
+          );
           const protocol = req.protocol || "http";
           const host = req.get("host");
-          const qs = 'debug=1';
+          const qs = "debug=1";
           const candidates = [
             explicitSelf && `${explicitSelf}?${qs}`,
             `http://127.0.0.1:${port}/services/edds?${qs}`,
@@ -904,15 +822,22 @@ router.put("/", async (req, res) => {
                 const body =
                   typeof resp?.data === "string"
                     ? resp.data
-                    : JSON.stringify(resp?.data ?? resp?.statusText ?? "", null, 2);
+                    : JSON.stringify(
+                        resp?.data ?? resp?.statusText ?? "",
+                        null,
+                        2
+                      );
                 const bodyClip =
-                  body.length > 4000 ? body.slice(0, 4000) + `… (${body.length} chars)` : body;
+                  body.length > 4000
+                    ? body.slice(0, 4000) + `… (${body.length} chars)`
+                    : body;
 
                 console.log(
                   `[modus→edds] try ${url} → HTTP ${resp?.status}; body=${bodyClip}`
                 );
                 if (resp?.status !== 404) {
-                  const claimId = resp?.data?.data?.claim_id ?? resp?.data?.claim_id;
+                  const claimId =
+                    resp?.data?.data?.claim_id ?? resp?.data?.claim_id;
                   const ok =
                     resp?.status >= 200 &&
                     resp?.status < 300 &&
@@ -947,7 +872,6 @@ router.put("/", async (req, res) => {
             }
           }, 0);
         }
-        // --- /auto-send ---
 
         acc.push({
           success: true,
@@ -966,14 +890,8 @@ router.put("/", async (req, res) => {
       return acc;
     }, Promise.resolve([]));
 
-    // console.log(
-    //   `[PUT] Всего собрано уникальных FIAS кодов для фоновой обработки: ${fiasSet.size}`
-    // );
-
-    // Фоновая обработка адресов — не блокируем ответ
     setTimeout(() => {
       if (!fiasSet.size) {
-        // console.log("[PUT] Нет FIAS кодов для фоновой обработки");
         return;
       }
       console.log("[PUT] Запуск фоновой обработки адресов...");
@@ -1000,11 +918,6 @@ router.post("/", async (req, res) => {
       async (previousPromise, item, index) => {
         const accumulatedResults = await previousPromise;
         try {
-          // console.log(
-          //   `[POST] Отправка элемента ${index + 1} из ${dataArray.length}`
-          // );
-
-          // Безопасная проверка дубликатов по GUID — если запись уже есть, POST не выполняем
           const guid = item?.guid;
           if (guid) {
             try {
@@ -1021,9 +934,6 @@ router.post("/", async (req, res) => {
               const found = search?.data?.data?.[0];
               if (found) {
                 const existingId = found?.documentId || found?.id;
-                // console.warn(
-                //   `[POST] Дубликат guid=${guid} — запись уже существует (id=${existingId}). POST пропущен`
-                // );
                 accumulatedResults.push({
                   success: false,
                   index: index + 1,
@@ -1047,33 +957,38 @@ router.post("/", async (req, res) => {
             { data: { ...item } },
             { headers: { Authorization: `Bearer ${jwt}` } }
           );
+
+          // Достаём реальные данные из ответа Strapi (v4/v5)
+          const created = response?.data?.data;
+          const createdId = created?.id || created?.documentId;
+          const createdAttrs = created?.attributes || {};
+          const descriptionFromStrapi = createdAttrs?.description ?? "Электропробой";
+
           accumulatedResults.push({
             success: true,
-            id: response.data?.data.id,
+            id: createdId,
             index: index + 1,
           });
           console.log(`[POST] Элемент ${index + 1} успешно отправлен`);
-
-          // Копим FIAS — обработаем одним фоном
           try {
             const fiasCodes = extractFiasList(item);
-            console.log(
-              `[POST] Извлечены FIAS коды для элемента ${index + 1}:`,
-              fiasCodes
-            );
             fiasCodes.forEach((id) => fiasSet.add(id));
           } catch (e) {
             console.warn("[POST] Пропущено извлечение адресов:", e?.message);
           }
-
-          // Рассылка в SSE — создание ТН
           try {
+            const entryForSse = {
+              ...item,
+              id: createdId,
+              // если фронт слушает только SSE — отдадим корректное описание из Strapi
+              description: descriptionFromStrapi,
+            };
             broadcast({
               type: "tn-upsert",
               source: "modus",
               action: "create",
-              id: response.data?.data?.id,
-              entry: { ...item, id: response.data?.data?.id },
+              id: createdId,
+              entry: entryForSse,
               timestamp: Date.now(),
             });
           } catch (e) {
@@ -1095,15 +1010,8 @@ router.post("/", async (req, res) => {
       },
       Promise.resolve([])
     );
-
-    // console.log(
-    //   `[POST] Всего собрано уникальных FIAS кодов для фоновой обработки: ${fiasSet.size}`
-    // );
-
-    // Фоновая обработка адресов — не блокируем ответ МОДУСу
     setTimeout(() => {
       if (!fiasSet.size) {
-        // console.log("[POST] Нет FIAS кодов для фоновой обработки");
         return;
       }
       console.log("[POST] Запуск фоновой обработки адресов...");
@@ -1129,7 +1037,7 @@ router.post("/", async (req, res) => {
       createDateTime: item.F81_060_EVENTDATETIME,
       recoveryPlanDateTime: item.CREATE_DATETIME,
       addressList: item.ADDRESS_LIST,
-      description: item.F81_042_DISPNAME,
+      // description: item.F81_042_DISPNAME,
       recoveryFactDateTime: item.F81_290_RECOVERYDATETIME,
       dispCenter: item.DISPCENTER_NAME_,
       STATUS_NAME: (item.STATUS_NAME || "").toString().trim(),
@@ -1148,7 +1056,6 @@ router.post("/", async (req, res) => {
       results.length > 0 && results.every((r) => r?.status === "duplicate");
 
     if (allDuplicates && !anyCreated) {
-      // Совместимо с фронтом: явный 409 + подробные результаты
       return res.status(409).json({
         status: "duplicate",
         message: "Запись с таким GUID уже существует",

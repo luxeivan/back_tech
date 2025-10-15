@@ -1,4 +1,3 @@
-// SSE registry: id -> { res, ip, ua, since }
 const clients = new Map();
 
 function safeRemove(id) {
@@ -26,30 +25,23 @@ function broadcast(payload) {
   dumpClients(50);
 }
 
-// Временная отладка: вывести список активных клиентов (первые max штук)
 function dumpClients(max = 50) {
-  // console.log(`[SSE] Активных клиентов: ${clients.size}`);
   let i = 0;
   for (const [id, c] of clients) {
     if (i++ >= max) {
-      // console.log(`[SSE] ...и ещё ${clients.size - max} клиентов`);
       break;
     }
     const sinceIso = new Date(c.since).toISOString();
-    // user-agent длинный — чуть укоротим
     const uaShort = (c.ua || "").slice(0, 90);
-    // console.log(`[SSE] id=${id} ip=${c.ip} since=${sinceIso} ua="${uaShort}"`);
   }
 }
 
 function sseHandler(req, res) {
-  // Заголовки SSE
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders && res.flushHeaders();
 
-  // Метаданные клиента
   const id = Date.now() + Math.random();
   const ip =
     (req.headers["x-forwarded-for"] || "").toString().split(",")[0].trim() ||
@@ -62,18 +54,14 @@ function sseHandler(req, res) {
     `📡 SSE: клиент подключен (${id}, ip=${ip}). Всего: ${clients.size}`
   );
 
-  // Приветственное сообщение
   res.write("event: message\n");
   res.write(`data: ${JSON.stringify({ message: "Подключено к SSE" })}\n\n`);
 
-  // Пульс, чтобы соединение не простаивало и не рвалось прокси
   const HEARTBEAT_MS = 25_000;
   const hb = setInterval(() => {
     try {
-      // Комментарий в SSE — не триггерит onmessage на клиенте
       res.write(`: ping ${Date.now()}\n\n`);
     } catch {
-      // Если запись упала — закрываем клиента
       clearInterval(hb);
       safeRemove(id);
     }
@@ -89,7 +77,6 @@ function sseHandler(req, res) {
     safeRemove(id);
   }
 
-  // ВАЖНО: удаляем клиента при любых завершениях/ошибках
   req.on("close", () => onClose("req.close"));
   req.on?.("aborted", () => onClose("req.aborted"));
   res.on?.("close", () => onClose("res.close"));
