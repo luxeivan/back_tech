@@ -28,17 +28,17 @@ function broadcast(payload) {
 
 // Временная отладка: вывести список активных клиентов (первые max штук)
 function dumpClients(max = 50) {
-  console.log(`[SSE] Активных клиентов: ${clients.size}`);
+  // console.log(`[SSE] Активных клиентов: ${clients.size}`);
   let i = 0;
   for (const [id, c] of clients) {
     if (i++ >= max) {
-      console.log(`[SSE] ...и ещё ${clients.size - max} клиентов`);
+      // console.log(`[SSE] ...и ещё ${clients.size - max} клиентов`);
       break;
     }
     const sinceIso = new Date(c.since).toISOString();
     // user-agent длинный — чуть укоротим
     const uaShort = (c.ua || "").slice(0, 90);
-    console.log(`[SSE] id=${id} ip=${c.ip} since=${sinceIso} ua="${uaShort}"`);
+    // console.log(`[SSE] id=${id} ip=${c.ip} since=${sinceIso} ua="${uaShort}"`);
   }
 }
 
@@ -52,16 +52,15 @@ function sseHandler(req, res) {
   // Метаданные клиента
   const id = Date.now() + Math.random();
   const ip =
-    (req.headers["x-forwarded-for"] || "")
-      .toString()
-      .split(",")[0]
-      .trim() ||
+    (req.headers["x-forwarded-for"] || "").toString().split(",")[0].trim() ||
     req.socket?.remoteAddress ||
     "";
   const ua = req.headers["user-agent"] || "";
 
   clients.set(id, { res, ip, ua, since: Date.now() });
-  console.log(`📡 SSE: клиент подключен (${id}, ip=${ip}). Всего: ${clients.size}`);
+  console.log(
+    `📡 SSE: клиент подключен (${id}, ip=${ip}). Всего: ${clients.size}`
+  );
 
   // Приветственное сообщение
   res.write("event: message\n");
@@ -82,7 +81,11 @@ function sseHandler(req, res) {
 
   function onClose(why) {
     clearInterval(hb);
-    console.log(`📴 SSE: клиент отключен (${id}, причина=${why}). Осталось: ${clients.size - 1}`);
+    console.log(
+      `📴 SSE: клиент отключен (${id}, причина=${why}). Осталось: ${
+        clients.size - 1
+      }`
+    );
     safeRemove(id);
   }
 

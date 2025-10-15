@@ -966,9 +966,9 @@ router.put("/", async (req, res) => {
       return acc;
     }, Promise.resolve([]));
 
-    console.log(
-      `[PUT] Всего собрано уникальных FIAS кодов для фоновой обработки: ${fiasSet.size}`
-    );
+    // console.log(
+    //   `[PUT] Всего собрано уникальных FIAS кодов для фоновой обработки: ${fiasSet.size}`
+    // );
 
     // Фоновая обработка адресов — не блокируем ответ
     setTimeout(() => {
@@ -1096,9 +1096,9 @@ router.post("/", async (req, res) => {
       Promise.resolve([])
     );
 
-    console.log(
-      `[POST] Всего собрано уникальных FIAS кодов для фоновой обработки: ${fiasSet.size}`
-    );
+    // console.log(
+    //   `[POST] Всего собрано уникальных FIAS кодов для фоновой обработки: ${fiasSet.size}`
+    // );
 
     // Фоновая обработка адресов — не блокируем ответ МОДУСу
     setTimeout(() => {

@@ -34,7 +34,7 @@ async function fetchByFias(fiasId) {
   }
 
   if (cache.has(id)) {
-    console.log(`[fetchByFias] Используем кэш для FIAS: ${id}`);
+    // console.log(`[fetchByFias] Используем кэш для FIAS: ${id}`);
     return cache.get(id);
   }
 
