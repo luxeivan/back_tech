@@ -157,6 +157,20 @@ function buildEddsPayload(tnLike) {
   if (!obj) return null;
   const raw = obj?.data || {};
 
+  // Prefer our Strapi-managed overrides if present (like we do for "description")
+  const PES_COUNT_TOP =
+    obj?.PES_COUNT ?? obj?.attributes?.PES_COUNT ?? null;
+  const PES_POWER_TOP =
+    obj?.PES_POWER ?? obj?.attributes?.PES_POWER ?? null;
+
+  // Unified preferred values
+  const PES_COUNT_PREF = clean(
+    PES_COUNT_TOP != null ? PES_COUNT_TOP : raw.PES_COUNT
+  );
+  const PES_POWER_PREF = clean(
+    PES_POWER_TOP != null ? PES_POWER_TOP : raw.PES_POWER
+  );
+
   const incidentId = raw.VIOLATION_GUID_STR || obj.guid || null;
 
   const typeSrc = raw.VIOLATION_TYPE || obj.type || null;
@@ -224,7 +238,8 @@ function buildEddsPayload(tnLike) {
     involved_brigades: clean(raw.BRIGADECOUNT),
     involved_workers: clean(raw.EMPLOYEECOUNT),
     involved_equipment: clean(raw.SPECIALTECHNIQUECOUNT),
-    involved_emergency_power_supply: clean(raw.PES_COUNT),
+    // Use preferred value: top-level Strapi field overrides raw
+    involved_emergency_power_supply: PES_COUNT_PREF,
   };
 
   const required = {
@@ -1003,6 +1018,9 @@ router.post("/", async (req, res) => {
               id: createdId,
               // если фронт слушает только SSE — отдадим корректное описание из Strapi
               description: descriptionFromStrapi,
+              // expose Strapi-managed PES fields (override-friendly)
+              PES_COUNT: createdAttrs?.PES_COUNT ?? 0,
+              PES_POWER: createdAttrs?.PES_POWER ?? 0,
             };
             broadcast({
               type: "tn-upsert",
