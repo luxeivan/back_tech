@@ -158,10 +158,8 @@ function buildEddsPayload(tnLike) {
   const raw = obj?.data || {};
 
   // Prefer our Strapi-managed overrides if present (like we do for "description")
-  const PES_COUNT_TOP =
-    obj?.PES_COUNT ?? obj?.attributes?.PES_COUNT ?? null;
-  const PES_POWER_TOP =
-    obj?.PES_POWER ?? obj?.attributes?.PES_POWER ?? null;
+  const PES_COUNT_TOP = obj?.PES_COUNT ?? obj?.attributes?.PES_COUNT ?? null;
+  const PES_POWER_TOP = obj?.PES_POWER ?? obj?.attributes?.PES_POWER ?? null;
 
   // Unified preferred values
   const PES_COUNT_PREF = clean(
@@ -187,9 +185,11 @@ function buildEddsPayload(tnLike) {
 
   const timeCreate =
     toDateEDDS(raw.F81_060_EVENTDATETIME || obj.createDateTime, true) || null;
+
   const planDateClose =
     toDateEDDS(
-      raw.F81_070_RESTOR_SUPPLAYDATETIME || obj.recoveryPlanDateTime
+      raw.F81_070_RESTOR_SUPPLAYDATETIME || obj.recoveryPlanDateTime,
+      true
     ) || null;
 
   const districtName =
@@ -477,14 +477,17 @@ async function fetchTnDescriptionById(id, jwt) {
   try {
     const r = await axios.get(`${urlStrapi}/api/teh-narusheniyas/${id}`, {
       headers: { Authorization: `Bearer ${jwt}` },
-      params: { 'fields[0]': 'description' },
+      params: { "fields[0]": "description" },
       timeout: 15000,
     });
     const d = r?.data?.data;
     const attrs = d?.attributes || d || {};
     return attrs?.description;
   } catch (e) {
-    console.warn("[POST] Не удалось получить description из Strapi:", e?.response?.status || e?.message);
+    console.warn(
+      "[POST] Не удалось получить description из Strapi:",
+      e?.response?.status || e?.message
+    );
     return undefined;
   }
 }
@@ -997,7 +1000,10 @@ router.post("/", async (req, res) => {
           const createdAttrs = created?.attributes || {};
           let descriptionFromStrapi = createdAttrs?.description;
           if (descriptionFromStrapi == null && createdId) {
-            descriptionFromStrapi = await fetchTnDescriptionById(createdId, jwt);
+            descriptionFromStrapi = await fetchTnDescriptionById(
+              createdId,
+              jwt
+            );
           }
 
           accumulatedResults.push({
