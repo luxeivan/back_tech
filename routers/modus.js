@@ -1,6 +1,7 @@
 const express = require("express");
 const axios = require("axios");
 const { broadcast } = require("../services/sse");
+const { buildAutoDescription } = require("../services/autoDescription");
 require("dotenv").config();
 const { fetchByFias } = require("./dadata");
 
@@ -745,6 +746,26 @@ router.put("/", async (req, res) => {
         } else {
           patch = buildPatch(current, mapped);
         }
+        // ── Auto‑description on update: fill only if currently empty ─────────────────
+        try {
+          const hasDesc =
+            typeof currentAttrs?.description === "string" &&
+            currentAttrs.description.trim().length > 0;
+          if (!hasDesc) {
+            const autoDesc = buildAutoDescription({
+              ...(mapped?.data || {}),   // fresh raw fields from MODUS
+              ...(currentRaw || {}),     // previous raw snapshot from Strapi
+              ...mapped,                 // top-level mapped fields
+            });
+            if (autoDesc) {
+              patch = patch || {};
+              patch.description = autoDesc;
+            }
+          }
+        } catch (e) {
+          console.warn("[PUT] autoDescription generation failed:", e?.message);
+        }
+        // ─────────────────────────────────────────────────────────────────────────────
 
         if (Object.keys(patch).length === 0) {
           acc.push({
@@ -988,9 +1009,20 @@ router.post("/", async (req, res) => {
             }
           }
 
+          // Build payload with auto-description on create
+          const payload = { ...item };
+          try {
+            const autoDesc = buildAutoDescription({
+              ...(item?.data || {}),
+              ...item,
+            });
+            if (autoDesc) payload.description = autoDesc;
+          } catch (e) {
+            console.warn("[POST] autoDescription generation failed:", e?.message);
+          }
           const response = await axios.post(
             `${urlStrapi}/api/teh-narusheniyas`,
-            { data: { ...item } },
+            { data: payload },
             { headers: { Authorization: `Bearer ${jwt}` } }
           );
 
