@@ -755,48 +755,35 @@ router.put("/", async (req, res) => {
         }
         // ── Auto‑description on update: refresh if previous was auto or empty ───────
         try {
-          // Нормализуем пробелы + NBSP, чтобы корректно сравнивать автотексты
-          const normalize = (t) =>
-            String(t ?? "")
-              .replace(/\u00A0/g, " ") // NBSP → обычный пробел
-              .replace(/\s+/g, " ")
-              .trim();
+          const normTxt = (t) => String(t || "").replace(/\s+/g, " ").trim();
 
-          const currentDesc = currentAttrs?.description ?? "";
-          const hasDesc = currentDesc.trim().length > 0;
+          const currentDesc = currentAttrs?.description || "";
 
-          // Разрешаем принудительное перегенерирование заголовком:
-          // X-Force-Autodesc: 1
-          const force =
-            String(req.get("x-force-autodesc") || "").trim() === "1";
-
-          // Считаем "старое" автоописание по данным, которые уже были сохранены
+          // 1) Автоматическое описание для "старых" данных (что уже в Страпи)
           const prevAuto = buildAutoDescription({
             ...(currentRaw || {}),
-            ...mapped, // на всякий случай — если генератор использует верхнеуровневые поля
           });
 
-          // Считаем "новое" автоописание по объединённым данным (raw + свежие поля из MODUS)
+          // 2) Автоматическое описание для "новых" объединённых данных
           const nextAuto = buildAutoDescription({
             ...(mergedRaw || {}),
-            ...mapped,
           });
 
-          const shouldRewrite =
-            force ||
-            !hasDesc ||
-            (prevAuto && normalize(currentDesc) === normalize(prevAuto));
+          // Меняем описание, если оно пустое ИЛИ совпадало с прежним автосгенерированным текстом.
+          const shouldOverwrite =
+            !currentDesc.trim() ||
+            (prevAuto && normTxt(currentDesc) === normTxt(prevAuto));
 
           if (
-            shouldRewrite &&
+            shouldOverwrite &&
             nextAuto &&
-            normalize(nextAuto) !== normalize(currentDesc)
+            normTxt(nextAuto) !== normTxt(currentDesc)
           ) {
             patch = patch || {};
             patch.description = nextAuto;
           }
         } catch (e) {
-          console.warn("[PUT] autoDescription regeneration failed:", e?.message);
+          console.warn("[PUT] autoDescription generation failed:", e?.message);
         }
         // ─────────────────────────────────────────────────────────────────────────────
 
