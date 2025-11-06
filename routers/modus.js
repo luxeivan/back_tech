@@ -727,9 +727,20 @@ router.put("/", async (req, res) => {
           return acc;
         }
 
-        let patch;
+        // Сначала считаем обычный патч по всем полям
+        let patch = buildPatch(current, mapped);
+
+        // Всегда объединяем сырые данные: то, что прилетело из MODUS (mapped.data),
+        // накладываем поверх того, что уже хранится в Strapi (currentRaw)
+        const mergedRaw = { ...(currentRaw || {}), ...(mapped.data || {}) };
+        const rawChanged = JSON.stringify(mergedRaw) !== JSON.stringify(currentRaw || {});
+        if (rawChanged) {
+          patch.data = mergedRaw;
+        }
+
+        // Если статус стал финальным и нужно отправлять в ЕДДС —
+        // не урезаем патч, а лишь гарантируем, что статусные поля совпадают
         if (needEdds) {
-          patch = {};
           if (currentAttrs?.STATUS_NAME !== mapped.STATUS_NAME) {
             patch.STATUS_NAME = mapped.STATUS_NAME;
           }
@@ -737,33 +748,55 @@ router.put("/", async (req, res) => {
           if (currentAttrs?.isActive !== nextIsActive) {
             patch.isActive = nextIsActive;
           }
-          if ((currentRaw?.STATUS_NAME || "") !== mapped.STATUS_NAME) {
-            patch.data = {
-              ...(currentRaw || {}),
-              STATUS_NAME: mapped.STATUS_NAME,
-            };
+          // и дублируем STATUS_NAME внутрь raw-объекта
+          if ((mergedRaw?.STATUS_NAME || "") !== mapped.STATUS_NAME) {
+            patch.data = { ...mergedRaw, STATUS_NAME: mapped.STATUS_NAME };
           }
-        } else {
-          patch = buildPatch(current, mapped);
         }
-        // ── Auto‑description on update: fill only if currently empty ─────────────────
+        // ── Auto‑description on update: refresh if previous was auto or empty ───────
         try {
-          const hasDesc =
-            typeof currentAttrs?.description === "string" &&
-            currentAttrs.description.trim().length > 0;
-          if (!hasDesc) {
-            const autoDesc = buildAutoDescription({
-              ...(mapped?.data || {}),   // fresh raw fields from MODUS
-              ...(currentRaw || {}),     // previous raw snapshot from Strapi
-              ...mapped,                 // top-level mapped fields
-            });
-            if (autoDesc) {
-              patch = patch || {};
-              patch.description = autoDesc;
-            }
+          // Нормализуем пробелы + NBSP, чтобы корректно сравнивать автотексты
+          const normalize = (t) =>
+            String(t ?? "")
+              .replace(/\u00A0/g, " ") // NBSP → обычный пробел
+              .replace(/\s+/g, " ")
+              .trim();
+
+          const currentDesc = currentAttrs?.description ?? "";
+          const hasDesc = currentDesc.trim().length > 0;
+
+          // Разрешаем принудительное перегенерирование заголовком:
+          // X-Force-Autodesc: 1
+          const force =
+            String(req.get("x-force-autodesc") || "").trim() === "1";
+
+          // Считаем "старое" автоописание по данным, которые уже были сохранены
+          const prevAuto = buildAutoDescription({
+            ...(currentRaw || {}),
+            ...mapped, // на всякий случай — если генератор использует верхнеуровневые поля
+          });
+
+          // Считаем "новое" автоописание по объединённым данным (raw + свежие поля из MODUS)
+          const nextAuto = buildAutoDescription({
+            ...(mergedRaw || {}),
+            ...mapped,
+          });
+
+          const shouldRewrite =
+            force ||
+            !hasDesc ||
+            (prevAuto && normalize(currentDesc) === normalize(prevAuto));
+
+          if (
+            shouldRewrite &&
+            nextAuto &&
+            normalize(nextAuto) !== normalize(currentDesc)
+          ) {
+            patch = patch || {};
+            patch.description = nextAuto;
           }
         } catch (e) {
-          console.warn("[PUT] autoDescription generation failed:", e?.message);
+          console.warn("[PUT] autoDescription regeneration failed:", e?.message);
         }
         // ─────────────────────────────────────────────────────────────────────────────
 
