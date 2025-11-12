@@ -15,9 +15,26 @@ function formatRusDateTime(v) {
   if (!v) return "";
   const d = new Date(v);
   if (isNaN(d.getTime())) return s(v);
-  return `${pad2(d.getHours())}:${pad2(d.getMinutes())} ${pad2(
-    d.getDate()
-  )}.${pad2(d.getMonth() + 1)}.${d.getFullYear()}`;
+
+  // Форматируем ЖЁСТКО в часовом поясе Москвы, чтобы бэкенд (Node в UTC)
+  // и фронт (браузер в локальном TZ) показывали одно и то же время.
+  try {
+    const fmt = new Intl.DateTimeFormat("ru-RU", {
+      timeZone: "Europe/Moscow",
+      hour: "2-digit",
+      minute: "2-digit",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour12: false,
+    });
+    const parts = Object.fromEntries(fmt.formatToParts(d).map(p => [p.type, p.value]));
+    return `${parts.hour}:${parts.minute} ${parts.day}.${parts.month}.${parts.year}`;
+  } catch (_) {
+    // Фоллбэк без Intl: Москва фиксированно UTC+3, без перехода на летнее время.
+    const msk = new Date(d.getTime() + 3 * 60 * 60 * 1000);
+    return `${pad2(msk.getUTCHours())}:${pad2(msk.getUTCMinutes())} ${pad2(msk.getUTCDate())}.${pad2(msk.getUTCMonth() + 1)}.${msk.getUTCFullYear()}`;
+  }
 }
 
 // Классификация соц. объектов по типу из SocialObjects[].SocialTyp
