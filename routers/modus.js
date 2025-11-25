@@ -107,10 +107,10 @@ const DISTRICT_MAP = {
 const TYPE_MAP = {
   "Аварийная заявка": "1",
   "Неплановая заявка": "1",
-  "Плановая заявка": "3",
+  "Плановая заявка": "1",
   А: "1",
-  В: "2",
-  П: "3",
+  В: "1",
+  П: "1",
 };
 
 const STATUS_NAME_MAP = {
@@ -127,14 +127,45 @@ function toDateEDDS(v, withTime = false) {
   if (!v) return null;
   const d = new Date(v);
   if (isNaN(d.getTime())) return null;
-  const yyyy = d.getFullYear();
-  const mm = pad2(d.getMonth() + 1);
-  const dd = pad2(d.getDate());
-  if (!withTime) return `${yyyy}-${mm}-${dd}`;
-  const HH = pad2(d.getHours());
-  const MM = pad2(d.getMinutes());
-  const SS = pad2(d.getSeconds());
-  return `${yyyy}-${mm}-${dd} ${HH}:${MM}:${SS}`;
+
+  try {
+    if (withTime) {
+      const s = d
+        .toLocaleString("ru-RU", {
+          timeZone: "Europe/Moscow",
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false,
+        })
+        .replace(",", "");
+      const [datePart, timePart] = s.split(" ");
+      const [dd, mm, yyyy] = datePart.split(".");
+      return `${yyyy}-${mm}-${dd} ${timePart}`;
+    } else {
+      const s = d.toLocaleDateString("ru-RU", {
+        timeZone: "Europe/Moscow",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      });
+      const [dd, mm, yyyy] = s.split(".");
+      return `${yyyy}-${mm}-${dd}`;
+    }
+  } catch {
+    // Fallback: local time if Intl fails
+    const yyyy = d.getFullYear();
+    const mm = pad2(d.getMonth() + 1);
+    const dd = pad2(d.getDate());
+    if (!withTime) return `${yyyy}-${mm}-${dd}`;
+    const HH = pad2(d.getHours());
+    const MM = pad2(d.getMinutes());
+    const SS = pad2(d.getSeconds());
+    return `${yyyy}-${mm}-${dd} ${HH}:${MM}:${SS}`;
+  }
 }
 function clean(v) {
   if (v === "—" || v === undefined || v === null || v === "") return null;
@@ -201,7 +232,7 @@ function buildEddsPayload(tnLike) {
     raw.POPULATION_COUNT ?? raw.population_count ?? obj.count_people ?? null;
 
   const fioWork = "Оперативный дежурный САЦ";
-  const fioPhone = "84957803976";
+  const fioPhone = "+74957803976";
   // const descriptionSrc =
   //   raw.REASON_OPER ??
   //   obj.REASON_OPER ??
@@ -753,37 +784,28 @@ router.put("/", async (req, res) => {
             patch.data = { ...mergedRaw, STATUS_NAME: mapped.STATUS_NAME };
           }
         }
-        // ── Auto‑description on update: refresh if previous was auto or empty ───────
+        // ── Auto‑description on update: fill only when empty (never overwrite manual edits) ──
         try {
-          const normTxt = (t) => String(t || "").replace(/\s+/g, " ").trim();
+          const isEmptyDesc = (t) => {
+            const s = String(t ?? "").trim();
+            return !s || s === "—";
+          };
 
-          const currentDesc = currentAttrs?.description || "";
+          const currentDesc = currentAttrs?.description ?? "";
 
-          // 1) Автоматическое описание для "старых" данных (что уже в Страпи)
-          const prevAuto = buildAutoDescription({
-            ...(currentRaw || {}),
-          });
+          // Если описание пустое — генерим автоописание. Если дежурный редактировал — не трогаем.
+          if (isEmptyDesc(currentDesc)) {
+            const nextAuto = buildAutoDescription({
+              ...(mergedRaw || {}),
+            });
 
-          // 2) Автоматическое описание для "новых" объединённых данных
-          const nextAuto = buildAutoDescription({
-            ...(mergedRaw || {}),
-          });
-
-          // Меняем описание, если оно пустое ИЛИ совпадало с прежним автосгенерированным текстом.
-          const shouldOverwrite =
-            !currentDesc.trim() ||
-            (prevAuto && normTxt(currentDesc) === normTxt(prevAuto));
-
-          if (
-            shouldOverwrite &&
-            nextAuto &&
-            normTxt(nextAuto) !== normTxt(currentDesc)
-          ) {
-            patch = patch || {};
-            patch.description = nextAuto;
+            if (nextAuto && String(nextAuto).trim()) {
+              patch = patch || {};
+              patch.description = nextAuto;
+            }
           }
         } catch (e) {
-          console.warn("[PUT] autoDescription generation failed:", e?.message);
+          console.warn("[PUT] autoDescription generation skipped:", e?.message);
         }
         // ─────────────────────────────────────────────────────────────────────────────
 
