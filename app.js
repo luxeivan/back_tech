@@ -4,6 +4,8 @@ const modus = require("./routers/modus");
 const eddsRoutes = require("./routers/edds");
 const mesRoutes = require("./routers/mes");
 const aiRouter = require("./routers/ai");
+const pesRoutes = require("./routers/pes");
+const disconnectedRoutes = require("./routers/disconnected");
 
 const webhooks = require("./routers/webhooks");
 const { sseHandler, broadcast } = require("./services/sse");
@@ -37,6 +39,8 @@ app.use("/services/modus", modus);
 app.use("/services/edds", eddsRoutes);
 app.use("/services/mes", mesRoutes);
 app.use("/services/ai", aiRouter);
+app.use("/services/pes", pesRoutes);
+app.use("/services/disconnected", disconnectedRoutes);
 
 app.use("/services/webhooks", webhooks);
 app.get("/services/event", sseHandler);
