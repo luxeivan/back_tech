@@ -94,6 +94,16 @@ router.get("/items", (req, res) => {
   res.json({ ok: true, items: dto, summary: summaryOf(list) });
 });
 
+router.get("/config", (req, res) => {
+  const hasToken = Boolean(process.env.PES_TELEGRAM_BOT_TOKEN);
+  const hasChats = Boolean(process.env.PES_TELEGRAM_CHATS);
+  res.json({
+    ok: true,
+    telegramConfigured: hasToken && hasChats,
+    strictMode: String(process.env.PES_TELEGRAM_STRICT || "0") === "1",
+  });
+});
+
 router.get("/destinations", (req, res) => {
   const mode = String(req.query.mode || "single").toLowerCase();
   const tpAllowed = mode !== "multi";
@@ -161,8 +171,9 @@ router.post("/command", requireManageRole, async (req, res) => {
     const now = Date.now();
     const branch = items[0]?.branch || "";
 
+    let telegramResult = { ok: true, skipped: true, reason: "not-required" };
     if (["dispatch", "cancel", "reroute"].includes(action)) {
-      await sendPesTelegram({ action, branch, items, destination });
+      telegramResult = await sendPesTelegram({ action, branch, items, destination });
     }
 
     items.forEach((item) => {
@@ -223,6 +234,7 @@ router.post("/command", requireManageRole, async (req, res) => {
 
     res.json({
       ok: true,
+      telegram: telegramResult,
       updated: items.map((x) => toDto(x)),
       summary: summaryOf(Array.from(store.values())),
     });
