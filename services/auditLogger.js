@@ -15,6 +15,16 @@ function toStr(v, fallback = "") {
   return s || fallback;
 }
 
+function decodeMaybeUri(v) {
+  const s = toStr(v, "");
+  if (!s) return s;
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
 function detailsToString(v) {
   if (v == null) return "";
   if (typeof v === "string") return v;
@@ -68,12 +78,12 @@ function inferIp(req) {
 function extractActor(req, body = {}) {
   const username =
     toStr(body.username) ||
-    toStr(req.get("x-audit-username")) ||
+    decodeMaybeUri(req.get("x-audit-username")) ||
     toStr(req.get("x-username")) ||
     "unknown";
   const role =
     toStr(body.role) ||
-    toStr(req.get("x-audit-role")) ||
+    decodeMaybeUri(req.get("x-audit-role")) ||
     toStr(req.get("x-view-role")) ||
     "unknown";
   return { username, role };
