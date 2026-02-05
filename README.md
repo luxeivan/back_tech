@@ -45,10 +45,12 @@ back_tech/
     ai.js               # AI-аналитика через OpenRouter
     pes.js              # Данные по транспорту/экипажам
     disconnected.js     # Агрегаты по отключенным потребителям
+    audit.js            # Аудит действий пользователя (логгер)
     webhooks.js         # Вебхуки Strapi -> broadcast в SSE
     dadata.js           # Обогащение по DaData (вспомогательный)
   services/
     sse.js              # SSE клиенты и broadcast
+    auditLogger.js      # Запись аудита в ClickHouse
     auth.js             # Проверка/получение auth в Strapi
     autoDescription.js  # Автоформирование описания
 ```
@@ -66,6 +68,7 @@ back_tech/
 - `POST /services/ai/analysis` — AI-аналитика по метрикам
 - `GET /services/pes/vehicles` — транспорт/экипажи PES
 - `GET /services/disconnected` — агрегаты по отключенным
+- `POST /services/audit/event` — ручная/фронтовая запись аудита
 - `ALL /services/webhooks` — прием вебхуков Strapi
 - `GET /services/event` — SSE-канал для фронта
 - `POST /services/event` — ручной broadcast события в SSE
@@ -123,6 +126,16 @@ back_tech/
 - `T3_PSWD`
 - `T3_TOKEN`
 
+### Аудит / ClickHouse
+
+- `DB_NAME` (например: `portal_logs`)
+- `DB_USER` (например: `portal_logger`)
+- `DB_PASSWORD`
+- `DB_HOST` (обычно: `127.0.0.1`)
+- `DB_DIALECT` (должно быть: `clickhouse`)
+- `DB_PORT` (TCP, можно оставить `9000`)
+- `DB_HTTP_PORT` (HTTP для insert, обычно `8123`; при локальном SSH-туннеле `18123`)
+
 ## Важно для фронта
 
 - CORS открыт динамически по `Origin` в `app.js`.
@@ -134,6 +147,57 @@ back_tech/
 - Проверка работоспособности сервера: `GET /services/ai/ping` и `GET /services/mes/ping`.
 - При проблемах с live-данными первым делом проверить `GET /services/event`.
 - При ошибках отправки в ЕДДС/МЭС смотреть логи роутов `routers/edds.js` и `routers/mes.js`.
+
+## Аудит-логгер (ClickHouse)
+
+Логгер пишет действия в таблицу `portal_logs.audit_events`:
+- переходы по страницам (`page_view`, `page_leave`);
+- клики в UI (дашборд, фильтры, AI, журнал);
+- действия отправки/редактирования ТН;
+- backend-события отправки (`edds_send`, `mes_upload`, `pes_command`).
+
+Минимальная проверка, что логгер жив:
+
+```bash
+curl -X POST http://localhost:3110/services/audit/event \
+  -H "Content-Type: application/json" \
+  -d '{"username":"Тест","role":"standart","page":"/","action":"manual_test","entity":"ui","details":"check"}'
+```
+
+```sql
+SELECT created_at, username, role, page, action, details
+FROM portal_logs.audit_events
+ORDER BY created_at DESC
+LIMIT 30;
+```
+
+### DBeaver: подключение через SSH-туннель (рекомендуется)
+
+На локальной машине держать отдельное окно терминала:
+
+```bash
+ssh -N -L 18123:127.0.0.1:8123 root@78.155.197.207
+```
+
+Параметры в DBeaver:
+- Host: `127.0.0.1`
+- Port: `18123`
+- Database: `portal_logs`
+- User: `portal_logger`
+- Password: `<пароль>`
+
+### Очистка таблицы аудита
+
+`portal_logger` обычно не имеет `TRUNCATE`. Чистить под `default`:
+
+```bash
+clickhouse-client --host 127.0.0.1 --port 9000 --user default --password --database portal_logs
+```
+
+```sql
+TRUNCATE TABLE audit_events;
+SELECT count() FROM audit_events;
+```
 
 ## Текущие ограничения
 
