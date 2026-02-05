@@ -7,6 +7,7 @@ const aiRouter = require("./routers/ai");
 const pesRoutes = require("./routers/pes");
 const pesModuleRoutes = require("./routers/pesModule");
 const disconnectedRoutes = require("./routers/disconnected");
+const auditRoutes = require("./routers/audit");
 
 const webhooks = require("./routers/webhooks");
 const { sseHandler, broadcast } = require("./services/sse");
@@ -26,7 +27,7 @@ app.use((req, res, next) => {
   );
   res.header(
     "Access-Control-Allow-Headers",
-    "Authorization,Content-Type,X-Requested-With"
+    "Authorization,Content-Type,X-Requested-With,X-Audit-Username,X-Audit-Role,X-Audit-Page,X-View-Role"
   );
   res.header("Access-Control-Allow-Credentials", "true");
   if (req.method === "OPTIONS") return res.sendStatus(204);
@@ -43,6 +44,7 @@ app.use("/services/ai", aiRouter);
 app.use("/services/pes", pesRoutes);
 app.use("/services/pes/module", pesModuleRoutes);
 app.use("/services/disconnected", disconnectedRoutes);
+app.use("/services/audit", auditRoutes);
 
 app.use("/services/webhooks", webhooks);
 app.get("/services/event", sseHandler);

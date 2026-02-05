@@ -4,6 +4,7 @@ const express = require("express");
 const axios = require("axios");
 const FormData = require("form-data");
 const dayjs = require("dayjs");
+const { logAuditFromReq } = require("../services/auditLogger");
 
 const AUTH_BASE = process.env.MES_AUTH_URL || process.env.MES_BASE_URL;
 const LOAD_BASE = process.env.MES_LOAD_URL || process.env.MES_BASE_URL;
@@ -224,6 +225,8 @@ async function mesCheckStatus({ session, idRegistry }) {
 
 /* ---------------- routes ---------------- */
 router.post("/upload", express.json({ limit: "20mb" }), async (req, res) => {
+  const startedAt = Date.now();
+  let auditDetails = { result: "unknown" };
   try {
     const body = req.body || {};
     let items = [];
@@ -258,6 +261,7 @@ router.post("/upload", express.json({ limit: "20mb" }), async (req, res) => {
       console.log(
         `МосЭнергоСбыт DRY-RUN: строк реестра = ${items.length}, id_registry = ${fakeId}`
       );
+      auditDetails = { result: "dry-run", rows: items.length };
       return res.json({
         ok: true,
         dryRun: true,
@@ -271,6 +275,7 @@ router.post("/upload", express.json({ limit: "20mb" }), async (req, res) => {
     const { idRegistry, session } = await mesUploadRegistry(items);
     console.log("МосЭнергоСбыт: id_registry =", idRegistry);
 
+    auditDetails = { result: "ok", rows: items.length, id_registry: idRegistry };
     return res.json({ ok: true, id_registry: idRegistry, session });
   } catch (e) {
     const status = e?.response?.status || 502;
@@ -280,11 +285,29 @@ router.post("/upload", express.json({ limit: "20mb" }), async (req, res) => {
       e?.message,
       details ? ` | details: ${JSON.stringify(details)}` : ""
     );
+    auditDetails = {
+      result: "error",
+      status,
+      message: e?.message || "Ошибка загрузки",
+    };
     return res.status(status).json({
       ok: false,
       message: e?.message || "Ошибка загрузки",
       code: e?.code,
       details,
+    });
+  } finally {
+    setImmediate(() => {
+      logAuditFromReq(req, {
+        page: "/services/mes/upload",
+        action: "mes_upload",
+        entity: "mes",
+        entity_id: String(req.body?.tn?.data?.number || req.body?.number || ""),
+        details: {
+          ...auditDetails,
+          duration_ms: Date.now() - startedAt,
+        },
+      }).catch(() => {});
     });
   }
 });

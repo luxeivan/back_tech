@@ -2,6 +2,7 @@ const { exec } = require("node:child_process");
 const express = require("express");
 const axios = require("axios");
 require("dotenv").config();
+const { logAuditFromReq } = require("../services/auditLogger");
 
 const router = express.Router();
 
@@ -292,6 +293,24 @@ function isDuplicateError(resp) {
 }
 
 router.post("/", async (req, res) => {
+  const startedAt = Date.now();
+  res.on("finish", () => {
+    setImmediate(() => {
+      logAuditFromReq(req, {
+        page: "/services/edds",
+        action: "edds_send",
+        entity: "tn",
+        entity_id: String(req.body?.incident_id || req.body?.number || ""),
+        details: {
+          status: res.statusCode,
+          duration_ms: Date.now() - startedAt,
+          dry_run:
+            String(req.query.dryRun || req.query.dry || "").trim() === "1",
+        },
+      }).catch(() => {});
+    });
+  });
+
   const debug = String(req.query.debug || "").trim() === "1";
   const dryRun = String(req.query.dryRun || req.query.dry || "").trim() === "1";
   const reqId = req.headers["x-request-id"] || "";

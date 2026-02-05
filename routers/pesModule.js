@@ -1,6 +1,7 @@
 const express = require("express");
 const { PES_STATUS, seedItems, assemblyPoints, tpPoints } = require("../services/pesModuleSeed");
 const { sendPesTelegram } = require("../services/pesTelegram");
+const { logAuditFromReq } = require("../services/auditLogger");
 
 const router = express.Router();
 
@@ -116,6 +117,7 @@ router.get("/destinations", (req, res) => {
 });
 
 router.post("/command", requireManageRole, async (req, res) => {
+  const startedAt = Date.now();
   try {
     const {
       action,
@@ -241,6 +243,20 @@ router.post("/command", requireManageRole, async (req, res) => {
   } catch (e) {
     console.error("[pes-module] command error", e?.message || e);
     res.status(500).json({ ok: false, message: "Ошибка обработки команды ПЭС" });
+  } finally {
+    setImmediate(() => {
+      logAuditFromReq(req, {
+        page: "/services/pes/module/command",
+        action: "pes_command",
+        entity: "pes",
+        entity_id: Array.isArray(req.body?.pesIds) ? req.body.pesIds.join(",") : "",
+        details: {
+          command: req.body?.action || "",
+          status: res.statusCode,
+          duration_ms: Date.now() - startedAt,
+        },
+      }).catch(() => {});
+    });
   }
 });
 
