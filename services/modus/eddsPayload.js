@@ -1,5 +1,5 @@
-// Extracted from routers/modus.js (zero-refactor): EDDS payload builder + mappings.
-// IMPORTANT: Keep logic byte-for-byte equivalent as much as possible to avoid regressions.
+// Вынесено из routers/modus.js (нулевой рефактор): сборка payload в ЕДДС и маппинги.
+// Важно: логику не менять, только перенос.
 
 const DISTRICT_MAP = {
   "Балашиха г.о.": "4",
@@ -400,4 +400,3 @@ module.exports = {
   buildMkdFromFiasList,
   buildEddsPayload,
 };
-
