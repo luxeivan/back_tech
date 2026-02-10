@@ -1,4 +1,4 @@
-// Вынесено из routers/modus.js (нулевой рефактор): FIAS-лист и upsert адресов в Strapi.
+// Вынесено из routers/modus.js: FIAS-лист и upsert адресов в Strapi.
 
 const axios = require("axios");
 const { fetchByFias } = require("../../routers/dadata");
