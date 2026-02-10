@@ -7,6 +7,7 @@ const {
   extractFiasList,
   upsertAddressesInStrapi,
 } = require("../services/modus/addresses");
+const { getJwt, fetchTnDescriptionById } = require("../services/modus/strapi");
 require("dotenv").config();
 
 const router = express.Router();
@@ -33,9 +34,6 @@ const isAuthorized = (req) => {
   return ok;
 };
 
-const loginStrapi = process.env.LOGIN_STRAPI;
-const passwordStrapi = process.env.PASSWORD_STRAPI;
-
 const urlStrapi = process.env.URL_STRAPI;
 
 const norm = (s) =>
@@ -44,44 +42,6 @@ const norm = (s) =>
     .toLowerCase();
 const isFinalStatus = (s) =>
   ["закрыта", "запитана", "удалена"].includes(norm(s));
-
-async function getJwt() {
-  try {
-    const res = await axios.post(`${urlStrapi}/api/auth/local`, {
-      identifier: loginStrapi,
-      password: passwordStrapi,
-    });
-    if (res.data) {
-      return res.data.jwt;
-    } else {
-      return false;
-    }
-  } catch (error) {
-    console.log("Ошибка авторизации в Strapi:", error);
-    return false;
-  }
-}
-
-// Helper to fetch description from Strapi by ID
-async function fetchTnDescriptionById(id, jwt) {
-  if (!id || !jwt) return undefined;
-  try {
-    const r = await axios.get(`${urlStrapi}/api/teh-narusheniyas/${id}`, {
-      headers: { Authorization: `Bearer ${jwt}` },
-      params: { "fields[0]": "description" },
-      timeout: 15000,
-    });
-    const d = r?.data?.data;
-    const attrs = d?.attributes || d || {};
-    return attrs?.description;
-  } catch (e) {
-    console.warn(
-      "[POST] Не удалось получить description из Strapi:",
-      e?.response?.status || e?.message
-    );
-    return undefined;
-  }
-}
 
 router.put("/", async (req, res) => {
   try {
