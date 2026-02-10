@@ -50,9 +50,9 @@ function sseHandler(req, res) {
   const ua = req.headers["user-agent"] || "";
 
   clients.set(id, { res, ip, ua, since: Date.now() });
-  console.log(
-    `📡 SSE: клиент подключен (${id}, ip=${ip}). Всего: ${clients.size}`
-  );
+  // console.log(
+  //   `📡 SSE: клиент подключен (${id}, ip=${ip}). Всего: ${clients.size}`
+  // );
 
   res.write("event: message\n");
   res.write(`data: ${JSON.stringify({ message: "Подключено к SSE" })}\n\n`);
@@ -69,11 +69,11 @@ function sseHandler(req, res) {
 
   function onClose(why) {
     clearInterval(hb);
-    console.log(
-      `📴 SSE: клиент отключен (${id}, причина=${why}). Осталось: ${
-        clients.size - 1
-      }`
-    );
+    // console.log(
+    //   `📴 SSE: клиент отключен (${id}, причина=${why}). Осталось: ${
+    //     clients.size - 1
+    //   }`
+    // );
     safeRemove(id);
   }
 
