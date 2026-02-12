@@ -1,12 +1,25 @@
 const express = require("express");
-const { PES_STATUS, seedItems, assemblyPoints, tpPoints } = require("../services/pesModuleSeed");
+const {
+  loadPesItems,
+  loadAssemblyDestinations,
+  loadTpDestinations,
+} = require("../services/pesModuleData");
 const { sendPesTelegram } = require("../services/pesTelegram");
+const { sendPesSubscribersNotification } = require("../services/pesBot");
 const { logAuditFromReq } = require("../services/auditLogger");
 
 const router = express.Router();
 
+const PES_STATUS = {
+  READY: "ready",
+  COMMAND_SENT: "command_sent",
+  EN_ROUTE: "en_route",
+  CONNECTED: "connected",
+  REPAIR: "repair",
+};
+
 const MAX_DELAY_MS = 15 * 60 * 1000;
-const store = new Map(seedItems.map((x) => [x.id, { ...x }]));
+const store = new Map();
 
 function clone(v) {
   return JSON.parse(JSON.stringify(v));
@@ -45,8 +58,16 @@ function requireManageRole(req, res, next) {
   next();
 }
 
-function pickDestination({ mode, destinationType, destinationId }) {
-  const list = destinationType === "tp" ? tpPoints : assemblyPoints;
+async function pickDestination({
+  mode,
+  destinationType,
+  destinationId,
+  branchHint,
+}) {
+  const list =
+    destinationType === "tp"
+      ? await loadTpDestinations({ branch: branchHint || "" })
+      : await loadAssemblyDestinations({ branch: branchHint || "" });
   const found = list.find((x) => x.id === destinationId);
   if (!found) return null;
 
@@ -55,6 +76,47 @@ function pickDestination({ mode, destinationType, destinationId }) {
   }
 
   return { value: clone(found) };
+}
+
+async function syncStoreWithStrapi() {
+  const baseItems = await loadPesItems();
+  const seen = new Set();
+
+  for (const item of baseItems) {
+    if (!item?.id) continue;
+    seen.add(item.id);
+
+    const prev = store.get(item.id);
+    if (!prev) {
+      store.set(item.id, {
+        ...item,
+        status: item.status || PES_STATUS.READY,
+        commandSentAt: null,
+        actualDepartureAt: null,
+        connectedAt: null,
+        destination: null,
+        lastComment: null,
+        reroutedAt: null,
+      });
+      continue;
+    }
+
+    store.set(item.id, {
+      ...prev,
+      ...item,
+      status: prev.status || item.status || PES_STATUS.READY,
+      commandSentAt: prev.commandSentAt || null,
+      actualDepartureAt: prev.actualDepartureAt || null,
+      connectedAt: prev.connectedAt || null,
+      destination: prev.destination || null,
+      lastComment: prev.lastComment || null,
+      reroutedAt: prev.reroutedAt || null,
+    });
+  }
+
+  for (const id of Array.from(store.keys())) {
+    if (!seen.has(id)) store.delete(id);
+  }
 }
 
 function summaryOf(items) {
@@ -81,7 +143,9 @@ function summaryOf(items) {
   return summary;
 }
 
-router.get("/items", (req, res) => {
+router.get("/items", async (req, res) => {
+  await syncStoreWithStrapi();
+
   const branch = String(req.query.branch || "").trim().toLowerCase();
   const po = String(req.query.po || "").trim().toLowerCase();
   const status = String(req.query.status || "").trim().toLowerCase();
@@ -98,27 +162,36 @@ router.get("/items", (req, res) => {
 router.get("/config", (req, res) => {
   const hasToken = Boolean(process.env.PES_TELEGRAM_BOT_TOKEN);
   const hasChats = Boolean(process.env.PES_TELEGRAM_CHATS);
+  const botSubsEnabled = String(process.env.PES_BOT_ENABLED || "1") === "1";
   res.json({
     ok: true,
-    telegramConfigured: hasToken && hasChats,
+    telegramConfigured: hasToken && (hasChats || botSubsEnabled),
     strictMode: String(process.env.PES_TELEGRAM_STRICT || "0") === "1",
   });
 });
 
-router.get("/destinations", (req, res) => {
+router.get("/destinations", async (req, res) => {
   const mode = String(req.query.mode || "single").toLowerCase();
+  const branch = String(req.query.branch || "").trim();
   const tpAllowed = mode !== "multi";
+
+  const assembly = await loadAssemblyDestinations({ branch });
+  const tp = tpAllowed ? await loadTpDestinations({ branch }) : [];
+
   res.json({
     ok: true,
     mode,
-    assembly: clone(assemblyPoints),
-    tp: tpAllowed ? clone(tpPoints) : [],
+    branch: branch || "",
+    assembly: clone(assembly),
+    tp: clone(tp),
   });
 });
 
 router.post("/command", requireManageRole, async (req, res) => {
   const startedAt = Date.now();
   try {
+    await syncStoreWithStrapi();
+
     const {
       action,
       pesIds,
@@ -140,7 +213,13 @@ router.post("/command", requireManageRole, async (req, res) => {
     const mode = items.length > 1 ? "multi" : "single";
 
     if (["dispatch", "reroute"].includes(action)) {
-      const pick = pickDestination({ mode, destinationType, destinationId });
+      const branchHint = mode === "single" ? items[0]?.branch || "" : "";
+      const pick = await pickDestination({
+        mode,
+        destinationType,
+        destinationId,
+        branchHint,
+      });
       if (pick?.error) return res.status(400).json({ ok: false, message: pick.error });
       if (!pick?.value) {
         return res.status(400).json({ ok: false, message: "Точка назначения не найдена" });
@@ -167,7 +246,14 @@ router.post("/command", requireManageRole, async (req, res) => {
 
     let destination = null;
     if (["dispatch", "reroute"].includes(action)) {
-      destination = pickDestination({ mode, destinationType, destinationId }).value;
+      const branchHint = mode === "single" ? items[0]?.branch || "" : "";
+      const pick = await pickDestination({
+        mode,
+        destinationType,
+        destinationId,
+        branchHint,
+      });
+      destination = pick?.value || null;
     }
 
     const now = Date.now();
@@ -175,8 +261,21 @@ router.post("/command", requireManageRole, async (req, res) => {
 
     let telegramResult = { ok: true, skipped: true, reason: "not-required" };
     if (["dispatch", "cancel", "reroute"].includes(action)) {
-      telegramResult = await sendPesTelegram({ action, branch, items, destination });
+      telegramResult = await sendPesTelegram({
+        action,
+        branch,
+        items,
+        destination,
+        comment,
+      });
     }
+    const subscribersResult = await sendPesSubscribersNotification({
+      action,
+      branch,
+      items,
+      destination,
+      comment,
+    });
 
     items.forEach((item) => {
       if (action === "dispatch") {
@@ -237,6 +336,7 @@ router.post("/command", requireManageRole, async (req, res) => {
     res.json({
       ok: true,
       telegram: telegramResult,
+      subscribers: subscribersResult,
       updated: items.map((x) => toDto(x)),
       summary: summaryOf(Array.from(store.values())),
     });

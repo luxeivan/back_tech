@@ -11,6 +11,7 @@ const auditRoutes = require("./routers/audit");
 
 const webhooks = require("./routers/webhooks");
 const { sseHandler, broadcast } = require("./services/sse");
+const { startPesBotPolling } = require("./services/pesBot");
 
 require("dotenv").config();
 
@@ -60,6 +61,7 @@ app.post("/services/event", (req, res) => {
 
 app.listen(port, () => {
   console.log(`Приложение запущено на ${port} порту и каким-то чудом работает`);
+  startPesBotPolling();
 });
 
 // const express = require('express')

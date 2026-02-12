@@ -1,0 +1,15 @@
+{
+  "watch": [
+    "app.js",
+    "routers",
+    "services",
+    "scripts"
+  ],
+  "ext": "js,json",
+  "ignore": [
+    "data/*",
+    "import_data/*",
+    "node_modules/*"
+  ]
+}
+

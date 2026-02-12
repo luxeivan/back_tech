@@ -19,7 +19,7 @@ function getConfig() {
   return { botToken, strict, chatsByBranch, threadsByBranch };
 }
 
-function buildText({ action, items, destination }) {
+function buildText({ action, items, destination, comment }) {
   const list = items.map((i) => `№${i.number} (${i.powerKw} кВт)`).join(", ");
   const addr = destination?.address || "—";
   const coords =
@@ -30,7 +30,7 @@ function buildText({ action, items, destination }) {
   const po = items[0]?.po || "—";
 
   if (action === "dispatch") {
-    return [
+    const lines = [
       "В связи с технологическим нарушением",
       `необходимо направить ПЭС ${list}`,
       `по адресу ${addr}`,
@@ -38,34 +38,40 @@ function buildText({ action, items, destination }) {
       `Контактный телефон диспетчера ${phone} ПО - ${po}`,
       "Время выезда - не более 15 минут после получения настоящего указания",
       "По факту выезда ПЭС укажите в чате фактическое время выезда ПЭС.",
-    ].join("\n");
+    ];
+    if (comment) lines.push(`Комментарий: ${comment}`);
+    return lines.join("\n");
   }
 
   if (action === "cancel") {
-    return [
+    const lines = [
       "В связи с восстановлением электроснабжения",
       "выезд ОТМЕНЕН",
       `ПЭС ${list}`,
       "на место постоянной дислокации",
       "По факту прибытия ПЭС укажите в чате фактическое время прибытия.",
-    ].join("\n");
+    ];
+    if (comment) lines.push(`Комментарий: ${comment}`);
+    return lines.join("\n");
   }
 
   if (action === "reroute") {
-    return [
+    const lines = [
       "В связи с уточнением места технологическим нарушением точка назначения ИЗМЕНЕНА",
       `необходимо направить ПЭС ${list}`,
       `по новому адресу ${addr}`,
       `координаты ${coords}`,
       `Контактный телефон диспетчера ${phone} ПО - ${po}`,
       "Время корректировки маршрута - не более 15 минут после получения настоящего указания",
-    ].join("\n");
+    ];
+    if (comment) lines.push(`Комментарий: ${comment}`);
+    return lines.join("\n");
   }
 
   return "";
 }
 
-async function sendPesTelegram({ action, branch, items, destination }) {
+async function sendPesTelegram({ action, branch, items, destination, comment }) {
   const cfg = getConfig();
   const chatId = cfg.chatsByBranch?.[branch];
   const threadId = cfg.threadsByBranch?.[branch];
@@ -80,7 +86,7 @@ async function sendPesTelegram({ action, branch, items, destination }) {
     return { ok: false, skipped: true, reason: msg };
   }
 
-  const text = buildText({ action, items, destination });
+  const text = buildText({ action, items, destination, comment });
   const payload = { chat_id: chatId, text };
   if (threadId != null && threadId !== "") {
     payload.message_thread_id = threadId;
