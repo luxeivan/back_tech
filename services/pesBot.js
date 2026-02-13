@@ -352,8 +352,31 @@ async function processCallbackQuery(query) {
 
   upsertUser({ id: chatId }, userMeta);
 
-  const [action, payloadRaw] = data.split("|");
-  const payload = norm(payloadRaw || "");
+  const parts = data.split("|");
+  const action = norm(parts[0] || "");
+  const payload = norm(parts[1] || "");
+
+  if (action === "pes") {
+    const cmd = norm(parts[1] || "");
+    const pesId = norm(parts[2] || "");
+    const allowed = new Set(["cancel", "depart", "connect", "ready", "repair"]);
+    if (!cmd || !pesId) {
+      await tgAnswerCallback(callbackId, "Некорректная команда");
+      return;
+    }
+    if (!allowed.has(cmd)) {
+      await tgAnswerCallback(callbackId, "Недоступно");
+      return;
+    }
+    try {
+      await runPesModuleCommand({ action: cmd, pesId });
+      await tgAnswerCallback(callbackId, "Готово");
+    } catch (e) {
+      const msg = norm(e?.response?.data?.message || e?.message || "Ошибка");
+      await tgAnswerCallback(callbackId, msg.slice(0, 180));
+    }
+    return;
+  }
 
   if (action === "my") {
     const user = getUserByChatId(chatId);
@@ -522,6 +545,61 @@ function buildBranchNotifyText({ action, branch, items, destination, comment }) 
   return lines.join("\n");
 }
 
+function buildPesInlineKeyboard(action, pesId) {
+  const mk = (text, a) => ({ text, callback_data: `pes|${a}|${pesId}` });
+
+  if (!pesId) return null;
+
+  if (action === "dispatch") {
+    return {
+      inline_keyboard: [[mk("Фактический выезд", "depart"), mk("Отмена", "cancel")]],
+    };
+  }
+
+  if (action === "depart") {
+    return {
+      inline_keyboard: [[mk("Подключена", "connect"), mk("Отмена", "cancel")]],
+    };
+  }
+
+  if (action === "connect") {
+    return {
+      inline_keyboard: [[mk("Вернуть в резерв", "ready"), mk("В ремонт", "repair")]],
+    };
+  }
+
+  if (action === "repair") {
+    return { inline_keyboard: [[mk("Вернуть в резерв", "ready")]] };
+  }
+
+  if (action === "ready") {
+    return { inline_keyboard: [[mk("В ремонт", "repair")]] };
+  }
+
+  if (action === "cancel") {
+    return { inline_keyboard: [[mk("В ремонт", "repair")]] };
+  }
+
+  return null;
+}
+
+function getLocalBackendBase() {
+  const port = Number(process.env.PORT) || 5000;
+  return `http://127.0.0.1:${port}`;
+}
+
+async function runPesModuleCommand({ action, pesId }) {
+  const base = getLocalBackendBase();
+  const payload = { action, pesIds: [pesId] };
+  if (action === "depart") payload.actualDepartureAt = new Date().toISOString();
+
+  const { data } = await axios.post(`${base}/services/pes/module/command`, payload, {
+    headers: { "x-view-role": "standart" },
+    timeout: 20000,
+  });
+  return data;
+}
+
 async function sendPesSubscribersNotification({
   action,
   branch,
@@ -530,28 +608,36 @@ async function sendPesSubscribersNotification({
   comment,
 }) {
   if (!canRunBot()) return { ok: false, skipped: true, reason: "bot-disabled" };
+  const list = Array.isArray(items) ? items.filter(Boolean) : [];
+  if (!list.length) return { ok: true, skipped: true, reason: "empty-items", sent: 0 };
+
   const users = listUsers();
   const targets = users.filter((u) => !u.muted && isUserSubscribedToBranch(u, branch));
   if (!targets.length) {
     return { ok: true, skipped: true, reason: "no-subscribers", sent: 0 };
   }
-  const text = buildBranchNotifyText({ action, branch, items, destination, comment });
+  const prepared = list.map((it) => ({
+    text: buildBranchNotifyText({ action, branch, items: [it], destination, comment }),
+    reply_markup: buildPesInlineKeyboard(action, it.id),
+  }));
 
-  let sent = 0;
+  let sent = 0; // кол-во сообщений
   let failed = 0;
   for (const user of targets) {
-    try {
-      await tgSendMessage(user.chat_id, text);
-      sent += 1;
-    } catch (e) {
-      failed += 1;
-      console.error(
-        `[pes-bot] Ошибка отправки chat_id=${user.chat_id}:`,
-        e?.response?.data?.description || e?.message || e
-      );
+    for (const msg of prepared) {
+      try {
+        await tgSendMessage(user.chat_id, msg.text, msg.reply_markup ? { reply_markup: msg.reply_markup } : {});
+        sent += 1;
+      } catch (e) {
+        failed += 1;
+        console.error(
+          `[pes-bot] Ошибка отправки chat_id=${user.chat_id}:`,
+          e?.response?.data?.description || e?.message || e
+        );
+      }
     }
   }
-  return { ok: failed === 0, sent, failed, total: targets.length };
+  return { ok: failed === 0, sent, failed, total: targets.length * prepared.length };
 }
 
 module.exports = {

@@ -259,24 +259,6 @@ router.post("/command", requireManageRole, async (req, res) => {
     const now = Date.now();
     const branch = items[0]?.branch || "";
 
-    let telegramResult = { ok: true, skipped: true, reason: "not-required" };
-    if (["dispatch", "cancel", "reroute"].includes(action)) {
-      telegramResult = await sendPesTelegram({
-        action,
-        branch,
-        items,
-        destination,
-        comment,
-      });
-    }
-    const subscribersResult = await sendPesSubscribersNotification({
-      action,
-      branch,
-      items,
-      destination,
-      comment,
-    });
-
     items.forEach((item) => {
       if (action === "dispatch") {
         item.status = PES_STATUS.COMMAND_SENT;
@@ -331,6 +313,24 @@ router.post("/command", requireManageRole, async (req, res) => {
       if (action === "repair") {
         item.status = PES_STATUS.REPAIR;
       }
+    });
+
+    let telegramResult = { ok: true, skipped: true, reason: "not-required" };
+    if (["dispatch", "cancel", "reroute"].includes(action)) {
+      telegramResult = await sendPesTelegram({
+        action,
+        branch,
+        items,
+        destination,
+        comment,
+      });
+    }
+    const subscribersResult = await sendPesSubscribersNotification({
+      action,
+      branch,
+      items,
+      destination,
+      comment,
     });
 
     res.json({
