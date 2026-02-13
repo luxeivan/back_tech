@@ -34,6 +34,11 @@ function toNum(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+function isDigitsOnly(v) {
+  const s = norm(v);
+  return Boolean(s) && /^\d+$/.test(s);
+}
+
 function escapeRegex(text) {
   return String(text || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -217,23 +222,30 @@ function pickPointMeta(unit, points) {
 async function loadPesItems() {
   const [units, points] = await Promise.all([getUnits(), getPoints()]);
 
-  return units.map((u) => {
-    const meta = pickPointMeta(u, points);
-    return {
-      id: norm(u.code) || norm(u.documentId) || String(u.id || ""),
-      number: norm(u.garage_number),
-      name: norm(u.pes_name) || norm(u.vehicle_plate) || "ПЭС",
-      branch: norm(u.branch),
-      po: meta.po,
-      powerKw: toNum(u.power_kw_nominal) ?? toNum(u.power_kw_max) ?? null,
-      model: norm(u.generator_model),
-      status: "ready",
-      baseAddress: norm(u.base_address),
-      dispatcherPhone: meta.dispatcherPhone,
-      sourceCode: norm(u.code),
-      district: norm(u.district),
-    };
-  });
+  return units
+    .filter((u) => {
+      // В справочнике иногда попадаются "итоговые" строки (например "ВСЕГО") и пустые заготовки.
+      if (!isDigitsOnly(u.garage_number)) return false;
+      if (!norm(u.branch)) return false;
+      return true;
+    })
+    .map((u) => {
+      const meta = pickPointMeta(u, points);
+      return {
+        id: norm(u.code) || norm(u.documentId) || String(u.id || ""),
+        number: norm(u.garage_number),
+        name: norm(u.pes_name) || norm(u.vehicle_plate) || "ПЭС",
+        branch: norm(u.branch),
+        po: meta.po,
+        powerKw: toNum(u.power_kw_nominal) ?? toNum(u.power_kw_max) ?? null,
+        model: norm(u.generator_model),
+        status: "ready",
+        baseAddress: norm(u.base_address),
+        dispatcherPhone: meta.dispatcherPhone,
+        sourceCode: norm(u.code),
+        district: norm(u.district),
+      };
+    });
 }
 
 async function loadAssemblyDestinations({ branch = "" } = {}) {
