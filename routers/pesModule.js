@@ -10,6 +10,7 @@ const { sendPesSubscribersNotification } = require("../services/pesBot");
 const { logAuditFromReq } = require("../services/auditLogger");
 const {
   PES_ENDPOINTS,
+  fetchPage,
   fetchAll,
   createOne,
   updateOne,
@@ -55,9 +56,21 @@ function toNum(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+function toPositiveInt(value, fallback = 1) {
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return n;
+}
+
 function randomId() {
   if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function safeToken(value) {
+  return String(value == null ? "" : value)
+    .replace(/[^A-Za-z0-9\-_.~]/g, "_")
+    .slice(0, 120);
 }
 
 function normalizeStoredStatus(value) {
@@ -267,7 +280,7 @@ async function loadSnapshot() {
   });
 }
 
-async function persistState(item, { source = "ui", chatId = null } = {}) {
+async function persistState(item, { source = "web", chatId = null } = {}) {
   const payload = {
     pes_status: statusToPersist(item.status),
     command_sent_at: toIso(item.commandSentAt),
@@ -312,6 +325,12 @@ function logStatusTo(status) {
   return s === PES_STATUS.DELAY ? PES_STATUS.COMMAND_SENT : s;
 }
 
+function normalizeUpdateSource(source, fallback = "web") {
+  const value = norm(source).toLowerCase();
+  if (value === "web" || value === "telegram" || value === "system") return value;
+  return fallback;
+}
+
 async function createOperationLogSafe(payload) {
   try {
     await createOne(PES_ENDPOINTS.OPERATION_LOGS, payload);
@@ -352,7 +371,7 @@ async function appendOperationLogs({
         : null;
 
     const payload = {
-      event_uid: `${batchId}:${item.id}:${i + 1}`,
+      event_uid: `${safeToken(batchId)}_${safeToken(item.id)}_${i + 1}`,
       event_time: nowIso,
       action,
       status_from: logStatusFrom(statusFrom),
@@ -382,9 +401,48 @@ async function appendOperationLogs({
     try {
       await createOperationLogSafe(payload);
     } catch (e) {
-      console.error("[pes-module] Не удалось записать историю ПЭС:", e?.message || e);
+      console.error(
+        "[pes-module] Не удалось записать историю ПЭС:",
+        e?.response?.data?.error?.message || e?.message || e
+      );
     }
   }
+}
+
+function toHistoryDto(row) {
+  const unit = oneRelation(row?.pes_unit);
+  return {
+    id: row.documentId || row.id,
+    eventUid: row.event_uid || "",
+    eventTime: row.event_time || null,
+    action: row.action || "",
+    statusFrom: row.status_from || null,
+    statusTo: row.status_to || null,
+    result: row.result || null,
+    errorText: row.error_text || null,
+    comment: row.comment || null,
+    branch: row.branch || null,
+    po: row.po || null,
+    destinationType: row.destination_type || null,
+    destinationTitle: row.destination_title || null,
+    destinationAddress: row.destination_address || null,
+    actorRole: row.actor_role || null,
+    actorLogin: row.actor_login || null,
+    actorChatId: row.actor_chat_id ?? null,
+    commandSentAt: row.command_sent_at || null,
+    actualDepartureAt: row.actual_departure_at || null,
+    delaySeconds: row.delay_seconds ?? null,
+    delayOver15m: Boolean(row.delay_over_15m),
+    batchId: row.batch_id || null,
+    pes: unit
+      ? {
+          id: unit.code || String(unit.id || ""),
+          number: unit.garage_number || null,
+          name: unit.pes_name || null,
+          branch: unit.branch || null,
+        }
+      : null,
+  };
 }
 
 router.get("/items", async (req, res) => {
@@ -413,6 +471,47 @@ router.get("/items", async (req, res) => {
   } catch (e) {
     console.error("[pes-module] items error", e?.message || e);
     res.status(500).json({ ok: false, message: "Ошибка загрузки ПЭС" });
+  }
+});
+
+router.get("/history", async (req, res) => {
+  try {
+    const page = toPositiveInt(req.query.page, 1);
+    const pageSize = Math.min(200, toPositiveInt(req.query.pageSize, 50));
+    const branch = norm(req.query.branch);
+    const po = norm(req.query.po);
+    const action = norm(req.query.action).toLowerCase();
+    const pesId = norm(req.query.pesId);
+
+    const params = {
+      "sort[0]": "event_time:desc",
+      "pagination[page]": page,
+      "pagination[pageSize]": pageSize,
+      populate: "pes_unit",
+    };
+
+    if (branch) params["filters[branch][$containsi]"] = branch;
+    if (po) params["filters[po][$containsi]"] = po;
+    if (action) params["filters[action][$eq]"] = action;
+    if (pesId) params["filters[pes_unit][code][$eq]"] = pesId;
+
+    const { rows, pagination } = await fetchPage(PES_ENDPOINTS.OPERATION_LOGS, {
+      params,
+    });
+
+    res.json({
+      ok: true,
+      items: rows.map(toHistoryDto),
+      pagination: {
+        page: Number(pagination.page || page),
+        pageSize: Number(pagination.pageSize || pageSize),
+        pageCount: Number(pagination.pageCount || 1),
+        total: Number(pagination.total || 0),
+      },
+    });
+  } catch (e) {
+    console.error("[pes-module] history error", e?.message || e);
+    res.status(500).json({ ok: false, message: "Ошибка загрузки истории ПЭС" });
   }
 });
 
@@ -455,6 +554,7 @@ router.post("/command", requireManageRole, async (req, res) => {
       comment,
       actualDepartureAt,
       sourceChatId,
+      source,
     } = req.body || {};
 
     if (!Array.isArray(pesIds) || pesIds.length === 0) {
@@ -522,6 +622,10 @@ router.post("/command", requireManageRole, async (req, res) => {
 
     const now = Date.now();
     const beforeStatusMap = new Map(items.map((it) => [it.id, effectiveStatus(it)]));
+    const updateSource = normalizeUpdateSource(
+      source,
+      Number.isFinite(Number(sourceChatId)) ? "telegram" : "web"
+    );
 
     for (const item of items) {
       if (action === "dispatch") {
@@ -560,7 +664,7 @@ router.post("/command", requireManageRole, async (req, res) => {
         item.status = PES_STATUS.REPAIR;
       }
 
-      await persistState(item, { source: "ui", chatId: sourceChatId });
+      await persistState(item, { source: updateSource, chatId: sourceChatId });
     }
 
     const branch = items[0]?.branch || "";
@@ -604,8 +708,13 @@ router.post("/command", requireManageRole, async (req, res) => {
       summary: summaryOf(refreshed),
     });
   } catch (e) {
-    console.error("[pes-module] command error", e?.message || e);
-    res.status(500).json({ ok: false, message: "Ошибка обработки команды ПЭС" });
+    const apiMsg =
+      e?.response?.data?.error?.message ||
+      e?.response?.data?.message ||
+      e?.message ||
+      "Ошибка обработки команды ПЭС";
+    console.error("[pes-module] command error", apiMsg);
+    res.status(500).json({ ok: false, message: apiMsg });
   } finally {
     setImmediate(() => {
       logAuditFromReq(req, {

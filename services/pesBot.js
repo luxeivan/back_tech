@@ -749,7 +749,12 @@ function getLocalBackendBase() {
 
 async function runPesModuleCommand({ action, pesId, chatId }) {
   const base = getLocalBackendBase();
-  const payload = { action, pesIds: [pesId], sourceChatId: Number(chatId) || null };
+  const payload = {
+    action,
+    pesIds: [pesId],
+    source: "telegram",
+    sourceChatId: Number(chatId) || null,
+  };
   if (action === "depart") payload.actualDepartureAt = new Date().toISOString();
 
   const { data } = await axios.post(`${base}/services/pes/module/command`, payload, {
