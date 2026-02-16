@@ -28,6 +28,81 @@ function normLc(v) {
   return norm(v).toLowerCase();
 }
 
+function normForMatch(v) {
+  return norm(v)
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/[\"'`«»(){}\[\]]/g, " ")
+    .replace(/[-–—\\/.,:;!?№]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const MATCH_STOPWORDS = new Set([
+  "г",
+  "город",
+  "городской",
+  "округ",
+  "муниципальный",
+  "район",
+  "улица",
+  "ул",
+  "дом",
+  "д",
+  "корп",
+  "корпус",
+  "стр",
+  "строение",
+  "мкр",
+  "микрорайон",
+  "поселок",
+  "пос",
+  "рабочий",
+  "село",
+  "деревня",
+  "переулок",
+  "проспект",
+  "проезд",
+  "шоссе",
+  "км",
+  "территория",
+  "филиал",
+  "по",
+  "су",
+  "ср",
+  "уч",
+  "участок",
+]);
+
+function stemRuToken(token) {
+  let x = token;
+  x = x.replace(
+    /(ского|скому|ским|ском|ских|скими|скую|ская|ское|ские|ский)$/i,
+    "ск"
+  );
+  x = x.replace(
+    /(ого|ему|ому|ыми|ими|ых|их|ой|ый|ий|ая|ое|ые|ую|юю|ом|ам|ям|ах|ях|а|я|ы|и|е|о|у|ю)$/i,
+    ""
+  );
+  return x;
+}
+
+function matchTokens(text) {
+  if (!text) return [];
+  return Array.from(
+    new Set(
+      normForMatch(text)
+        .split(" ")
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .filter((x) => x.length >= 3)
+        .filter((x) => !MATCH_STOPWORDS.has(x))
+        .map(stemRuToken)
+        .filter((x) => x.length >= 3)
+    )
+  );
+}
+
 function toNum(v) {
   if (v == null || v === "") return null;
   const n = Number(String(v).replace(",", "."));
@@ -37,10 +112,6 @@ function toNum(v) {
 function isDigitsOnly(v) {
   const s = norm(v);
   return Boolean(s) && /^\d+$/.test(s);
-}
-
-function escapeRegex(text) {
-  return String(text || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function branchNeedle(branch) {
@@ -201,22 +272,56 @@ function pickPointMeta(unit, points) {
   const list = points.filter((p) => sameBranch(p.branch, branch));
   if (!list.length) return { po: "", dispatcherPhone: "" };
 
-  const district = normLc(unit.district);
-  if (district) {
-    const districtRx = new RegExp(escapeRegex(district), "i");
-    const hit =
-      list.find((x) => districtRx.test(String(x.po || ""))) ||
-      list.find((x) => districtRx.test(String(x.address || "")));
-    if (hit) {
-      return {
-        po: norm(hit.po),
-        dispatcherPhone: norm(hit.dispatcher_phone),
-      };
+  const unitTokens = new Set(
+    matchTokens(`${unit.base_address || ""} ${unit.district || ""} ${unit.pes_name || ""}`)
+  );
+
+  const scorePoint = (point) => {
+    const pointTokens = new Set(
+      matchTokens(`${point.po || ""} ${point.address || ""}`)
+    );
+    let score = 0;
+    for (const t of unitTokens) {
+      if (pointTokens.has(t)) score += 1;
+    }
+    if (point.point_kind === "base") score += 0.5;
+    if (norm(point.dispatcher_phone)) score += 0.2;
+    return score;
+  };
+
+  let best = null;
+  let bestScore = -1;
+  for (const point of list) {
+    const score = scorePoint(point);
+    if (score > bestScore) {
+      best = point;
+      bestScore = score;
+      continue;
+    }
+    if (score === bestScore && best) {
+      const bestIsBase = best.point_kind === "base";
+      const curIsBase = point.point_kind === "base";
+      if (curIsBase && !bestIsBase) {
+        best = point;
+        continue;
+      }
+      const bestHasPhone = Boolean(norm(best.dispatcher_phone));
+      const curHasPhone = Boolean(norm(point.dispatcher_phone));
+      if (curHasPhone && !bestHasPhone) {
+        best = point;
+      }
     }
   }
 
-  const first = list[0];
-  return { po: norm(first.po), dispatcherPhone: norm(first.dispatcher_phone) };
+  const fallback =
+    list.find((x) => x.point_kind === "base" && norm(x.dispatcher_phone)) ||
+    list.find((x) => x.point_kind === "base") ||
+    list[0];
+  const selected = bestScore > 0 ? best : fallback;
+  return {
+    po: norm(selected?.po),
+    dispatcherPhone: norm(selected?.dispatcher_phone),
+  };
 }
 
 async function loadPesItems() {
