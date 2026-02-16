@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
 const { loadPesItems } = require("./pesModuleData");
+const { buildText: buildPesTelegramText } = require("./pesTelegram");
 const {
   PES_ENDPOINTS,
   fetchAll,
@@ -15,7 +16,7 @@ const BOT_TOKEN = String(process.env.PES_TELEGRAM_BOT_TOKEN || "").trim();
 const BOT_ENABLED = String(process.env.PES_BOT_ENABLED || "1") === "1";
 const LEGACY_SUBS_FILE = path.resolve(__dirname, "../data/pesBotSubscriptions.json");
 const LEGACY_STATE_FILE = path.resolve(__dirname, "../data/pesBotState.json");
-const MIGRATE_JSON_ON_START = String(process.env.PES_BOT_MIGRATE_JSON || "1") === "1";
+const MIGRATE_JSON_ON_START = String(process.env.PES_BOT_MIGRATE_JSON || "0") === "1";
 
 const TG_BASE = BOT_TOKEN ? `https://api.telegram.org/bot${BOT_TOKEN}` : "";
 
@@ -698,18 +699,37 @@ function buildActionTitle(action) {
   if (action === "reroute") return "Корректировка маршрута";
   if (action === "cancel") return "Отмена выезда";
   if (action === "depart") return "Фактический выезд";
-  if (action === "connect") return "Подключена";
-  if (action === "ready") return "Возврат в резерв";
+  if (action === "connect") return "Подключена (в работе)";
+  if (action === "ready") return "Готова к выезду (в резерве)";
   if (action === "repair") return "Перевод в ремонт";
   return "Операция по ПЭС";
 }
 
 function buildBranchNotifyText({ action, branch, items, destination, comment }) {
+  if (action === "dispatch" || action === "cancel" || action === "reroute") {
+    const strictText = buildPesTelegramText({
+      action,
+      items,
+      destination,
+      comment,
+    });
+    if (strictText) {
+      return {
+        text: strictText,
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+      };
+    }
+  }
+
   const list = items
     .map((i) => `№${i.number} (${i.powerKw ?? "—"} кВт)`)
     .join(", ");
+  const actionTitle = buildActionTitle(action);
+  const now = new Date().toLocaleString("ru-RU");
+
   const lines = [
-    `ПЭС: ${buildActionTitle(action)}`,
+    `ПЭС: ${actionTitle}`,
     `Филиал: ${branch || "—"}`,
     `ПЭС: ${list || "—"}`,
   ];
@@ -722,8 +742,8 @@ function buildBranchNotifyText({ action, branch, items, destination, comment }) 
     lines.push(`Координаты: ${Number(destination.lat)}, ${Number(destination.lon)}`);
   }
   if (comment) lines.push(`Комментарий: ${comment}`);
-  lines.push(`Время: ${new Date().toLocaleString("ru-RU")}`);
-  return lines.join("\n");
+  lines.push(`Время: ${now}`);
+  return { text: lines.join("\n") };
 }
 
 function buildPesInlineKeyboard(action, pesId) {
@@ -733,13 +753,13 @@ function buildPesInlineKeyboard(action, pesId) {
 
   if (action === "dispatch") {
     return {
-      inline_keyboard: [[mk("Фактический выезд", "depart"), mk("Отмена", "cancel")]],
+      inline_keyboard: [[mk("Фактический выезд", "depart"), mk("Отмена выезда", "cancel")]],
     };
   }
 
   if (action === "depart") {
     return {
-      inline_keyboard: [[mk("Подключена", "connect"), mk("Отмена", "cancel")]],
+      inline_keyboard: [[mk("Подключена (в работе)", "connect"), mk("Отмена выезда", "cancel")]],
     };
   }
 
@@ -754,10 +774,6 @@ function buildPesInlineKeyboard(action, pesId) {
   }
 
   if (action === "ready") {
-    return { inline_keyboard: [[mk("В ремонт", "repair")]] };
-  }
-
-  if (action === "cancel") {
     return { inline_keyboard: [[mk("В ремонт", "repair")]] };
   }
 
@@ -804,7 +820,7 @@ async function sendPesSubscribersNotification({
   }
 
   const prepared = list.map((it) => ({
-    text: buildBranchNotifyText({ action, branch, items: [it], destination, comment }),
+    msg: buildBranchNotifyText({ action, branch, items: [it], destination, comment }),
     reply_markup: buildPesInlineKeyboard(action, it.id),
   }));
 
@@ -815,8 +831,14 @@ async function sendPesSubscribersNotification({
       try {
         await tgSendMessage(
           user.chat_id,
-          msg.text,
-          msg.reply_markup ? { reply_markup: msg.reply_markup } : {}
+          msg?.msg?.text || "",
+          {
+            ...(msg?.msg?.parse_mode ? { parse_mode: msg.msg.parse_mode } : {}),
+            ...(msg?.msg?.disable_web_page_preview
+              ? { disable_web_page_preview: true }
+              : {}),
+            ...(msg.reply_markup ? { reply_markup: msg.reply_markup } : {}),
+          }
         );
         sent += 1;
       } catch (e) {

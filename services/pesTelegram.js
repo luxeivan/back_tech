@@ -1,5 +1,14 @@
 const axios = require("axios");
 
+function escapeHtml(value) {
+  return String(value == null ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function parseJsonEnv(name, fallback) {
   const raw = process.env[name];
   if (!raw) return fallback;
@@ -19,52 +28,123 @@ function getConfig() {
   return { botToken, strict, chatsByBranch, threadsByBranch };
 }
 
+function norm(v) {
+  return String(v == null ? "" : v).replace(/\s+/g, " ").trim();
+}
+
+function formatPowerKw(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "—";
+  return Number.isInteger(n) ? String(n) : String(n).replace(".", ",");
+}
+
+function formatPesList(items) {
+  return (Array.isArray(items) ? items : [])
+    .map((i) => `№${norm(i?.number)} мощностью ${formatPowerKw(i?.powerKw)} кВт`)
+    .filter((x) => !x.includes("№ мощностью"))
+    .join(", ");
+}
+
+function normalizeTelLink(phone) {
+  const digits = String(phone || "").replace(/\D+/g, "");
+  if (!digits) return "";
+
+  // 8XXXXXXXXXX -> +7XXXXXXXXXX
+  if (digits.length === 11 && digits.startsWith("8")) {
+    return `+7${digits.slice(1)}`;
+  }
+
+  // 7XXXXXXXXXX -> +7XXXXXXXXXX
+  if (digits.length === 11 && digits.startsWith("7")) {
+    return `+${digits}`;
+  }
+
+  // XXXXXXXXXX -> +7XXXXXXXXXX
+  if (digits.length === 10) {
+    return `+7${digits}`;
+  }
+
+  return "";
+}
+
+function formatCoord6(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "";
+  return n.toFixed(6);
+}
+
+function formatCoords(destination) {
+  const lat = formatCoord6(destination?.lat);
+  const lon = formatCoord6(destination?.lon);
+  if (!lat || !lon) return "—";
+  return `${lat}, ${lon}`;
+}
+
+function buildYandexMapsUrl(destination) {
+  const lat = formatCoord6(destination?.lat);
+  const lon = formatCoord6(destination?.lon);
+  if (!lat || !lon) return "";
+  return `https://yandex.ru/maps/?pt=${lon},${lat}&z=17&l=map`;
+}
+
+function formatCoordsHtml(destination) {
+  const coords = formatCoords(destination);
+  const url = buildYandexMapsUrl(destination);
+  if (!url || coords === "—") return escapeHtml(coords);
+  return `<a href="${escapeHtml(url)}">${escapeHtml(coords)}</a>`;
+}
+
+function formatPhoneHtml(phone) {
+  const display = escapeHtml(phone || "—");
+  const tel = normalizeTelLink(phone);
+  if (!tel) return display;
+  return `<a href="tel:${escapeHtml(tel)}">${display}</a>`;
+}
+
 function buildText({ action, items, destination, comment }) {
-  const list = items.map((i) => `№${i.number} (${i.powerKw} кВт)`).join(", ");
-  const addr = destination?.address || "—";
-  const coords =
-    destination && Number.isFinite(destination.lat) && Number.isFinite(destination.lon)
-      ? `${destination.lat}, ${destination.lon}`
-      : "—";
-  const phone = items[0]?.dispatcherPhone || "—";
-  const po = items[0]?.po || "—";
+  const list = formatPesList(items);
+  const addr = escapeHtml(destination?.address || "—");
+  const coordsHtml = formatCoordsHtml(destination);
+  const phoneHtml = formatPhoneHtml(items[0]?.dispatcherPhone || "—");
+  const po = escapeHtml(items[0]?.po || "—");
+  const safeComment = escapeHtml(comment || "");
 
   if (action === "dispatch") {
     const lines = [
-      "В связи с технологическим нарушением",
-      `необходимо направить ПЭС ${list}`,
-      `по адресу ${addr}`,
-      `координаты ${coords}`,
-      `Контактный телефон диспетчера ${phone} ПО - ${po}`,
-      "Время выезда - не более 15 минут после получения настоящего указания",
+      "<b>В связи с технологическим нарушением</b>",
+      `необходимо направить ПЭС <b>${escapeHtml(list || "№... мощностью ... кВт")}</b>`,
+      `по адресу <b>${addr}</b>`,
+      `координаты ${coordsHtml}`,
+      `Контактный телефон диспетчера ${phoneHtml} ПО - <b>${po}</b>`,
+      "Время выезда - не более <b>15 минут</b> после получения настоящего указания",
       "По факту выезда ПЭС укажите в чате фактическое время выезда ПЭС.",
     ];
-    if (comment) lines.push(`Комментарий: ${comment}`);
+    if (safeComment) lines.push(`<b>Комментарий:</b> <i>${safeComment}</i>`);
     return lines.join("\n");
   }
 
   if (action === "cancel") {
     const lines = [
-      "В связи с восстановлением электроснабжения",
-      "выезд ОТМЕНЕН",
-      `ПЭС ${list}`,
+      "<b>В связи с восстановлением электроснабжения</b>",
+      "<b>выезд ОТМЕНЕН</b>",
+      `необходимо направить ПЭС <b>${escapeHtml(list || "№... мощностью ... кВт")}</b>`,
       "на место постоянной дислокации",
       "По факту прибытия ПЭС укажите в чате фактическое время прибытия.",
     ];
-    if (comment) lines.push(`Комментарий: ${comment}`);
+    if (safeComment) lines.push(`<b>Комментарий:</b> <i>${safeComment}</i>`);
     return lines.join("\n");
   }
 
   if (action === "reroute") {
     const lines = [
-      "В связи с уточнением места технологическим нарушением точка назначения ИЗМЕНЕНА",
-      `необходимо направить ПЭС ${list}`,
-      `по новому адресу ${addr}`,
-      `координаты ${coords}`,
-      `Контактный телефон диспетчера ${phone} ПО - ${po}`,
-      "Время корректировки маршрута - не более 15 минут после получения настоящего указания",
+      "<b>В связи с уточнением места технологическим нарушением точка назначения ИЗМЕНЕНА</b>",
+      `необходимо направить ПЭС <b>${escapeHtml(list || "№... мощностью ... кВт")}</b>`,
+      `по новому адресу <b>${addr}</b>`,
+      `координаты ${coordsHtml}`,
+      `Контактный телефон диспетчера ${phoneHtml} ПО - <b>${po}</b>`,
+      "Время корректировки маршрута - не более <b>15 минут</b> после получения настоящего указания",
     ];
-    if (comment) lines.push(`Комментарий: ${comment}`);
+    if (safeComment) lines.push(`<b>Комментарий:</b> <i>${safeComment}</i>`);
     return lines.join("\n");
   }
 
@@ -87,7 +167,12 @@ async function sendPesTelegram({ action, branch, items, destination, comment }) 
   }
 
   const text = buildText({ action, items, destination, comment });
-  const payload = { chat_id: chatId, text };
+  const payload = {
+    chat_id: chatId,
+    text,
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+  };
   if (threadId != null && threadId !== "") {
     payload.message_thread_id = threadId;
   }
@@ -101,4 +186,4 @@ async function sendPesTelegram({ action, branch, items, destination, comment }) 
   };
 }
 
-module.exports = { sendPesTelegram };
+module.exports = { sendPesTelegram, buildText };
