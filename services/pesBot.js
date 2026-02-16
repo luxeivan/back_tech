@@ -217,19 +217,41 @@ async function getBranchesList() {
     },
   });
 
-  let branches = rows.map((x) => norm(x.name)).filter(Boolean);
-  if (branches.length) {
-    return Array.from(new Set(branches)).sort((a, b) => a.localeCompare(b, "ru"));
-  }
+  const fromBranchesTable = Array.from(
+    new Set(rows.map((x) => norm(x.name)).filter(Boolean))
+  );
+  const existingKeys = new Set(
+    fromBranchesTable.map((x) => branchNorm(x)).filter(Boolean)
+  );
 
   const items = await loadPesItems();
-  branches = Array.from(new Set(items.map((x) => norm(x.branch)).filter(Boolean))).sort(
-    (a, b) => a.localeCompare(b, "ru")
+  const fromUnits = Array.from(
+    new Set(items.map((x) => norm(x.branch)).filter(Boolean))
   );
-  if (branches.length) {
-    await ensureBranches(branches);
+
+  const missingInTable = fromUnits.filter((x) => {
+    const key = branchNorm(x);
+    return key && !existingKeys.has(key);
+  });
+  if (missingInTable.length) {
+    await ensureBranches(missingInTable);
   }
-  return branches;
+
+  const merged = new Map();
+  [...fromBranchesTable, ...fromUnits].forEach((name) => {
+    const key = branchNorm(name);
+    if (!key) return;
+    if (!merged.has(key)) {
+      merged.set(key, name);
+      return;
+    }
+    const prev = merged.get(key);
+    if (name === name.toUpperCase() && prev !== prev.toUpperCase()) {
+      merged.set(key, name);
+    }
+  });
+
+  return Array.from(merged.values()).sort((a, b) => a.localeCompare(b, "ru"));
 }
 
 function findBranchByText(text, branches) {
