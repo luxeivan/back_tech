@@ -2,25 +2,47 @@
 
 const axios = require("axios");
 
+const JWT_TTL_MS = 5 * 60 * 1000;
+let jwtCache = {
+  token: "",
+  expiresAt: 0,
+  inFlight: null,
+};
+
 async function getJwt() {
+  if (jwtCache.token && Date.now() < jwtCache.expiresAt) {
+    return jwtCache.token;
+  }
+  if (jwtCache.inFlight) {
+    return jwtCache.inFlight;
+  }
+
   const loginStrapi = process.env.LOGIN_STRAPI;
   const passwordStrapi = process.env.PASSWORD_STRAPI;
   const urlStrapi = process.env.URL_STRAPI;
 
-  try {
-    const res = await axios.post(`${urlStrapi}/api/auth/local`, {
-      identifier: loginStrapi,
-      password: passwordStrapi,
-    });
-    if (res.data) {
-      return res.data.jwt;
-    } else {
+  jwtCache.inFlight = (async () => {
+    try {
+      const res = await axios.post(`${urlStrapi}/api/auth/local`, {
+        identifier: loginStrapi,
+        password: passwordStrapi,
+      });
+      const token = res?.data?.jwt || "";
+      if (token) {
+        jwtCache.token = token;
+        jwtCache.expiresAt = Date.now() + JWT_TTL_MS;
+        return token;
+      }
       return false;
+    } catch (error) {
+      console.log("Ошибка авторизации в Strapi:", error);
+      return false;
+    } finally {
+      jwtCache.inFlight = null;
     }
-  } catch (error) {
-    console.log("Ошибка авторизации в Strapi:", error);
-    return false;
-  }
+  })();
+
+  return jwtCache.inFlight;
 }
 
 // Достаём description по id (нужно, чтобы на create отдавать на фронт именно то,
@@ -47,4 +69,3 @@ async function fetchTnDescriptionById(id, jwt) {
 }
 
 module.exports = { getJwt, fetchTnDescriptionById };
-

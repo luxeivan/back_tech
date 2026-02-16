@@ -2,15 +2,20 @@ const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
 const { loadPesItems } = require("./pesModuleData");
+const {
+  PES_ENDPOINTS,
+  fetchAll,
+  fetchFirst,
+  createOne,
+  updateOne,
+  manyRelation,
+} = require("./pesStrapiStore");
 
 const BOT_TOKEN = String(process.env.PES_TELEGRAM_BOT_TOKEN || "").trim();
 const BOT_ENABLED = String(process.env.PES_BOT_ENABLED || "1") === "1";
-const DATA_FILE =
-  process.env.PES_BOT_SUBS_FILE ||
-  path.resolve(__dirname, "../data/pesBotSubscriptions.json");
-const STATE_FILE =
-  process.env.PES_BOT_STATE_FILE ||
-  path.resolve(__dirname, "../data/pesBotState.json");
+const LEGACY_SUBS_FILE = path.resolve(__dirname, "../data/pesBotSubscriptions.json");
+const LEGACY_STATE_FILE = path.resolve(__dirname, "../data/pesBotState.json");
+const MIGRATE_JSON_ON_START = String(process.env.PES_BOT_MIGRATE_JSON || "1") === "1";
 
 const TG_BASE = BOT_TOKEN ? `https://api.telegram.org/bot${BOT_TOKEN}` : "";
 
@@ -32,131 +37,199 @@ function canRunBot() {
   return Boolean(BOT_ENABLED && BOT_TOKEN);
 }
 
-function ensureStoreFile() {
-  const dir = path.dirname(DATA_FILE);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  if (!fs.existsSync(DATA_FILE)) {
-    fs.writeFileSync(
-      DATA_FILE,
-      JSON.stringify({ users: {}, updatedAt: new Date().toISOString() }, null, 2),
-      "utf8"
-    );
-  }
+function normalizeSubscriber(row) {
+  const branches = manyRelation(row?.branches)
+    .map((b) => norm(b.name))
+    .filter(Boolean);
+
+  return {
+    id: row?.id || null,
+    documentId: row?.documentId || null,
+    chat_id: Number(row?.chat_id || 0),
+    username: norm(row?.username),
+    first_name: norm(row?.first_name),
+    last_name: norm(row?.last_name),
+    muted: Boolean(row?.muted),
+    is_active: row?.is_active !== false,
+    subscribe_all: Boolean(row?.subscribe_all),
+    branches,
+  };
 }
 
-function ensureStateFile() {
-  const dir = path.dirname(STATE_FILE);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  if (!fs.existsSync(STATE_FILE)) {
-    fs.writeFileSync(
-      STATE_FILE,
-      JSON.stringify({ offset: 0, updatedAt: new Date().toISOString() }, null, 2),
-      "utf8"
-    );
-  }
+async function listUsers() {
+  const rows = await fetchAll(PES_ENDPOINTS.SUBSCRIBERS, {
+    params: {
+      "filters[is_active][$eq]": true,
+      populate: "branches",
+      "sort[0]": "chat_id:asc",
+    },
+  });
+  return rows.map(normalizeSubscriber);
 }
 
-function readState() {
-  ensureStateFile();
-  try {
-    const raw = fs.readFileSync(STATE_FILE, "utf8");
-    const parsed = JSON.parse(raw);
-    return { offset: Number(parsed?.offset) || 0 };
-  } catch {
-    return { offset: 0 };
-  }
+async function getUserByChatId(chatId) {
+  const id = Number(chatId || 0);
+  if (!Number.isFinite(id) || id <= 0) return null;
+
+  const row = await fetchFirst(PES_ENDPOINTS.SUBSCRIBERS, {
+    params: {
+      "filters[chat_id][$eq]": id,
+      populate: "branches",
+    },
+  });
+
+  return row ? normalizeSubscriber(row) : null;
 }
 
-function writeState(offset) {
-  ensureStateFile();
-  fs.writeFileSync(
-    STATE_FILE,
-    JSON.stringify(
-      {
-        offset: Number(offset) || 0,
-        updatedAt: new Date().toISOString(),
-      },
-      null,
-      2
-    ),
-    "utf8"
+async function ensureBranches(branchNames) {
+  const names = Array.from(
+    new Set((branchNames || []).map((x) => norm(x)).filter(Boolean))
   );
-}
+  if (!names.length) return [];
 
-function readStore() {
-  ensureStoreFile();
-  try {
-    const raw = fs.readFileSync(DATA_FILE, "utf8");
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return { users: {} };
-    if (!parsed.users || typeof parsed.users !== "object") parsed.users = {};
-    return parsed;
-  } catch {
-    return { users: {} };
+  const existing = await fetchAll(PES_ENDPOINTS.BRANCHES, {
+    params: {
+      "pagination[pageSize]": 500,
+    },
+  });
+  const byNorm = new Map(
+    existing
+      .map((r) => ({ row: r, key: branchNorm(r.name_norm || r.name) }))
+      .filter((x) => x.key)
+      .map((x) => [x.key, x.row])
+  );
+
+  const out = [];
+  for (const name of names) {
+    const key = branchNorm(name);
+    if (!key) continue;
+
+    const found = byNorm.get(key);
+    if (found) {
+      if (found.is_active === false && found.documentId) {
+        const updated = await updateOne(PES_ENDPOINTS.BRANCHES, found.documentId, {
+          is_active: true,
+        });
+        byNorm.set(key, updated);
+        out.push(updated);
+      } else {
+        out.push(found);
+      }
+      continue;
+    }
+
+    const created = await createOne(PES_ENDPOINTS.BRANCHES, {
+      name,
+      name_norm: key,
+      is_active: true,
+    });
+    byNorm.set(key, created);
+    out.push(created);
   }
+
+  return out;
 }
 
-function writeStore(store) {
-  ensureStoreFile();
-  const next = {
-    ...store,
-    updatedAt: new Date().toISOString(),
+async function upsertUser(chat, userMeta = {}) {
+  const chatId = Number(chat?.id || 0);
+  if (!Number.isFinite(chatId) || chatId <= 0) return null;
+
+  const existingRow = await fetchFirst(PES_ENDPOINTS.SUBSCRIBERS, {
+    params: {
+      "filters[chat_id][$eq]": chatId,
+      populate: "branches",
+    },
+  });
+
+  const payload = {
+    chat_id: chatId,
+    username: norm(userMeta.username) || null,
+    first_name: norm(userMeta.first_name) || null,
+    last_name: norm(userMeta.last_name) || null,
+    last_interaction_at: new Date().toISOString(),
+    is_active: true,
   };
-  fs.writeFileSync(DATA_FILE, JSON.stringify(next, null, 2), "utf8");
+
+  let row;
+  if (existingRow?.documentId) {
+    row = await updateOne(PES_ENDPOINTS.SUBSCRIBERS, existingRow.documentId, payload);
+  } else {
+    row = await createOne(PES_ENDPOINTS.SUBSCRIBERS, {
+      ...payload,
+      muted: false,
+      subscribe_all: false,
+    });
+  }
+
+  const fresh = await fetchFirst(PES_ENDPOINTS.SUBSCRIBERS, {
+    params: {
+      "filters[chat_id][$eq]": chatId,
+      populate: "branches",
+    },
+  });
+
+  return fresh ? normalizeSubscriber(fresh) : normalizeSubscriber(row);
 }
 
-function upsertUser(chat, userMeta = {}) {
-  const store = readStore();
-  const id = String(chat?.id || "");
-  if (!id) return null;
-  const prev = store.users[id] || {
-    chat_id: Number(chat.id),
-    username: "",
-    first_name: "",
-    last_name: "",
-    branches: [],
-    muted: false,
-    created_at: new Date().toISOString(),
-  };
+async function updateUserBranches(chatId, branches) {
+  const id = Number(chatId || 0);
+  if (!Number.isFinite(id) || id <= 0) return null;
 
-  store.users[id] = {
-    ...prev,
-    chat_id: Number(chat.id),
-    username: norm(userMeta.username || prev.username),
-    first_name: norm(userMeta.first_name || prev.first_name),
-    last_name: norm(userMeta.last_name || prev.last_name),
-    updated_at: new Date().toISOString(),
-  };
-  writeStore(store);
-  return store.users[id];
-}
+  const existing = await fetchFirst(PES_ENDPOINTS.SUBSCRIBERS, {
+    params: {
+      "filters[chat_id][$eq]": id,
+      populate: "branches",
+    },
+  });
+  if (!existing?.documentId) return null;
 
-function updateUserBranches(chatId, branches) {
-  const store = readStore();
-  const id = String(chatId);
-  const user = store.users[id];
-  if (!user) return null;
-  user.branches = Array.from(new Set((branches || []).map((x) => norm(x)).filter(Boolean)));
-  user.updated_at = new Date().toISOString();
-  writeStore(store);
-  return user;
-}
+  const clean = Array.from(
+    new Set((branches || []).map((x) => norm(x)).filter(Boolean))
+  );
+  const subscribeAll = clean.includes("*");
 
-function getUserByChatId(chatId) {
-  const store = readStore();
-  return store.users[String(chatId)] || null;
-}
+  let branchIds = [];
+  if (!subscribeAll) {
+    const rows = await ensureBranches(clean);
+    branchIds = rows.map((x) => Number(x.id)).filter((x) => Number.isFinite(x) && x > 0);
+  }
 
-function listUsers() {
-  const store = readStore();
-  return Object.values(store.users || {});
+  await updateOne(PES_ENDPOINTS.SUBSCRIBERS, existing.documentId, {
+    subscribe_all: subscribeAll,
+    branches: branchIds,
+    last_interaction_at: new Date().toISOString(),
+  });
+
+  const fresh = await fetchFirst(PES_ENDPOINTS.SUBSCRIBERS, {
+    params: {
+      "filters[chat_id][$eq]": id,
+      populate: "branches",
+    },
+  });
+  return fresh ? normalizeSubscriber(fresh) : null;
 }
 
 async function getBranchesList() {
+  const rows = await fetchAll(PES_ENDPOINTS.BRANCHES, {
+    params: {
+      "filters[is_active][$eq]": true,
+      "sort[0]": "name:asc",
+    },
+  });
+
+  let branches = rows.map((x) => norm(x.name)).filter(Boolean);
+  if (branches.length) {
+    return Array.from(new Set(branches)).sort((a, b) => a.localeCompare(b, "ru"));
+  }
+
   const items = await loadPesItems();
-  return Array.from(new Set(items.map((x) => norm(x.branch)).filter(Boolean))).sort(
+  branches = Array.from(new Set(items.map((x) => norm(x.branch)).filter(Boolean))).sort(
     (a, b) => a.localeCompare(b, "ru")
   );
+  if (branches.length) {
+    await ensureBranches(branches);
+  }
+  return branches;
 }
 
 function findBranchByText(text, branches) {
@@ -168,6 +241,94 @@ function findBranchByText(text, branches) {
   if (exact) return exact;
   const includes = branches.find((b) => branchNorm(b).includes(n) || n.includes(branchNorm(b)));
   return includes || "";
+}
+
+async function getBotStateRow() {
+  const existing = await fetchFirst(PES_ENDPOINTS.BOT_STATES, {
+    params: {
+      "filters[key][$eq]": "main",
+    },
+  });
+  if (existing) return existing;
+
+  return createOne(PES_ENDPOINTS.BOT_STATES, {
+    key: "main",
+    polling_offset: 0,
+    enabled: true,
+  });
+}
+
+async function readState() {
+  const row = await getBotStateRow();
+  return {
+    row,
+    offset: Number(row?.polling_offset || 0),
+    enabled: row?.enabled !== false,
+  };
+}
+
+async function writeState(offset) {
+  const current = await getBotStateRow();
+  if (!current?.documentId) return;
+  await updateOne(PES_ENDPOINTS.BOT_STATES, current.documentId, {
+    polling_offset: Number(offset) || 0,
+    last_poll_at: new Date().toISOString(),
+  });
+}
+
+function readLegacyJsonSafe(filePath, fallback) {
+  try {
+    if (!fs.existsSync(filePath)) return fallback;
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    return fallback;
+  }
+}
+
+async function migrateLegacyJsonIfNeeded() {
+  if (!MIGRATE_JSON_ON_START) return;
+
+  const currentUsers = await listUsers();
+  const currentState = await readState();
+  const legacySubs = readLegacyJsonSafe(LEGACY_SUBS_FILE, { users: {} });
+  const legacyState = readLegacyJsonSafe(LEGACY_STATE_FILE, { offset: 0 });
+
+  if (!currentUsers.length && legacySubs?.users && typeof legacySubs.users === "object") {
+    const allBranches = await getBranchesList();
+    const byText = (value) => findBranchByText(value, allBranches) || norm(value);
+
+    for (const item of Object.values(legacySubs.users)) {
+      const chatId = Number(item?.chat_id || 0);
+      if (!Number.isFinite(chatId) || chatId <= 0) continue;
+
+      await upsertUser(
+        { id: chatId },
+        {
+          username: item?.username,
+          first_name: item?.first_name,
+          last_name: item?.last_name,
+        }
+      );
+
+      const branchList = Array.isArray(item?.branches) ? item.branches : [];
+      const mapped = branchList.includes("*")
+        ? ["*"]
+        : branchList.map(byText).filter(Boolean);
+
+      const user = await updateUserBranches(chatId, mapped);
+      if (user?.documentId && item?.muted === true) {
+        await updateOne(PES_ENDPOINTS.SUBSCRIBERS, user.documentId, { muted: true });
+      }
+    }
+    console.log("[pes-bot] Миграция подписок из JSON завершена");
+  }
+
+  const legacyOffset = Number(legacyState?.offset || 0);
+  if (currentState.offset <= 0 && legacyOffset > 0) {
+    await writeState(legacyOffset);
+    pollingOffset = legacyOffset;
+    console.log(`[pes-bot] Перенесен offset из JSON: ${legacyOffset}`);
+  }
 }
 
 async function tgSendMessage(chatId, text, extra = {}) {
@@ -192,26 +353,6 @@ async function tgAnswerCallback(callbackQueryId, text = "") {
       { timeout: 15000 }
     );
   } catch (_) {}
-}
-
-function splitChunks(lines, maxLen = 3500) {
-  const out = [];
-  let cur = "";
-  for (const line of lines) {
-    if (!cur) {
-      cur = line;
-      continue;
-    }
-    const next = `${cur}\n${line}`;
-    if (next.length > maxLen) {
-      out.push(cur);
-      cur = line;
-    } else {
-      cur = next;
-    }
-  }
-  if (cur) out.push(cur);
-  return out;
 }
 
 async function sendBranchesList(chatId) {
@@ -239,8 +380,8 @@ async function sendBranchesList(chatId) {
 function formatUserSubs(user) {
   if (!user) return "Подписки не найдены.";
   const branches = Array.isArray(user.branches) ? user.branches : [];
+  if (user.subscribe_all) return "Вы подписаны на все филиалы.";
   if (!branches.length) return "У вас пока нет подписок на филиалы.";
-  if (branches.includes("*")) return "Вы подписаны на все филиалы.";
   return `Ваши подписки:\n${branches.map((x) => `- ${x}`).join("\n")}`;
 }
 
@@ -251,7 +392,7 @@ async function processMessage(msg) {
   const lc = text.toLowerCase();
   const userMeta = msg?.from || {};
 
-  upsertUser(msg.chat, userMeta);
+  await upsertUser(msg.chat, userMeta);
 
   if (!text) return;
 
@@ -288,19 +429,19 @@ async function processMessage(msg) {
   }
 
   if (lc === "/my") {
-    const user = getUserByChatId(chatId);
+    const user = await getUserByChatId(chatId);
     await tgSendMessage(chatId, formatUserSubs(user));
     return;
   }
 
   if (lc === "/suball") {
-    const user = updateUserBranches(chatId, ["*"]);
+    const user = await updateUserBranches(chatId, ["*"]);
     await tgSendMessage(chatId, formatUserSubs(user));
     return;
   }
 
   if (lc === "/clear") {
-    const user = updateUserBranches(chatId, []);
+    const user = await updateUserBranches(chatId, []);
     await tgSendMessage(chatId, formatUserSubs(user));
     return;
   }
@@ -313,12 +454,12 @@ async function processMessage(msg) {
       await tgSendMessage(chatId, "Филиал не найден. Используй /list");
       return;
     }
-    const user = getUserByChatId(chatId);
+    const user = await getUserByChatId(chatId);
     const current = Array.isArray(user?.branches) ? user.branches : [];
-    const next = current.includes("*")
+    const next = user?.subscribe_all
       ? [branch]
       : Array.from(new Set([...current, branch]));
-    const saved = updateUserBranches(chatId, next);
+    const saved = await updateUserBranches(chatId, next);
     await tgSendMessage(chatId, `Подписка добавлена: ${branch}\n\n${formatUserSubs(saved)}`);
     return;
   }
@@ -331,10 +472,10 @@ async function processMessage(msg) {
       await tgSendMessage(chatId, "Филиал не найден. Используй /list");
       return;
     }
-    const user = getUserByChatId(chatId);
+    const user = await getUserByChatId(chatId);
     const current = Array.isArray(user?.branches) ? user.branches : [];
-    const next = current.filter((x) => x !== "*" && x !== branch);
-    const saved = updateUserBranches(chatId, next);
+    const next = current.filter((x) => x !== branch);
+    const saved = await updateUserBranches(chatId, next);
     await tgSendMessage(chatId, `Подписка удалена: ${branch}\n\n${formatUserSubs(saved)}`);
     return;
   }
@@ -350,7 +491,7 @@ async function processCallbackQuery(query) {
     return;
   }
 
-  upsertUser({ id: chatId }, userMeta);
+  await upsertUser({ id: chatId }, userMeta);
 
   const parts = data.split("|");
   const action = norm(parts[0] || "");
@@ -369,7 +510,7 @@ async function processCallbackQuery(query) {
       return;
     }
     try {
-      await runPesModuleCommand({ action: cmd, pesId });
+      await runPesModuleCommand({ action: cmd, pesId, chatId: Number(chatId) });
       await tgAnswerCallback(callbackId, "Готово");
     } catch (e) {
       const msg = norm(e?.response?.data?.message || e?.message || "Ошибка");
@@ -379,21 +520,21 @@ async function processCallbackQuery(query) {
   }
 
   if (action === "my") {
-    const user = getUserByChatId(chatId);
+    const user = await getUserByChatId(chatId);
     await tgSendMessage(chatId, formatUserSubs(user));
     await tgAnswerCallback(callbackId, "Готово");
     return;
   }
 
   if (action === "suball") {
-    const user = updateUserBranches(chatId, ["*"]);
+    const user = await updateUserBranches(chatId, ["*"]);
     await tgSendMessage(chatId, formatUserSubs(user));
     await tgAnswerCallback(callbackId, "Подписка на все филиалы");
     return;
   }
 
   if (action === "clear") {
-    const user = updateUserBranches(chatId, []);
+    const user = await updateUserBranches(chatId, []);
     await tgSendMessage(chatId, formatUserSubs(user));
     await tgAnswerCallback(callbackId, "Подписки очищены");
     return;
@@ -406,8 +547,8 @@ async function processCallbackQuery(query) {
       await tgAnswerCallback(callbackId, "Филиал не найден");
       return;
     }
-    const user = getUserByChatId(chatId);
-    const current = Array.isArray(user?.branches) ? user.branches.filter((x) => x !== "*") : [];
+    const user = await getUserByChatId(chatId);
+    const current = Array.isArray(user?.branches) ? user.branches : [];
     let next = current;
     let msg = "";
     if (current.includes(branch)) {
@@ -417,7 +558,7 @@ async function processCallbackQuery(query) {
       next = [...current, branch];
       msg = `Подписка: ${branch}`;
     }
-    const saved = updateUserBranches(chatId, next);
+    const saved = await updateUserBranches(chatId, next);
     await tgSendMessage(chatId, `${msg}\n\n${formatUserSubs(saved)}`);
     await tgAnswerCallback(callbackId, "Готово");
     return;
@@ -463,7 +604,7 @@ async function pollLoop() {
         }
       }
     }
-    if (offsetChanged) writeState(pollingOffset);
+    if (offsetChanged) await writeState(pollingOffset);
   } catch (e) {
     console.error("[pes-bot] Ошибка polling:", e?.message || e);
   } finally {
@@ -483,7 +624,7 @@ async function bootstrapOffsetToLatest() {
     const lastId = Number(updates[0]?.update_id);
     if (Number.isFinite(lastId)) {
       pollingOffset = lastId + 1;
-      writeState(pollingOffset);
+      await writeState(pollingOffset);
       console.log(`[pes-bot] offset инициализирован: ${pollingOffset}`);
     }
   } catch (e) {
@@ -491,23 +632,41 @@ async function bootstrapOffsetToLatest() {
   }
 }
 
-function startPesBotPolling() {
+async function startPesBotPolling() {
   if (!canRunBot()) {
     console.log("[pes-bot] отключен (нет токена или PES_BOT_ENABLED=0)");
     return;
   }
   if (pollingStarted) return;
-  pollingStarted = true;
-  ensureStoreFile();
-  pollingOffset = readState().offset;
-  console.log("[pes-bot] polling запущен");
-  bootstrapOffsetToLatest().finally(() => pollLoop());
+
+  try {
+    pollingStarted = true;
+    await migrateLegacyJsonIfNeeded();
+
+    const state = await readState();
+    if (!state.enabled) {
+      console.log("[pes-bot] отключен в Strapi (pes-bot-states.enabled=false)");
+      pollingStarted = false;
+      return;
+    }
+
+    pollingOffset = Number(state.offset || 0);
+    console.log("[pes-bot] polling запущен");
+    await bootstrapOffsetToLatest();
+    pollLoop();
+  } catch (e) {
+    pollingStarted = false;
+    console.error("[pes-bot] Ошибка старта:", e?.message || e);
+  }
 }
 
 function isUserSubscribedToBranch(user, branch) {
+  if (!user || user.is_active === false || user.muted) return false;
+  if (user.subscribe_all) return true;
+
   const list = Array.isArray(user?.branches) ? user.branches : [];
   if (!list.length) return false;
-  if (list.includes("*")) return true;
+
   const target = branchNorm(branch);
   return list.some((x) => branchNorm(x) === target);
 }
@@ -588,9 +747,9 @@ function getLocalBackendBase() {
   return `http://127.0.0.1:${port}`;
 }
 
-async function runPesModuleCommand({ action, pesId }) {
+async function runPesModuleCommand({ action, pesId, chatId }) {
   const base = getLocalBackendBase();
-  const payload = { action, pesIds: [pesId] };
+  const payload = { action, pesIds: [pesId], sourceChatId: Number(chatId) || null };
   if (action === "depart") payload.actualDepartureAt = new Date().toISOString();
 
   const { data } = await axios.post(`${base}/services/pes/module/command`, payload, {
@@ -611,22 +770,27 @@ async function sendPesSubscribersNotification({
   const list = Array.isArray(items) ? items.filter(Boolean) : [];
   if (!list.length) return { ok: true, skipped: true, reason: "empty-items", sent: 0 };
 
-  const users = listUsers();
-  const targets = users.filter((u) => !u.muted && isUserSubscribedToBranch(u, branch));
+  const users = await listUsers();
+  const targets = users.filter((u) => isUserSubscribedToBranch(u, branch));
   if (!targets.length) {
     return { ok: true, skipped: true, reason: "no-subscribers", sent: 0 };
   }
+
   const prepared = list.map((it) => ({
     text: buildBranchNotifyText({ action, branch, items: [it], destination, comment }),
     reply_markup: buildPesInlineKeyboard(action, it.id),
   }));
 
-  let sent = 0; // кол-во сообщений
+  let sent = 0;
   let failed = 0;
   for (const user of targets) {
     for (const msg of prepared) {
       try {
-        await tgSendMessage(user.chat_id, msg.text, msg.reply_markup ? { reply_markup: msg.reply_markup } : {});
+        await tgSendMessage(
+          user.chat_id,
+          msg.text,
+          msg.reply_markup ? { reply_markup: msg.reply_markup } : {}
+        );
         sent += 1;
       } catch (e) {
         failed += 1;

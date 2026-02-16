@@ -232,6 +232,8 @@ async function loadPesItems() {
     .map((u) => {
       const meta = pickPointMeta(u, points);
       return {
+        unitStrapiId: Number.isFinite(Number(u.id)) ? Number(u.id) : null,
+        unitDocumentId: norm(u.documentId),
         id: norm(u.code) || norm(u.documentId) || String(u.id || ""),
         number: norm(u.garage_number),
         name: norm(u.pes_name) || norm(u.vehicle_plate) || "ПЭС",
