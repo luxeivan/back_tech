@@ -28,6 +28,18 @@ function normLc(v) {
   return norm(v).toLowerCase();
 }
 
+function withDistrict(address, district) {
+  const addr = norm(address);
+  const dist = norm(district);
+  if (!dist) return addr;
+  if (!addr) return dist;
+
+  // Не дублируем округ, если он уже присутствует в адресе.
+  if (normLc(addr).includes(normLc(dist))) return addr;
+
+  return `${dist}, ${addr}`;
+}
+
 function normForMatch(v) {
   return norm(v)
     .toLowerCase()
@@ -196,22 +208,27 @@ async function getUnits() {
     return cache.units.rows;
   }
   const token = await getToken();
-  const rows = await fetchAll(
-    ENDPOINT_UNITS,
-    [
-      "code",
-      "garage_number",
-      "pes_name",
-      "vehicle_plate",
-      "branch",
-      "power_kw_nominal",
-      "power_kw_max",
-      "generator_model",
-      "base_address",
-      "district",
-    ],
-    token
-  );
+  const baseFields = [
+    "code",
+    "garage_number",
+    "pes_name",
+    "vehicle_plate",
+    "branch",
+    "power_kw_nominal",
+    "power_kw_max",
+    "generator_model",
+    "base_address",
+    "district",
+  ];
+
+  let rows = [];
+  try {
+    rows = await fetchAll(ENDPOINT_UNITS, [...baseFields, "po"], token);
+  } catch (e) {
+    const status = Number(e?.response?.status || 0);
+    if (status !== 400) throw e;
+    rows = await fetchAll(ENDPOINT_UNITS, baseFields, token);
+  }
   cache.units = { ts: now, rows };
   return rows;
 }
@@ -222,21 +239,29 @@ async function getPoints() {
     return cache.points.rows;
   }
   const token = await getToken();
-  const rows = await fetchAll(
-    ENDPOINT_POINTS,
-    [
-      "code",
-      "branch",
-      "po",
-      "dispatcher_phone",
-      "point_type_raw",
-      "point_kind",
-      "address",
-      "lat",
-      "lon",
-    ],
-    token
-  );
+  const baseFields = [
+    "code",
+    "branch",
+    "po",
+    "dispatcher_phone",
+    "point_type_raw",
+    "point_kind",
+    "address",
+    "lat",
+    "lon",
+  ];
+
+  let rows = [];
+  try {
+    rows = await fetchAll(ENDPOINT_POINTS, [...baseFields, "district"], token);
+  } catch (e) {
+    // В некоторых окружениях у коллекции точек нет поля district.
+    // Делаем безопасный откат к прежнему набору полей.
+    const status = Number(e?.response?.status || 0);
+    if (status !== 400) throw e;
+    rows = await fetchAll(ENDPOINT_POINTS, baseFields, token);
+  }
+
   cache.points = { ts: now, rows };
   return rows;
 }
@@ -356,22 +381,55 @@ async function loadPesItems() {
 }
 
 async function loadAssemblyDestinations({ branch = "" } = {}) {
-  const points = await getPoints();
+  const [points, units] = await Promise.all([getPoints(), getUnits()]);
+
+  function resolveDistrictForPoint(point) {
+    const direct = norm(point.district);
+    if (direct) return direct;
+
+    const branchNeedle = normLc(point.branch);
+    const poNeedle = normLc(point.po);
+    if (!branchNeedle) return "";
+
+    const branchRows = units
+      .map((u) => ({
+        branch: norm(u.branch),
+        po: normLc(u.po),
+        district: norm(u.district),
+      }))
+      .filter((u) => u.district)
+      .filter((u) => sameBranch(u.branch, point.branch));
+
+    if (!branchRows.length) return "";
+
+    if (poNeedle) {
+      const exact = branchRows.find((x) => x.po && x.po === poNeedle);
+      if (exact?.district) return exact.district;
+    }
+
+    // Если не нашли соответствие по ПО, округ не подставляем,
+    // чтобы избежать ошибочного "чужого" округа.
+    return "";
+  }
 
   return points
     .filter((p) => p.point_kind === "base" || p.point_kind === "alternative")
     .filter((p) => !branch || sameBranch(p.branch, branch))
-    .map((p) => ({
+    .map((p) => {
+      const district = resolveDistrictForPoint(p);
+      return {
       id: norm(p.code) || norm(p.documentId) || String(p.id || ""),
       branch: norm(p.branch),
       po: norm(p.po),
       title: norm(p.point_type_raw) || "Точка сбора ПЭС",
-      address: norm(p.address),
+      rawAddress: norm(p.address),
+      address: withDistrict(p.address, district),
       lat: toNum(p.lat),
       lon: toNum(p.lon),
       dispatcherPhone: norm(p.dispatcher_phone),
       type: "assembly",
-    }));
+      };
+    });
 }
 
 async function loadTpDestinations({ branch = "" } = {}) {
