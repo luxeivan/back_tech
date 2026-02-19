@@ -297,8 +297,11 @@ function pickPointMeta(unit, points) {
   const list = points.filter((p) => sameBranch(p.branch, branch));
   if (!list.length) return { po: "", dispatcherPhone: "" };
 
+  // Важно: не добавляем district в матчинг PO.
+  // Округ слишком общий и "перетягивает" подбор в сторону крупного ПО филиала,
+  // из-за чего локальные ПО (например, Гжельское) пропадают из группировки.
   const unitTokens = new Set(
-    matchTokens(`${unit.base_address || ""} ${unit.district || ""} ${unit.pes_name || ""}`)
+    matchTokens(`${unit.base_address || ""} ${unit.pes_name || ""}`)
   );
 
   const scorePoint = (point) => {
