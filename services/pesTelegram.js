@@ -105,8 +105,12 @@ function buildText({ action, items, destination, comment }) {
   const list = formatPesList(items);
   const addr = escapeHtml(destination?.address || "—");
   const coordsHtml = formatCoordsHtml(destination);
-  const phoneHtml = formatPhoneHtml(items[0]?.dispatcherPhone || "—");
-  const po = escapeHtml(items[0]?.po || "—");
+  // Контакты и ПО должны относиться к точке НАЗНАЧЕНИЯ (куда направляется ПЭС),
+  // а не к базовому ПО самой ПЭС.
+  const targetPhone = destination?.dispatcherPhone || items[0]?.dispatcherPhone || "—";
+  const targetPo = destination?.po || items[0]?.po || "—";
+  const phoneHtml = formatPhoneHtml(targetPhone);
+  const po = escapeHtml(targetPo);
   const safeComment = escapeHtml(comment || "");
 
   if (action === "dispatch") {

@@ -523,9 +523,13 @@ async function processCallbackQuery(query) {
   if (action === "pes") {
     const cmd = norm(parts[1] || "");
     const pesId = norm(parts[2] || "");
-    const allowed = new Set(["cancel", "depart", "connect", "ready", "repair"]);
+    const allowed = new Set(["depart", "connect", "ready", "repair"]);
     if (!cmd || !pesId) {
       await tgAnswerCallback(callbackId, "Некорректная команда");
+      return;
+    }
+    if (cmd === "cancel") {
+      await tgAnswerCallback(callbackId, "Отмена выезда через бота отключена");
       return;
     }
     if (!allowed.has(cmd)) {
@@ -753,13 +757,13 @@ function buildPesInlineKeyboard(action, pesId) {
 
   if (action === "dispatch") {
     return {
-      inline_keyboard: [[mk("Фактический выезд", "depart"), mk("Отмена выезда", "cancel")]],
+      inline_keyboard: [[mk("Фактический выезд", "depart")]],
     };
   }
 
   if (action === "depart") {
     return {
-      inline_keyboard: [[mk("Подключена (в работе)", "connect"), mk("Отмена выезда", "cancel")]],
+      inline_keyboard: [[mk("Подключена (в работе)", "connect")]],
     };
   }
 

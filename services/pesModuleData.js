@@ -130,6 +130,12 @@ function branchNeedle(branch) {
   return normLc(branch).replace(/\bфилиал\b/g, "").replace(/[^а-яa-z0-9]/gi, "");
 }
 
+function poNeedle(po) {
+  return normLc(po)
+    .replace(/\b(по|су|ср|уч|участок|филиал)\b/g, "")
+    .replace(/[^а-яa-z0-9]/gi, "");
+}
+
 function sameBranch(a, b) {
   const aNorm = normLc(a);
   const bNorm = normLc(b);
@@ -151,9 +157,20 @@ function matchesBranch(row, branch) {
   const needle = branchNeedle(branch);
   if (!needle) return true;
   const blob = normLc(
-    `${row.subcontrol_area_name || ""} ${row.settlement || ""} ${row.address || ""} ${row.enobj_name || ""}`
+    `${row.subcontrol_area_name || ""} ${row.settlement || ""} ${row.enobj_name || ""}`
   ).replace(/[^а-яa-z0-9]/gi, "");
   return blob.includes(needle);
+}
+
+function buildPoBranchIndex(points) {
+  const map = new Map();
+  for (const p of points) {
+    const key = poNeedle(p.po);
+    const branch = norm(p.branch);
+    if (!key || !branch) continue;
+    if (!map.has(key)) map.set(key, branch);
+  }
+  return map;
 }
 
 async function getToken() {
@@ -436,17 +453,25 @@ async function loadAssemblyDestinations({ branch = "" } = {}) {
 }
 
 async function loadTpDestinations({ branch = "" } = {}) {
-  const branchLc = normLc(branch);
+  const branchNorm = norm(branch);
+  const branchLc = normLc(branchNorm);
   if (!branchLc) return [];
 
-  const rows = await getElectro();
+  const [rows, points] = await Promise.all([getElectro(), getPoints()]);
+  const poBranchIndex = buildPoBranchIndex(points);
+
   return rows
     .filter(isTpLike)
-    .filter((r) => matchesBranch(r, branch))
+    .filter((r) => {
+      const mappedBranch = poBranchIndex.get(poNeedle(r.subcontrol_area_name));
+      if (mappedBranch) return sameBranch(mappedBranch, branchNorm);
+      return matchesBranch(r, branchNorm);
+    })
     .map((r) => ({
       id: `tp-${norm(r.keylink)}`,
       keylink: norm(r.keylink),
-      branch: norm(branch),
+      branch:
+        norm(poBranchIndex.get(poNeedle(r.subcontrol_area_name))) || branchNorm,
       po: norm(r.subcontrol_area_name),
       title: norm(r.enobj_name) || norm(r.keylink),
       address: norm(r.address) || norm(r.settlement) || norm(r.subcontrol_area_name),

@@ -160,11 +160,19 @@ async function pickDestination({
   destinationId,
   branchHint,
 }) {
-  const list =
+  const scopedList =
     destinationType === "tp"
       ? await loadTpDestinations({ branch: branchHint || "" })
       : await loadAssemblyDestinations({ branch: branchHint || "" });
-  const found = list.find((x) => x.id === destinationId);
+  let found = scopedList.find((x) => x.id === destinationId);
+
+  // Защита от рассинхрона справочника/филиала:
+  // если точка не нашлась в "филиальном" списке, пробуем глобальный список.
+  if (!found && destinationType === "assembly") {
+    const globalList = await loadAssemblyDestinations({ branch: "" });
+    found = globalList.find((x) => x.id === destinationId) || null;
+  }
+
   if (!found) return null;
 
   if (mode === "multi" && destinationType !== "assembly") {
@@ -545,6 +553,19 @@ router.get("/destinations", async (req, res) => {
 
 router.post("/command", requireManageRole, async (req, res) => {
   const startedAt = Date.now();
+  const reject400 = (message) => {
+    const msg = String(message || "Bad Request");
+    console.warn("[pes-module] command 400:", {
+      message: msg,
+      action: req.body?.action || null,
+      pesIds: Array.isArray(req.body?.pesIds) ? req.body.pesIds : [],
+      destinationType: req.body?.destinationType || null,
+      destinationId: req.body?.destinationId || null,
+      source: req.body?.source || "web",
+    });
+    return res.status(400).json({ ok: false, message: msg });
+  };
+
   try {
     const {
       action,
@@ -558,7 +579,7 @@ router.post("/command", requireManageRole, async (req, res) => {
     } = req.body || {};
 
     if (!Array.isArray(pesIds) || pesIds.length === 0) {
-      return res.status(400).json({ ok: false, message: "Не выбраны ПЭС" });
+      return reject400("Не выбраны ПЭС");
     }
 
     const snapshot = await loadSnapshot();
@@ -580,10 +601,10 @@ router.post("/command", requireManageRole, async (req, res) => {
         branchHint,
       });
       if (pick?.error) {
-        return res.status(400).json({ ok: false, message: pick.error });
+        return reject400(pick.error);
       }
       if (!pick?.value) {
-        return res.status(400).json({ ok: false, message: "Точка назначения не найдена" });
+        return reject400("Точка назначения не найдена");
       }
     }
 
@@ -591,20 +612,18 @@ router.post("/command", requireManageRole, async (req, res) => {
       const current = effectiveStatus(item);
 
       if (action === "dispatch" && current !== PES_STATUS.READY) {
-        return res.status(400).json({
-          ok: false,
-          message: `ПЭС №${item.number} нельзя отправить: текущий статус ${current}`,
-        });
+        return reject400(
+          `ПЭС №${item.number} нельзя отправить: текущий статус ${current}`
+        );
       }
 
       if (
         action === "depart" &&
         ![PES_STATUS.COMMAND_SENT, PES_STATUS.DELAY].includes(current)
       ) {
-        return res.status(400).json({
-          ok: false,
-          message: `ПЭС №${item.number} нельзя перевести в 'В пути' из статуса ${current}`,
-        });
+        return reject400(
+          `ПЭС №${item.number} нельзя перевести в 'В пути' из статуса ${current}`
+        );
       }
     }
 
