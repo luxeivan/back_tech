@@ -14,6 +14,7 @@ const {
 
 const BOT_TOKEN = String(process.env.PES_TELEGRAM_BOT_TOKEN || "").trim();
 const BOT_ENABLED = String(process.env.PES_BOT_ENABLED || "1") === "1";
+const STRAPI_URL = String(process.env.URL_STRAPI || "").replace(/\/$/, "");
 const LEGACY_SUBS_FILE = path.resolve(__dirname, "../data/pesBotSubscriptions.json");
 const LEGACY_STATE_FILE = path.resolve(__dirname, "../data/pesBotState.json");
 const MIGRATE_JSON_ON_START = String(process.env.PES_BOT_MIGRATE_JSON || "0") === "1";
@@ -27,6 +28,25 @@ function norm(v) {
   return String(v == null ? "" : v).replace(/\s+/g, " ").trim();
 }
 
+function botLog(tag, payload) {
+  if (payload === undefined) {
+    console.log(`[pes-bot] ${tag}`);
+    return;
+  }
+  console.log(`[pes-bot] ${tag}`, payload);
+}
+
+function buildStrapiUrl(endpoint, params = {}) {
+  const base = STRAPI_URL ? `${STRAPI_URL}/api/${endpoint}` : `/api/${endpoint}`;
+  const qs = new URLSearchParams();
+  Object.entries(params || {}).forEach(([k, v]) => {
+    if (v == null || v === "") return;
+    qs.append(k, String(v));
+  });
+  const query = qs.toString();
+  return query ? `${base}?${query}` : base;
+}
+
 function branchNorm(v) {
   return norm(v)
     .toLowerCase()
@@ -34,14 +54,57 @@ function branchNorm(v) {
     .replace(/[^а-яa-z0-9]/gi, "");
 }
 
+function poNorm(v) {
+  return norm(v)
+    .toLowerCase()
+    .replace(/\bпо\b/g, "")
+    .replace(/[^а-яa-z0-9]/gi, "");
+}
+
+function sameBranch(a, b) {
+  return branchNorm(a) === branchNorm(b);
+}
+
+function makePoScopeName(branch, po) {
+  return `ПО: ${norm(branch)} / ${norm(po)}`;
+}
+
+function parsePoScopeName(name) {
+  const m = /^ПО:\s*(.+?)\s*\/\s*(.+)$/i.exec(norm(name));
+  if (!m) return null;
+  return {
+    branch: norm(m[1]),
+    po: norm(m[2]),
+  };
+}
+
+function scopeKeyByName(name) {
+  const poScope = parsePoScopeName(name);
+  if (poScope) {
+    return `po:${branchNorm(poScope.branch)}:${poNorm(poScope.po)}`;
+  }
+  return `br:${branchNorm(name)}`;
+}
+
+function hasScope(list, scopeName) {
+  const target = scopeKeyByName(scopeName);
+  if (!target) return false;
+  return (list || []).some((x) => scopeKeyByName(x) === target);
+}
+
 function canRunBot() {
   return Boolean(BOT_ENABLED && BOT_TOKEN);
 }
 
 function normalizeSubscriber(row) {
-  const branches = manyRelation(row?.branches)
-    .map((b) => norm(b.name))
-    .filter(Boolean);
+  const branchScopes = manyRelation(row?.branches)
+    .map((b) => ({
+      id: Number(b.id || 0),
+      name: norm(b.name),
+    }))
+    .filter((x) => x.name);
+
+  const branches = branchScopes.map((x) => x.name);
 
   return {
     id: row?.id || null,
@@ -53,6 +116,7 @@ function normalizeSubscriber(row) {
     muted: Boolean(row?.muted),
     is_active: row?.is_active !== false,
     subscribe_all: Boolean(row?.subscribe_all),
+    branchScopes,
     branches,
   };
 }
@@ -72,14 +136,29 @@ async function getUserByChatId(chatId) {
   const id = Number(chatId || 0);
   if (!Number.isFinite(id) || id <= 0) return null;
 
-  const row = await fetchFirst(PES_ENDPOINTS.SUBSCRIBERS, {
-    params: {
-      "filters[chat_id][$eq]": id,
-      populate: "branches",
-    },
+  const params = {
+    "filters[chat_id][$eq]": id,
+    populate: "branches",
+  };
+  const url = buildStrapiUrl(PES_ENDPOINTS.SUBSCRIBERS, params);
+  botLog("мои-подписки: запрос в Strapi", {
+    method: "GET",
+    url,
+    chat_id: id,
   });
 
-  return row ? normalizeSubscriber(row) : null;
+  const row = await fetchFirst(PES_ENDPOINTS.SUBSCRIBERS, {
+    params,
+  });
+
+  const normalized = row ? normalizeSubscriber(row) : null;
+  botLog("мои-подписки: ответ Strapi", {
+    chat_id: id,
+    found: Boolean(normalized),
+    subscribe_all: Boolean(normalized?.subscribe_all),
+    branches: Array.isArray(normalized?.branches) ? normalized.branches : [],
+  });
+  return normalized;
 }
 
 async function ensureBranches(branchNames) {
@@ -94,15 +173,22 @@ async function ensureBranches(branchNames) {
     },
   });
   const byNorm = new Map(
-    existing
-      .map((r) => ({ row: r, key: branchNorm(r.name_norm || r.name) }))
-      .filter((x) => x.key)
-      .map((x) => [x.key, x.row])
+    existing.flatMap((r) => {
+      const keys = new Set();
+      const raw = norm(r.name_norm || "");
+      const byName = scopeKeyByName(r.name);
+      if (byName) keys.add(byName);
+      if (raw) {
+        keys.add(raw);
+        if (!raw.includes(":")) keys.add(`br:${raw}`);
+      }
+      return Array.from(keys).map((key) => ({ key, row: r }));
+    }).map((x) => [x.key, x.row])
   );
 
   const out = [];
   for (const name of names) {
-    const key = branchNorm(name);
+    const key = scopeKeyByName(name);
     if (!key) continue;
 
     const found = byNorm.get(key);
@@ -219,7 +305,11 @@ async function getBranchesList() {
   });
 
   const fromBranchesTable = Array.from(
-    new Set(rows.map((x) => norm(x.name)).filter(Boolean))
+    new Set(
+      rows
+        .map((x) => norm(x.name))
+        .filter((name) => name && !parsePoScopeName(name))
+    )
   );
   const existingKeys = new Set(
     fromBranchesTable.map((x) => branchNorm(x)).filter(Boolean)
@@ -253,6 +343,18 @@ async function getBranchesList() {
   });
 
   return Array.from(merged.values()).sort((a, b) => a.localeCompare(b, "ru"));
+}
+
+async function getPoListForBranch(branch) {
+  const items = await loadPesItems();
+  return Array.from(
+    new Set(
+      items
+        .filter((x) => sameBranch(x?.branch, branch))
+        .map((x) => norm(x?.po))
+        .filter(Boolean)
+    )
+  ).sort((a, b) => a.localeCompare(b, "ru"));
 }
 
 function findBranchByText(text, branches) {
@@ -387,7 +489,7 @@ async function sendBranchesList(chatId) {
 
   const keyboard = [];
   for (const b of branches) {
-    keyboard.push([{ text: b, callback_data: `toggle|${b}` }]);
+    keyboard.push([{ text: b, callback_data: `open|${b}` }]);
   }
   keyboard.push([
     { text: "Подписаться на все", callback_data: "suball|" },
@@ -400,12 +502,87 @@ async function sendBranchesList(chatId) {
   });
 }
 
+async function sendPoList(chatId, branch) {
+  const poList = await getPoListForBranch(branch);
+  if (!poList.length) {
+    await tgSendMessage(chatId, `Для филиала "${branch}" список ПО пуст.`);
+    return;
+  }
+
+  const scopeNames = [norm(branch), ...poList.map((po) => makePoScopeName(branch, po))];
+  const rows = await ensureBranches(scopeNames);
+  const byName = new Map(rows.map((x) => [scopeKeyByName(x.name), x]));
+  const user = await getUserByChatId(chatId);
+  const selected = new Set(
+    (Array.isArray(user?.branches) ? user.branches : []).map((x) => scopeKeyByName(x))
+  );
+
+  const keyboard = [];
+  const branchScope = byName.get(scopeKeyByName(branch));
+  if (branchScope?.id) {
+    const checked = selected.has(scopeKeyByName(branch)) ? "✅ " : "";
+    keyboard.push([
+      {
+        text: `${checked}Филиал целиком`,
+        callback_data: `togid|${Number(branchScope.id)}`,
+      },
+    ]);
+  }
+
+  for (const po of poList) {
+    const scopeName = makePoScopeName(branch, po);
+    const scopeRow = byName.get(scopeKeyByName(scopeName));
+    if (!scopeRow?.id) continue;
+    const checked = selected.has(scopeKeyByName(scopeName)) ? "✅ " : "";
+    keyboard.push([
+      {
+        text: `${checked}${po}`,
+        callback_data: `togid|${Number(scopeRow.id)}`,
+      },
+    ]);
+  }
+
+  keyboard.push([{ text: "⬅️ К филиалам", callback_data: "list|" }]);
+  keyboard.push([{ text: "Мои подписки", callback_data: "my|" }]);
+
+  await tgSendMessage(chatId, `Филиал: ${branch}\nВыбери ПО:`, {
+    reply_markup: { inline_keyboard: keyboard },
+  });
+}
+
+async function getBranchScopeById(scopeId) {
+  const id = Number(scopeId || 0);
+  if (!Number.isFinite(id) || id <= 0) return null;
+
+  const row = await fetchFirst(PES_ENDPOINTS.BRANCHES, {
+    params: {
+      "filters[id][$eq]": id,
+    },
+  });
+  return row || null;
+}
+
 function formatUserSubs(user) {
   if (!user) return "Подписки не найдены.";
-  const branches = Array.isArray(user.branches) ? user.branches : [];
+  const raw = Array.isArray(user.branches) ? user.branches : [];
+  const branches = raw.filter((x) => !parsePoScopeName(x));
+  const poScopes = raw
+    .map((x) => parsePoScopeName(x))
+    .filter(Boolean)
+    .map((x) => `${x.branch} / ${x.po}`);
   if (user.subscribe_all) return "Вы подписаны на все филиалы.";
-  if (!branches.length) return "У вас пока нет подписок на филиалы.";
-  return `Ваши подписки:\n${branches.map((x) => `- ${x}`).join("\n")}`;
+  if (!branches.length && !poScopes.length) return "У вас пока нет подписок.";
+
+  const lines = ["Ваши подписки:"];
+  if (branches.length) {
+    lines.push("Филиалы:");
+    branches.forEach((x) => lines.push(`- ${x}`));
+  }
+  if (poScopes.length) {
+    lines.push("ПО:");
+    poScopes.forEach((x) => lines.push(`- ${x}`));
+  }
+  return lines.join("\n");
 }
 
 async function processMessage(msg) {
@@ -424,8 +601,8 @@ async function processMessage(msg) {
       chatId,
       [
         "Бот ПЭС запущен.",
-        "Подписки по филиалам включены.",
-        "Нажми /list и выбери филиалы кнопками.",
+        "Подписки по филиалам и ПО включены.",
+        "Нажми /list, выбери филиал, затем ПО.",
       ].join("\n")
     );
     return;
@@ -436,8 +613,8 @@ async function processMessage(msg) {
       chatId,
       [
         "/list - список филиалов",
-        "/sub <филиал> - подписаться",
-        "/unsub <филиал> - отписаться",
+        "/sub <филиал> - подписаться на филиал",
+        "/unsub <филиал> - отписаться от филиала",
         "/suball - подписаться на все филиалы",
         "/clear - очистить подписки",
         "/my - мои подписки",
@@ -452,8 +629,18 @@ async function processMessage(msg) {
   }
 
   if (lc === "/my") {
+    botLog("мои-подписки: нажата команда", {
+      source: "message",
+      chat_id: Number(chatId) || 0,
+    });
     const user = await getUserByChatId(chatId);
-    await tgSendMessage(chatId, formatUserSubs(user));
+    const textOut = formatUserSubs(user);
+    botLog("мои-подписки: отправка ответа в Telegram", {
+      source: "message",
+      chat_id: Number(chatId) || 0,
+      text: textOut,
+    });
+    await tgSendMessage(chatId, textOut);
     return;
   }
 
@@ -547,9 +734,25 @@ async function processCallbackQuery(query) {
   }
 
   if (action === "my") {
+    botLog("мои-подписки: нажата кнопка", {
+      source: "callback",
+      chat_id: Number(chatId) || 0,
+    });
     const user = await getUserByChatId(chatId);
-    await tgSendMessage(chatId, formatUserSubs(user));
+    const textOut = formatUserSubs(user);
+    botLog("мои-подписки: отправка ответа в Telegram", {
+      source: "callback",
+      chat_id: Number(chatId) || 0,
+      text: textOut,
+    });
+    await tgSendMessage(chatId, textOut);
     await tgAnswerCallback(callbackId, "Готово");
+    return;
+  }
+
+  if (action === "list") {
+    await sendBranchesList(chatId);
+    await tgAnswerCallback(callbackId, "Список филиалов");
     return;
   }
 
@@ -567,6 +770,18 @@ async function processCallbackQuery(query) {
     return;
   }
 
+  if (action === "open") {
+    const branches = await getBranchesList();
+    const branch = findBranchByText(payload, branches);
+    if (!branch) {
+      await tgAnswerCallback(callbackId, "Филиал не найден");
+      return;
+    }
+    await sendPoList(chatId, branch);
+    await tgAnswerCallback(callbackId, "Открыт список ПО");
+    return;
+  }
+
   if (action === "toggle") {
     const branches = await getBranchesList();
     const branch = findBranchByText(payload, branches);
@@ -578,12 +793,36 @@ async function processCallbackQuery(query) {
     const current = Array.isArray(user?.branches) ? user.branches : [];
     let next = current;
     let msg = "";
-    if (current.includes(branch)) {
-      next = current.filter((x) => x !== branch);
+    if (hasScope(current, branch)) {
+      next = current.filter((x) => scopeKeyByName(x) !== scopeKeyByName(branch));
       msg = `Отписка: ${branch}`;
     } else {
       next = [...current, branch];
       msg = `Подписка: ${branch}`;
+    }
+    const saved = await updateUserBranches(chatId, next);
+    await tgSendMessage(chatId, `${msg}\n\n${formatUserSubs(saved)}`);
+    await tgAnswerCallback(callbackId, "Готово");
+    return;
+  }
+
+  if (action === "togid") {
+    const scopeRow = await getBranchScopeById(payload);
+    const scopeName = norm(scopeRow?.name);
+    if (!scopeName) {
+      await tgAnswerCallback(callbackId, "Подписка не найдена");
+      return;
+    }
+    const user = await getUserByChatId(chatId);
+    const current = Array.isArray(user?.branches) ? user.branches : [];
+    let next = current;
+    let msg = "";
+    if (hasScope(current, scopeName)) {
+      next = current.filter((x) => scopeKeyByName(x) !== scopeKeyByName(scopeName));
+      msg = `Отписка: ${scopeName}`;
+    } else {
+      next = [...current, scopeName];
+      msg = `Подписка: ${scopeName}`;
     }
     const saved = await updateUserBranches(chatId, next);
     await tgSendMessage(chatId, `${msg}\n\n${formatUserSubs(saved)}`);
@@ -687,15 +926,27 @@ async function startPesBotPolling() {
   }
 }
 
-function isUserSubscribedToBranch(user, branch) {
+function isUserSubscribedToTarget(user, branch, po) {
   if (!user || user.is_active === false || user.muted) return false;
   if (user.subscribe_all) return true;
 
   const list = Array.isArray(user?.branches) ? user.branches : [];
   if (!list.length) return false;
 
-  const target = branchNorm(branch);
-  return list.some((x) => branchNorm(x) === target);
+  const branchTarget = branchNorm(branch);
+  const byBranch = list.some(
+    (x) => !parsePoScopeName(x) && branchNorm(x) === branchTarget
+  );
+  if (byBranch) return true;
+
+  const poTarget = poNorm(po);
+  if (!poTarget) return false;
+
+  return list.some((x) => {
+    const parsed = parsePoScopeName(x);
+    if (!parsed) return false;
+    return branchNorm(parsed.branch) === branchTarget && poNorm(parsed.po) === poTarget;
+  });
 }
 
 function buildActionTitle(action) {
@@ -818,20 +1069,29 @@ async function sendPesSubscribersNotification({
   if (!list.length) return { ok: true, skipped: true, reason: "empty-items", sent: 0 };
 
   const users = await listUsers();
-  const targets = users.filter((u) => isUserSubscribedToBranch(u, branch));
-  if (!targets.length) {
+  if (!users.length) {
     return { ok: true, skipped: true, reason: "no-subscribers", sent: 0 };
   }
 
-  const prepared = list.map((it) => ({
-    msg: buildBranchNotifyText({ action, branch, items: [it], destination, comment }),
-    reply_markup: buildPesInlineKeyboard(action, it.id),
-  }));
-
   let sent = 0;
   let failed = 0;
-  for (const user of targets) {
-    for (const msg of prepared) {
+  let total = 0;
+
+  for (const user of users) {
+    for (const it of list) {
+      const eventBranch = norm(it?.branch) || norm(branch);
+      if (!isUserSubscribedToTarget(user, eventBranch, it?.po)) continue;
+      total += 1;
+      const msg = {
+        msg: buildBranchNotifyText({
+          action,
+          branch: eventBranch,
+          items: [it],
+          destination,
+          comment,
+        }),
+        reply_markup: buildPesInlineKeyboard(action, it.id),
+      };
       try {
         await tgSendMessage(
           user.chat_id,
@@ -854,7 +1114,8 @@ async function sendPesSubscribersNotification({
       }
     }
   }
-  return { ok: failed === 0, sent, failed, total: targets.length * prepared.length };
+  if (!total) return { ok: true, skipped: true, reason: "no-matching-subscribers", sent: 0 };
+  return { ok: failed === 0, sent, failed, total };
 }
 
 module.exports = {
