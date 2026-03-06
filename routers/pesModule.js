@@ -160,17 +160,18 @@ async function pickDestination({
   destinationId,
   branchHint,
 }) {
+  const destinationKey = String(destinationId || "").trim();
   const scopedList =
     destinationType === "tp"
       ? await loadTpDestinations({ branch: branchHint || "" })
       : await loadAssemblyDestinations({ branch: branchHint || "" });
-  let found = scopedList.find((x) => x.id === destinationId);
+  let found = scopedList.find((x) => String(x.id || "") === destinationKey);
 
   // Защита от рассинхрона справочника/филиала:
   // если точка не нашлась в "филиальном" списке, пробуем глобальный список.
   if (!found && destinationType === "assembly") {
     const globalList = await loadAssemblyDestinations({ branch: "" });
-    found = globalList.find((x) => x.id === destinationId) || null;
+    found = globalList.find((x) => String(x.id || "") === destinationKey) || null;
   }
 
   if (!found) return null;

@@ -83,10 +83,59 @@ function pad2(n) {
   return String(n).padStart(2, "0");
 }
 
+function parseDateInput(v) {
+  if (!v) return null;
+  if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
+
+  if (typeof v === "number") {
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  const s = String(v).trim();
+  if (!s) return null;
+
+  // Try native parser first (ISO with timezone works here).
+  let d = new Date(s);
+  if (!isNaN(d.getTime())) return d;
+
+  // dd.mm.yyyy [HH:MM[:SS]] (source can come exactly in this format)
+  let m = s.match(
+    /^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/
+  );
+  if (m) {
+    const dd = pad2(m[1]);
+    const mm = pad2(m[2]);
+    const yyyy = m[3];
+    const HH = pad2(m[4] || "00");
+    const MM = pad2(m[5] || "00");
+    const SS = pad2(m[6] || "00");
+    d = new Date(`${yyyy}-${mm}-${dd}T${HH}:${MM}:${SS}+03:00`);
+    if (!isNaN(d.getTime())) return d;
+  }
+
+  // yyyy-mm-dd [HH:MM[:SS]] without timezone
+  m = s.match(
+    /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/
+  );
+  if (m) {
+    const yyyy = m[1];
+    const mm = pad2(m[2]);
+    const dd = pad2(m[3]);
+    const HH = pad2(m[4] || "00");
+    const MM = pad2(m[5] || "00");
+    const SS = pad2(m[6] || "00");
+    d = new Date(`${yyyy}-${mm}-${dd}T${HH}:${MM}:${SS}+03:00`);
+    if (!isNaN(d.getTime())) return d;
+  }
+
+  return null;
+}
+
 function toDateEDDS(v, withTime = false) {
   if (!v) return null;
-  const d = new Date(v);
-  if (isNaN(d.getTime())) return null;
+  const d = parseDateInput(v);
+  if (!d) return null;
 
   try {
     if (withTime) {

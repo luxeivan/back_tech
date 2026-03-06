@@ -710,7 +710,7 @@ async function processCallbackQuery(query) {
   if (action === "pes") {
     const cmd = norm(parts[1] || "");
     const pesId = norm(parts[2] || "");
-    const allowed = new Set(["depart", "connect", "ready", "repair"]);
+    const allowed = new Set(["depart", "connect", "ready"]);
     if (!cmd || !pesId) {
       await tgAnswerCallback(callbackId, "Некорректная команда");
       return;
@@ -1020,7 +1020,7 @@ function buildPesInlineKeyboard(action, pesId) {
 
   if (action === "connect") {
     return {
-      inline_keyboard: [[mk("Вернуть в резерв", "ready"), mk("В ремонт", "repair")]],
+      inline_keyboard: [[mk("Вернуть в резерв", "ready")]],
     };
   }
 
@@ -1029,7 +1029,7 @@ function buildPesInlineKeyboard(action, pesId) {
   }
 
   if (action === "ready") {
-    return { inline_keyboard: [[mk("В ремонт", "repair")]] };
+    return null;
   }
 
   return null;

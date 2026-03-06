@@ -20,6 +20,41 @@ const TTL_UNITS_MS = 60 * 1000;
 const TTL_POINTS_MS = 60 * 1000;
 const TTL_ELECTRO_MS = 10 * 60 * 1000;
 
+const BRANCH_CANONICAL = new Map([
+  ["домодедовск", "ДОМОДЕДОВСКИЙ"],
+  ["коломенск", "КОЛОМЕНСКИЙ"],
+  ["красногорск", "КРАСНОГОРСКИЙ"],
+  ["мытищ", "МЫТИЩИНСКИЙ"],
+  ["одинцов", "ОДИНЦОВСКИЙ"],
+  ["ореховозуев", "ОРЕХОВО-ЗУЕВСКИЙ"],
+  ["павловопосад", "ПАВЛОВО-ПОСАДСКИЙ"],
+  ["раменск", "РАМЕНСКИЙ"],
+  ["сергиевопосад", "СЕРГИЕВО-ПОСАДСКИЙ"],
+  ["щелков", "ЩЕЛКОВСКИЙ"],
+  ["талдом", "СЕРГИЕВО-ПОСАДСКИЙ"], // фактический перенос Талдомского модуля в Сергиев-Посад
+]);
+
+const PO_BRANCH_OVERRIDES = new Map([
+  ["дзержинск", "ДОМОДЕДОВСКИЙ"],
+  ["королевск", "МЫТИЩИНСКИЙ"],
+  ["голицынск", "ОДИНЦОВСКИЙ"],
+  ["голицинск", "ОДИНЦОВСКИЙ"],
+  ["краснознамен", "ОДИНЦОВСКИЙ"],
+  ["щелковск", "ЩЕЛКОВСКИЙ"],
+]);
+
+const UNIT_BRANCH_OVERRIDES = new Map([
+  ["115", "СЕРГИЕВО-ПОСАДСКИЙ"],
+]);
+
+const PO_TITLE_OVERRIDES = new Map([
+  ["дзержинск", "Дзержинское ПО"],
+  ["голицинск", "Голицынское ПО"],
+  ["голицынск", "Голицынское ПО"],
+  ["краснознамен", "Краснознаменное ПО"],
+  ["щелков", "Щелковское ПО"],
+]);
+
 function norm(v) {
   return String(v == null ? "" : v).replace(/\s+/g, " ").trim();
 }
@@ -127,13 +162,35 @@ function isDigitsOnly(v) {
 }
 
 function branchNeedle(branch) {
-  return normLc(branch).replace(/\bфилиал\b/g, "").replace(/[^а-яa-z0-9]/gi, "");
+  return normLc(branch)
+    .replace(/ё/g, "е")
+    .replace(/\bфилиал\b/g, "")
+    .replace(/[^а-яa-z0-9]/gi, "");
 }
 
 function poNeedle(po) {
   return normLc(po)
+    .replace(/ё/g, "е")
     .replace(/\b(по|су|ср|уч|участок|филиал)\b/g, "")
     .replace(/[^а-яa-z0-9]/gi, "");
+}
+
+function resolvePoBranchOverride(poOrKey) {
+  const key = poNeedle(poOrKey);
+  if (!key) return "";
+  for (const [needle, label] of PO_BRANCH_OVERRIDES.entries()) {
+    if (key.includes(needle) || needle.includes(key)) return label;
+  }
+  return "";
+}
+
+function canonicalPoTitle(po) {
+  const key = poNeedle(po);
+  if (!key) return norm(po);
+  for (const [needle, label] of PO_TITLE_OVERRIDES.entries()) {
+    if (key.includes(needle) || needle.includes(key)) return label;
+  }
+  return norm(po);
 }
 
 function sameBranch(a, b) {
@@ -144,6 +201,17 @@ function sameBranch(a, b) {
   const bNeedle = branchNeedle(b);
   if (!aNeedle || !bNeedle) return false;
   return aNeedle.includes(bNeedle) || bNeedle.includes(aNeedle);
+}
+
+function canonicalBranch(branch) {
+  const src = norm(branch);
+  if (!src) return "";
+  const key = branchNeedle(src);
+  if (!key) return src;
+  for (const [needle, label] of BRANCH_CANONICAL.entries()) {
+    if (key.includes(needle) || needle.includes(key)) return label;
+  }
+  return src.toUpperCase();
 }
 
 function isTpLike(row) {
@@ -163,14 +231,31 @@ function matchesBranch(row, branch) {
 }
 
 function buildPoBranchIndex(points) {
-  const map = new Map();
+  const counters = new Map();
   for (const p of points) {
     const key = poNeedle(p.po);
-    const branch = norm(p.branch);
+    const branch = canonicalBranch(p.branch);
     if (!key || !branch) continue;
-    if (!map.has(key)) map.set(key, branch);
+    if (!counters.has(key)) counters.set(key, new Map());
+    const branchMap = counters.get(key);
+    branchMap.set(branch, Number(branchMap.get(branch) || 0) + 1);
   }
-  return map;
+  const out = new Map();
+  for (const [key, branchMap] of counters.entries()) {
+    const forced = resolvePoBranchOverride(key);
+    if (forced) {
+      out.set(key, forced);
+      continue;
+    }
+    const selected = Array.from(branchMap.entries())
+      .sort((a, b) => {
+        const dc = Number(b[1] || 0) - Number(a[1] || 0);
+        if (dc !== 0) return dc;
+        return String(a[0] || "").localeCompare(String(b[0] || ""), "ru");
+      })[0]?.[0];
+    if (selected) out.set(key, selected);
+  }
+  return out;
 }
 
 async function getToken() {
@@ -387,7 +472,9 @@ async function loadPesItems() {
         id: norm(u.code) || norm(u.documentId) || String(u.id || ""),
         number: norm(u.garage_number),
         name: norm(u.pes_name) || norm(u.vehicle_plate) || "ПЭС",
-        branch: norm(u.branch),
+        branch: canonicalBranch(
+          UNIT_BRANCH_OVERRIDES.get(norm(u.garage_number)) || norm(u.branch)
+        ),
         po: meta.po,
         powerKw: toNum(u.power_kw_nominal) ?? toNum(u.power_kw_max) ?? null,
         model: norm(u.generator_model),
@@ -439,7 +526,7 @@ async function loadAssemblyDestinations({ branch = "" } = {}) {
       const district = resolveDistrictForPoint(p);
       return {
       id: norm(p.code) || norm(p.documentId) || String(p.id || ""),
-      branch: norm(p.branch),
+      branch: canonicalBranch(p.branch),
       po: norm(p.po),
       title: norm(p.point_type_raw) || "Точка сбора ПЭС",
       rawAddress: norm(p.address),
@@ -453,7 +540,7 @@ async function loadAssemblyDestinations({ branch = "" } = {}) {
 }
 
 async function loadTpDestinations({ branch = "" } = {}) {
-  const branchNorm = norm(branch);
+  const branchNorm = canonicalBranch(branch);
   const branchLc = normLc(branchNorm);
   if (!branchLc) return [];
 
@@ -463,7 +550,10 @@ async function loadTpDestinations({ branch = "" } = {}) {
   return rows
     .filter(isTpLike)
     .filter((r) => {
-      const mappedBranch = poBranchIndex.get(poNeedle(r.subcontrol_area_name));
+      const key = poNeedle(r.subcontrol_area_name);
+      const forcedBranch = resolvePoBranchOverride(key);
+      if (forcedBranch) return sameBranch(forcedBranch, branchNorm);
+      const mappedBranch = poBranchIndex.get(key) || "";
       if (mappedBranch) return sameBranch(mappedBranch, branchNorm);
       return matchesBranch(r, branchNorm);
     })
@@ -471,8 +561,12 @@ async function loadTpDestinations({ branch = "" } = {}) {
       id: `tp-${norm(r.keylink)}`,
       keylink: norm(r.keylink),
       branch:
-        norm(poBranchIndex.get(poNeedle(r.subcontrol_area_name))) || branchNorm,
-      po: norm(r.subcontrol_area_name),
+        canonicalBranch(
+          resolvePoBranchOverride(poNeedle(r.subcontrol_area_name)) ||
+            poBranchIndex.get(poNeedle(r.subcontrol_area_name)) ||
+            branchNorm
+        ) || branchNorm,
+      po: canonicalPoTitle(r.subcontrol_area_name),
       title: norm(r.enobj_name) || norm(r.keylink),
       address: norm(r.address) || norm(r.settlement) || norm(r.subcontrol_area_name),
       lat: toNum(r.lat),
