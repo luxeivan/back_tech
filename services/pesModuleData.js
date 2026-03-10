@@ -156,6 +156,13 @@ function toNum(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+function toBool(v) {
+  if (typeof v === "boolean") return v;
+  const s = normLc(v);
+  if (!s) return false;
+  return ["true", "1", "да", "yes", "y"].includes(s);
+}
+
 function isDigitsOnly(v) {
   const s = norm(v);
   return Boolean(s) && /^\d+$/.test(s);
@@ -173,6 +180,13 @@ function poNeedle(po) {
     .replace(/ё/g, "е")
     .replace(/\b(по|су|ср|уч|участок|филиал)\b/g, "")
     .replace(/[^а-яa-z0-9]/gi, "");
+}
+
+function samePo(a, b) {
+  const aNorm = poNeedle(a);
+  const bNorm = poNeedle(b);
+  if (!aNorm || !bNorm) return false;
+  return aNorm === bNorm || aNorm.includes(bNorm) || bNorm.includes(aNorm);
 }
 
 function resolvePoBranchOverride(poOrKey) {
@@ -325,11 +339,17 @@ async function getUnits() {
 
   let rows = [];
   try {
-    rows = await fetchAll(ENDPOINT_UNITS, [...baseFields, "po"], token);
+    rows = await fetchAll(ENDPOINT_UNITS, [...baseFields, "po", "prioritet"], token);
   } catch (e) {
     const status = Number(e?.response?.status || 0);
     if (status !== 400) throw e;
-    rows = await fetchAll(ENDPOINT_UNITS, baseFields, token);
+    try {
+      rows = await fetchAll(ENDPOINT_UNITS, [...baseFields, "po"], token);
+    } catch (e2) {
+      const status2 = Number(e2?.response?.status || 0);
+      if (status2 !== 400) throw e2;
+      rows = await fetchAll(ENDPOINT_UNITS, baseFields, token);
+    }
   }
   cache.units = { ts: now, rows };
   return rows;
@@ -475,7 +495,8 @@ async function loadPesItems() {
         branch: canonicalBranch(
           UNIT_BRANCH_OVERRIDES.get(norm(u.garage_number)) || norm(u.branch)
         ),
-        po: meta.po,
+        po: norm(u.po) || meta.po,
+        prioritet: toBool(u.prioritet),
         powerKw: toNum(u.power_kw_nominal) ?? toNum(u.power_kw_max) ?? null,
         model: norm(u.generator_model),
         status: "ready",
@@ -539,10 +560,11 @@ async function loadAssemblyDestinations({ branch = "" } = {}) {
     });
 }
 
-async function loadTpDestinations({ branch = "" } = {}) {
+async function loadTpDestinations({ branch = "", po = "" } = {}) {
   const branchNorm = canonicalBranch(branch);
-  const branchLc = normLc(branchNorm);
-  if (!branchLc) return [];
+  const hasBranchFilter = Boolean(normLc(branchNorm));
+  const poNorm = norm(po);
+  const hasPoFilter = Boolean(poNorm);
 
   const [rows, points] = await Promise.all([getElectro(), getPoints()]);
   const poBranchIndex = buildPoBranchIndex(points);
@@ -552,10 +574,10 @@ async function loadTpDestinations({ branch = "" } = {}) {
     .filter((r) => {
       const key = poNeedle(r.subcontrol_area_name);
       const forcedBranch = resolvePoBranchOverride(key);
-      if (forcedBranch) return sameBranch(forcedBranch, branchNorm);
+      if (forcedBranch) return hasBranchFilter ? sameBranch(forcedBranch, branchNorm) : true;
       const mappedBranch = poBranchIndex.get(key) || "";
-      if (mappedBranch) return sameBranch(mappedBranch, branchNorm);
-      return matchesBranch(r, branchNorm);
+      if (mappedBranch) return hasBranchFilter ? sameBranch(mappedBranch, branchNorm) : true;
+      return hasBranchFilter ? matchesBranch(r, branchNorm) : true;
     })
     .map((r) => ({
       id: `tp-${norm(r.keylink)}`,
@@ -565,13 +587,42 @@ async function loadTpDestinations({ branch = "" } = {}) {
           resolvePoBranchOverride(poNeedle(r.subcontrol_area_name)) ||
             poBranchIndex.get(poNeedle(r.subcontrol_area_name)) ||
             branchNorm
-        ) || branchNorm,
+        ) || branchNorm || "",
       po: canonicalPoTitle(r.subcontrol_area_name),
       title: norm(r.enobj_name) || norm(r.keylink),
       address: norm(r.address) || norm(r.settlement) || norm(r.subcontrol_area_name),
       lat: toNum(r.lat),
       lon: toNum(r.lon),
       type: "tp",
+    }))
+    .filter((x) => (hasPoFilter ? samePo(x.po, poNorm) : true));
+}
+
+async function loadTpHints() {
+  const [rows, points] = await Promise.all([getElectro(), getPoints()]);
+  const poBranchIndex = buildPoBranchIndex(points);
+
+  const map = new Map();
+
+  for (const r of rows) {
+    if (!isTpLike(r)) continue;
+
+    const key = poNeedle(r.subcontrol_area_name);
+    const forcedBranch = resolvePoBranchOverride(key);
+    const mappedBranch = poBranchIndex.get(key) || "";
+    const branch = canonicalBranch(forcedBranch || mappedBranch || "");
+    const po = canonicalPoTitle(r.subcontrol_area_name);
+    if (!branch || !po) continue;
+
+    if (!map.has(branch)) map.set(branch, new Set());
+    map.get(branch).add(po);
+  }
+
+  return Array.from(map.entries())
+    .sort((a, b) => String(a[0]).localeCompare(String(b[0]), "ru"))
+    .map(([branch, poSet]) => ({
+      branch,
+      po: Array.from(poSet).sort((a, b) => String(a).localeCompare(String(b), "ru")),
     }));
 }
 
@@ -579,4 +630,5 @@ module.exports = {
   loadPesItems,
   loadAssemblyDestinations,
   loadTpDestinations,
+  loadTpHints,
 };

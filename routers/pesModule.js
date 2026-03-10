@@ -4,6 +4,7 @@ const {
   loadPesItems,
   loadAssemblyDestinations,
   loadTpDestinations,
+  loadTpHints,
 } = require("../services/pesModuleData");
 const { sendPesTelegram } = require("../services/pesTelegram");
 const { sendPesSubscribersNotification } = require("../services/pesBot");
@@ -106,6 +107,7 @@ function toDto(item) {
     name: item.name,
     branch: item.branch,
     po: item.po,
+    prioritet: Boolean(item.prioritet),
     powerKw: item.powerKw,
     model: item.model,
     baseAddress: item.baseAddress,
@@ -538,17 +540,28 @@ router.get("/config", (req, res) => {
 router.get("/destinations", async (req, res) => {
   const mode = String(req.query.mode || "single").toLowerCase();
   const branch = String(req.query.branch || "").trim();
+  const po = String(req.query.po || "").trim();
+  const destinationType = String(req.query.destinationType || "").trim().toLowerCase();
   const tpAllowed = mode !== "multi";
 
-  const assembly = await loadAssemblyDestinations({ branch });
-  const tp = tpAllowed ? await loadTpDestinations({ branch }) : [];
+  const needAssembly = destinationType !== "tp";
+  const needTp = tpAllowed && destinationType !== "assembly";
+
+  const assembly = needAssembly ? await loadAssemblyDestinations({ branch }) : [];
+  const tpHints = await loadTpHints();
+  // Для ТП без выбранного филиала не тянем тяжелый полный справочник:
+  // UI сначала показывает филиалы/ПО, затем запрашивает ТП уже в контексте филиала.
+  const tp = needTp && branch ? await loadTpDestinations({ branch, po }) : [];
 
   res.json({
     ok: true,
     mode,
+    destinationType: destinationType || null,
     branch: branch || "",
+    po: po || "",
     assembly: clone(assembly),
     tp: clone(tp),
+    tpHints: clone(tpHints),
   });
 });
 

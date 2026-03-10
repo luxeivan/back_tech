@@ -9,7 +9,9 @@
     "pes:import:dry": "node scripts/importPesDirectories.js",
     "pes:import": "node scripts/importPesDirectories.js --apply",
     "pes:branches:po:dry": "node scripts/importPesBranchesPo.js",
-    "pes:branches:po": "node scripts/importPesBranchesPo.js --apply"
+    "pes:branches:po": "node scripts/importPesBranchesPo.js --apply",
+    "pes:units:po-prioritet:dry": "node scripts/updatePesUnitsPoPriority.js",
+    "pes:units:po-prioritet": "node scripts/updatePesUnitsPoPriority.js --apply"
   },
   "author": "",
   "license": "ISC",
