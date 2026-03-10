@@ -7,7 +7,9 @@
     "dev": "nodemon app.js",
     "start": "node app.js",
     "pes:import:dry": "node scripts/importPesDirectories.js",
-    "pes:import": "node scripts/importPesDirectories.js --apply"
+    "pes:import": "node scripts/importPesDirectories.js --apply",
+    "pes:branches:po:dry": "node scripts/importPesBranchesPo.js",
+    "pes:branches:po": "node scripts/importPesBranchesPo.js --apply"
   },
   "author": "",
   "license": "ISC",
