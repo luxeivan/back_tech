@@ -229,6 +229,27 @@ function clipLog(s, limit = 1500) {
     : str;
 }
 
+function logEddsPayloadFields(payload) {
+  const data = payload && typeof payload === "object" ? payload : {};
+  const entries = Object.entries(data);
+  console.log(`[ЕДДС] Итоговый payload: полей=${entries.length}`);
+  for (const [key, value] of entries) {
+    let rendered;
+    if (value == null) {
+      rendered = String(value);
+    } else if (typeof value === "object") {
+      try {
+        rendered = JSON.stringify(value);
+      } catch {
+        rendered = "[unserializable object]";
+      }
+    } else {
+      rendered = String(value);
+    }
+    console.log(`[ЕДДС][payload] ${key} = ${clipLog(rendered, 700)}`);
+  }
+}
+
 function runCurl(url, payload, { debug } = {}) {
   return new Promise((resolve) => {
     try {
@@ -357,6 +378,7 @@ router.post("/", async (req, res) => {
   }
 
   const payload = req.body ?? {};
+  logEddsPayloadFields(payload);
 
   try {
     const rawStr = JSON.stringify(payload, null, 2);
