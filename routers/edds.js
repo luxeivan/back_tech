@@ -229,25 +229,93 @@ function clipLog(s, limit = 1500) {
     : str;
 }
 
-function logEddsPayloadFields(payload) {
-  const data = payload && typeof payload === "object" ? payload : {};
-  const entries = Object.entries(data);
-  console.log(`[ЕДДС] Итоговый payload: полей=${entries.length}`);
-  for (const [key, value] of entries) {
-    let rendered;
-    if (value == null) {
-      rendered = String(value);
-    } else if (typeof value === "object") {
-      try {
-        rendered = JSON.stringify(value);
-      } catch {
-        rendered = "[unserializable object]";
-      }
-    } else {
-      rendered = String(value);
+const EDDS_LOG_ORDER = [
+  "incident_id",
+  "type",
+  "status",
+  "time_create",
+  "plan_date_close",
+  "district_id",
+  "count_people",
+  "resources",
+  "shutdown_reason",
+  "description",
+  "mkd_count",
+  "places_count",
+  "hospital_count",
+  "polyclinic_count",
+  "school_count",
+  "kindergarten_count",
+  "boiler_room_count",
+  "water_intake_count",
+  "canalization_pumping_count",
+  "social_objects_summ",
+  "electric_lines",
+  "energy_substation",
+  "transformer_station",
+  "distribution_station",
+  "involved_forces",
+  "required_forces",
+  "mkd",
+  "school_objects",
+  "kindergarten_objects",
+  "hospital_objects",
+  "polyclinic_objects",
+  "boiler_room_objects",
+  "water_intake_objects",
+  "canalization_pumping_objects",
+  "snt_objects",
+];
+
+function renderLogValue(value) {
+  if (value == null) return String(value);
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "[unserializable object]";
     }
-    console.log(`[ЕДДС][payload] ${key} = ${clipLog(rendered, 700)}`);
   }
+  return String(value);
+}
+
+function logEddsPayloadFields(payload, { debug = false, reqId = "" } = {}) {
+  const data = payload && typeof payload === "object" ? payload : {};
+  const presentKeys = Object.keys(data);
+  const orderedKeys = [
+    ...EDDS_LOG_ORDER.filter((key) => presentKeys.includes(key)),
+    ...presentKeys
+      .filter((key) => !EDDS_LOG_ORDER.includes(key))
+      .sort((a, b) => a.localeCompare(b, "ru")),
+  ];
+
+  console.log("[ЕДДС] ========================================");
+  console.log(
+    `[ЕДДС] Payload на отправку` +
+      (reqId ? ` reqId=${reqId}` : "") +
+      ` incident_id=${data.incident_id || "?"}` +
+      ` status=${data.status || "?"}` +
+      ` type=${data.type || "?"}`
+  );
+  console.log(`[ЕДДС] Полей верхнего уровня: ${orderedKeys.length}`);
+
+  for (const key of orderedKeys) {
+    const rendered = renderLogValue(data[key]);
+    console.log(`[ЕДДС][field] ${key.padEnd(28, " ")} = ${clipLog(rendered, 900)}`);
+  }
+
+  if (debug) {
+    try {
+      const rawStr = JSON.stringify(data, null, 2);
+      console.log(
+        `[ЕДДС] Полный JSON (${Buffer.byteLength(rawStr, "utf8")} байт):\n${rawStr}`
+      );
+    } catch (e) {
+      console.log(`[ЕДДС] Полный JSON не читается: ${e.message}`);
+    }
+  }
+
+  console.log("[ЕДДС] ========================================");
 }
 
 function runCurl(url, payload, { debug } = {}) {
@@ -378,19 +446,7 @@ router.post("/", async (req, res) => {
   }
 
   const payload = req.body ?? {};
-  logEddsPayloadFields(payload);
-
-  try {
-    const rawStr = JSON.stringify(payload, null, 2);
-    console.log(
-      `[ЕДДС] Входящий JSON (${Buffer.byteLength(
-        rawStr,
-        "utf8"
-      )} байт):\n${rawStr}`
-    );
-  } catch (e) {
-    console.log(`[ЕДДС] Входящий JSON не читается: ${e.message}`);
-  }
+  logEddsPayloadFields(payload, { debug, reqId });
 
   if (dryRun) {
     console.log(`[ЕДДС] Режим DRY RUN — внешний запрос не выполняется`);
