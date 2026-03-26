@@ -230,7 +230,7 @@ function buildEddsPayload(tnLike) {
 
   const fioWork = "Оперативный дежурный САЦ";
   const fioPhone = "+74957803976";
-  const shutdownReason = "Электропробой КЛ, ВЛ";
+  const shutdownReason = "Электропробой КЛ";
 
   const description = clean(obj?.description);
 
