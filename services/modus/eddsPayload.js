@@ -230,6 +230,7 @@ function buildEddsPayload(tnLike) {
 
   const fioWork = "Оперативный дежурный САЦ";
   const fioPhone = "+74957803976";
+  const shutdownReason = "Электропробой КЛ, ВЛ";
 
   const description = clean(obj?.description);
 
@@ -347,6 +348,7 @@ function buildEddsPayload(tnLike) {
   if (countPeople != null) out.count_people = String(Number(countPeople));
   if (fioWork) out.fio_response_work = String(fioWork);
   if (fioPhone) out.fio_response_phone = String(fioPhone);
+  if (shutdownReason) out.shutdown_reason = String(shutdownReason);
   if (description) out.description = String(description);
   if (Array.isArray(resources)) out.resources = resources.map(Number);
 
