@@ -5,9 +5,9 @@ const {
   loadAssemblyDestinations,
   loadTpDestinations,
   loadTpHints,
-} = require("../services/pesModuleData");
-const { sendPesTelegram } = require("../services/pesTelegram");
-const { sendPesSubscribersNotification } = require("../services/pesBot");
+} = require("../services/pes/pesModuleData");
+const { sendPesTelegram } = require("../services/pes/pesTelegram");
+const { sendPesSubscribersNotification } = require("../services/pes/pesBot");
 const { logAuditFromReq } = require("../services/auditLogger");
 const {
   PES_ENDPOINTS,
@@ -16,7 +16,7 @@ const {
   createOne,
   updateOne,
   oneRelation,
-} = require("../services/pesStrapiStore");
+} = require("../services/pes/pesStrapiStore");
 
 const router = express.Router();
 

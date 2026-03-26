@@ -1,5 +1,5 @@
 const axios = require("axios");
-const { getJwt } = require("./modus/strapi");
+const { getJwt } = require("../modus/strapi");
 
 const STRAPI_URL = String(process.env.URL_STRAPI || "").replace(/\/$/, "");
 const STRAPI_API_TOKEN = String(process.env.STRAPI_API_TOKEN || "").trim();

@@ -125,6 +125,11 @@ back_tech/
 - `T3_USER`
 - `T3_PSWD`
 - `T3_TOKEN`
+- `PES_TELEGRAM_BOT_TOKEN`
+- `PES_BOT_ENABLED`
+- `PES_MAX_BOT_TOKEN`
+- `PES_MAX_BOT_ENABLED`
+- `PES_MAX_API_BASE` (опционально, по умолчанию `https://platform-api.max.ru`)
 
 ### Аудит / ClickHouse
 

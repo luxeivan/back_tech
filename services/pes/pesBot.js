@@ -15,8 +15,8 @@ const {
 const BOT_TOKEN = String(process.env.PES_TELEGRAM_BOT_TOKEN || "").trim();
 const BOT_ENABLED = String(process.env.PES_BOT_ENABLED || "1") === "1";
 const STRAPI_URL = String(process.env.URL_STRAPI || "").replace(/\/$/, "");
-const LEGACY_SUBS_FILE = path.resolve(__dirname, "../data/pesBotSubscriptions.json");
-const LEGACY_STATE_FILE = path.resolve(__dirname, "../data/pesBotState.json");
+const LEGACY_SUBS_FILE = path.resolve(__dirname, "../../data/pesBotSubscriptions.json");
+const LEGACY_STATE_FILE = path.resolve(__dirname, "../../data/pesBotState.json");
 const MIGRATE_JSON_ON_START = String(process.env.PES_BOT_MIGRATE_JSON || "0") === "1";
 
 const TG_BASE = BOT_TOKEN ? `https://api.telegram.org/bot${BOT_TOKEN}` : "";
