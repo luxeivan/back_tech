@@ -6,8 +6,8 @@ const {
   loadTpDestinations,
   loadTpHints,
 } = require("../services/pes/pesModuleData");
-const { sendPesTelegram } = require("../services/pes/pesTelegram");
-const { sendPesSubscribersNotification } = require("../services/pes/pesBot");
+const { sendPesTelegram } = require("../services/pes/tg/pesTelegram");
+const { sendPesSubscribersNotification } = require("../services/pes/tg/pesBot");
 const { logAuditFromReq } = require("../services/auditLogger");
 const {
   PES_ENDPOINTS,

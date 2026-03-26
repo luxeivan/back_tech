@@ -11,7 +11,7 @@ const auditRoutes = require("./routers/audit");
 
 const webhooks = require("./routers/webhooks");
 const { sseHandler, broadcast } = require("./services/sse");
-const { startPesBotPolling } = require("./services/pes/pesBot");
+const { startPesBotPolling } = require("./services/pes/tg/pesBot");
 const { startPesMaxBotPolling } = require("./services/pes/max/pesMaxBot");
 
 require("dotenv").config();

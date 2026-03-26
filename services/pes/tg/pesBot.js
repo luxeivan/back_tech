@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
-const { loadPesItems } = require("./pesModuleData");
+const { loadPesItems } = require("../pesModuleData");
 const { buildText: buildPesTelegramText } = require("./pesTelegram");
 const {
   PES_ENDPOINTS,
@@ -10,7 +10,7 @@ const {
   createOne,
   updateOne,
   manyRelation,
-} = require("./pesStrapiStore");
+} = require("../pesStrapiStore");
 
 const BOT_TOKEN = String(process.env.PES_TELEGRAM_BOT_TOKEN || "").trim();
 const BOT_ENABLED = String(process.env.PES_BOT_ENABLED || "1") === "1";
