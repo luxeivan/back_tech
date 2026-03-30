@@ -75,6 +75,34 @@ async function mesAuth() {
   return session;
 }
 
+async function mesAuthDiagnostic() {
+  if (!AUTH_BASE || !MES_LOGIN || !MES_PASSWORD) {
+    throw new Error("MES_* не настроены в .env");
+  }
+
+  const params = {
+    action: "auth",
+    login: MES_LOGIN,
+    pwd_password: MES_PASSWORD,
+  };
+
+  console.log("[МосЭнергоСбыт] Диагностика: попытка 1 из 1");
+  console.log("[МосЭнергоСбыт] Диагностика: отправляем action=auth");
+
+  const startedAt = Date.now();
+  const { data } = await axios.get(AUTH_BASE, {
+    params,
+    timeout: 12000,
+  });
+  const durationMs = Date.now() - startedAt;
+
+  console.log(`[МосЭнергоСбыт] Диагностика: внешний сервер ответил за ${durationMs}мс`);
+
+  const session = data?.data?.[0]?.session;
+  if (!session) throw new Error("Не получили session от СУВК");
+  return { session, raw: data, durationMs };
+}
+
 /* ---------------- mapping ---------------- */
 function mapNotification(tn) {
   const raw = tn?.data?.data || {};
@@ -356,19 +384,66 @@ router.get("/ping", async (req, res) => {
 
 // Диагностика авторизации
 router.get("/auth-test", async (_req, res) => {
+  const startedAt = Date.now();
+  const startedIso = new Date(startedAt).toISOString();
+
+  console.log("[МосЭнергоСбыт] Тест авторизации: старт");
+  console.log(`[МосЭнергоСбыт] AUTH_BASE: ${AUTH_BASE || "не задан"}`);
+  console.log("[МосЭнергоСбыт] Режим диагностики: timeout=12000мс, retry=1");
+
   try {
-    const session = await mesAuth();
-    return res.json({ ok: true, session });
+    const result = await mesAuthDiagnostic();
+    const durationMs = Date.now() - startedAt;
+    console.log(
+      `[МосЭнергоСбыт] Тест авторизации: session получен успешно за ${durationMs}мс`
+    );
+
+    return res.json({
+      ok: true,
+      message: "Сессионный токен получен",
+      session: result.session,
+      debug: {
+        started_at: startedIso,
+        duration_ms: durationMs,
+        auth_url: AUTH_BASE,
+        timeout_ms: 12000,
+        retry_attempts: 1,
+        raw_response: result.raw,
+      },
+    });
   } catch (e) {
+    const durationMs = Date.now() - startedAt;
     const status = e?.response?.status || 502;
-    return res
-      .status(status)
-      .json({
-        ok: false,
-        message: e?.message,
-        code: e?.code,
-        details: e?.response?.data,
-      });
+    const details = e?.response?.data;
+
+    console.error(
+      `[МосЭнергоСбыт] Тест авторизации: ошибка через ${durationMs}мс - ${e?.message || "unknown"}`
+    );
+    if (e?.code) console.error(`[МосЭнергоСбыт] Код ошибки: ${e.code}`);
+    if (details) {
+      try {
+        console.error(
+          `[МосЭнергоСбыт] Ответ внешней системы: ${JSON.stringify(details)}`
+        );
+      } catch (_) {
+        console.error("[МосЭнергоСбыт] Ответ внешней системы не удалось сериализовать");
+      }
+    }
+
+    return res.status(status).json({
+      ok: false,
+      message: e?.message || "Ошибка авторизации в МосЭнергоСбыт",
+      code: e?.code || null,
+      details,
+      debug: {
+        started_at: startedIso,
+        duration_ms: durationMs,
+        auth_url: AUTH_BASE,
+        timeout_ms: 12000,
+        retry_attempts: 1,
+        http_status: e?.response?.status || null,
+      },
+    });
   }
 });
 

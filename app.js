@@ -62,7 +62,9 @@ app.post("/services/event", (req, res) => {
 
 app.listen(port, () => {
   console.log(`Приложение запущено на ${port} порту и каким-то чудом работает`);
-  startPesBotPolling();
+  // Telegram-бот временно не стартуем, чтобы не шумел polling 409 во время диагностики.
+  // startPesBotPolling();
+  console.log("[pes-bot] polling временно отключен локально");
   startPesMaxBotPolling();
 });
 
