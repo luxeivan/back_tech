@@ -7,6 +7,7 @@ const aiRouter = require("./routers/ai");
 const pesRoutes = require("./routers/pes");
 const pesModuleRoutes = require("./routers/pesModule");
 const disconnectedRoutes = require("./routers/disconnected");
+const minEnergoRoutes = require("./routers/minenergo");
 const auditRoutes = require("./routers/audit");
 
 const webhooks = require("./routers/webhooks");
@@ -46,6 +47,7 @@ app.use("/services/ai", aiRouter);
 app.use("/services/pes", pesRoutes);
 app.use("/services/pes/module", pesModuleRoutes);
 app.use("/services/disconnected", disconnectedRoutes);
+app.use("/services/minenergo", minEnergoRoutes);
 app.use("/services/audit", auditRoutes);
 
 app.use("/services/webhooks", webhooks);

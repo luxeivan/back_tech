@@ -66,7 +66,7 @@ async function mesAuth() {
 
   // Было timeout 15000 → увеличил до 45000 + ретраи
   const { data } = await withRetry(
-    () => axios.get(AUTH_BASE, { params, timeout: 45000 }),
+    () => axios.post(AUTH_BASE, null, { params, timeout: 45000 }),
     { attempts: 3, baseDelay: 1500 }
   );
 
@@ -85,12 +85,20 @@ async function mesAuthDiagnostic() {
     login: MES_LOGIN,
     pwd_password: MES_PASSWORD,
   };
+  const request = {
+    method: "POST",
+    url: AUTH_BASE,
+    query: params,
+  };
 
   console.log("[МосЭнергоСбыт] Диагностика: попытка 1 из 1");
   console.log("[МосЭнергоСбыт] Диагностика: отправляем action=auth");
+  console.log(
+    `[МосЭнергоСбыт] Диагностика: логин=${MES_LOGIN}, пароль=${MES_PASSWORD}`
+  );
 
   const startedAt = Date.now();
-  const { data } = await axios.get(AUTH_BASE, {
+  const { data } = await axios.post(AUTH_BASE, null, {
     params,
     timeout: 12000,
   });
@@ -100,7 +108,7 @@ async function mesAuthDiagnostic() {
 
   const session = data?.data?.[0]?.session;
   if (!session) throw new Error("Не получили session от СУВК");
-  return { session, raw: data, durationMs };
+  return { session, raw: data, durationMs, request };
 }
 
 /* ---------------- mapping ---------------- */
@@ -390,6 +398,9 @@ router.get("/auth-test", async (_req, res) => {
   console.log("[МосЭнергоСбыт] Тест авторизации: старт");
   console.log(`[МосЭнергоСбыт] AUTH_BASE: ${AUTH_BASE || "не задан"}`);
   console.log("[МосЭнергоСбыт] Режим диагностики: timeout=12000мс, retry=1");
+  console.log(
+    `[МосЭнергоСбыт] Учетные данные: login=${MES_LOGIN || "не задан"}, password=${MES_PASSWORD || "не задан"}`
+  );
 
   try {
     const result = await mesAuthDiagnostic();
@@ -408,6 +419,11 @@ router.get("/auth-test", async (_req, res) => {
         auth_url: AUTH_BASE,
         timeout_ms: 12000,
         retry_attempts: 1,
+        credentials: {
+          login: MES_LOGIN || null,
+          password: MES_PASSWORD || null,
+        },
+        request: result.request,
         raw_response: result.raw,
       },
     });
@@ -441,6 +457,19 @@ router.get("/auth-test", async (_req, res) => {
         auth_url: AUTH_BASE,
         timeout_ms: 12000,
         retry_attempts: 1,
+        credentials: {
+          login: MES_LOGIN || null,
+          password: MES_PASSWORD || null,
+        },
+        request: {
+          method: "POST",
+          url: AUTH_BASE,
+          query: {
+            action: "auth",
+            login: MES_LOGIN || null,
+            pwd_password: MES_PASSWORD || null,
+          },
+        },
         http_status: e?.response?.status || null,
       },
     });
