@@ -14,7 +14,7 @@ const getArg = (name, fallback = "") => {
 
 const APPLY = hasFlag("--apply");
 const DRY_RUN = hasFlag("--dry-run") || !APPLY;
-const LIMIT = Math.max(1, Number(getArg("--limit", "100")) || 100);
+const LIMIT = Math.max(1, Number(getArg("--limit", "1000")) || 1000);
 const PAGE_SIZE = Math.max(10, Math.min(200, Number(getArg("--page-size", "100")) || 100));
 const GUID = norm(getArg("--guid", ""));
 const STRAPI_URL = String(process.env.URL_STRAPI || process.env.STRAPI_URL || "").replace(/\/$/, "");
@@ -49,6 +49,10 @@ function getDocumentId(item) {
   return item?.documentId || item?.id || null;
 }
 
+function getRowId(item) {
+  return item?.id || null;
+}
+
 function getGuid(item, raw) {
   return norm(item?.guid || item?.VIOLATION_GUID_STR || raw?.guid || raw?.VIOLATION_GUID_STR);
 }
@@ -68,8 +72,7 @@ async function fetchPage(token, page) {
     params: {
       "pagination[page]": page,
       "pagination[pageSize]": PAGE_SIZE,
-      "sort[0]": "createDateTime:asc",
-      "sort[1]": "createdAt:asc",
+      "sort[0]": "id:asc",
       "filters[$or][0][VIOLATION_TYPE][$null]": true,
       "filters[$or][1][VIOLATION_TYPE][$eq]": "",
     },
@@ -124,6 +127,7 @@ async function main() {
     console.log(`[VIOLATION_TYPE] Точечный режим по GUID: ${GUID}`);
   } else {
     console.log(`[VIOLATION_TYPE] Лимит обновлений: ${LIMIT}`);
+    console.log("[VIOLATION_TYPE] Порядок обхода: по числовому id Strapi от старых к новым");
   }
   console.log(`[VIOLATION_TYPE] Размер страницы Strapi: ${PAGE_SIZE}`);
 
@@ -153,6 +157,7 @@ async function main() {
 
     scanned = 1;
     const raw = getRaw(item);
+    const rowId = getRowId(item);
     const documentId = getDocumentId(item);
     const topViolationType = getTopViolationType(item, raw);
     const rawViolationType = getRawViolationType(raw);
@@ -160,7 +165,7 @@ async function main() {
     const created = getCreateDate(item, raw);
 
     console.log(
-      `[VIOLATION_TYPE] Найдена запись: id=${documentId}, GUID=${guid}, дата=${created}, верхнее=${topViolationType || "пусто"}, внутреннее=${rawViolationType || "пусто"}`
+      `[VIOLATION_TYPE] Найдена запись: rowId=${rowId || "—"}, documentId=${documentId}, GUID=${guid}, дата=${created}, верхнее=${topViolationType || "пусто"}, внутреннее=${rawViolationType || "пусто"}`
     );
 
     if (!documentId) {
@@ -181,7 +186,7 @@ async function main() {
     }
 
     console.log(
-      `[VIOLATION_TYPE] ${DRY_RUN ? "DRY-RUN" : "Обновляем"}: id=${documentId}, GUID=${guid}, VIOLATION_TYPE=${rawViolationType}`
+      `[VIOLATION_TYPE] ${DRY_RUN ? "DRY-RUN" : "Обновляем"}: rowId=${rowId || "—"}, documentId=${documentId}, GUID=${guid}, VIOLATION_TYPE=${rawViolationType}`
     );
 
     if (!DRY_RUN) {
@@ -209,6 +214,7 @@ async function main() {
 
       scanned += 1;
       const raw = getRaw(item);
+      const rowId = getRowId(item);
       const documentId = getDocumentId(item);
       const topViolationType = getTopViolationType(item, raw);
       const rawViolationType = getRawViolationType(raw);
@@ -218,7 +224,7 @@ async function main() {
       if (!documentId) {
         failed += 1;
         console.log(
-          `[VIOLATION_TYPE] Пропуск: не найден documentId/id для записи GUID=${guid}`
+          `[VIOLATION_TYPE] Пропуск: не найден documentId/id для записи rowId=${rowId || "—"}, GUID=${guid}`
         );
         continue;
       }
@@ -231,14 +237,14 @@ async function main() {
       if (!rawViolationType) {
         skippedNoRaw += 1;
         console.log(
-          `[VIOLATION_TYPE] Пропуск: у записи ${documentId} (${guid}) нет VIOLATION_TYPE во внутреннем json`
+          `[VIOLATION_TYPE] Пропуск: у записи rowId=${rowId || "—"}, documentId=${documentId} (${guid}) нет VIOLATION_TYPE во внутреннем json`
         );
         continue;
       }
 
       console.log(
         `[VIOLATION_TYPE] ${DRY_RUN ? "DRY-RUN" : "Обновляем"}: ` +
-          `id=${documentId}, GUID=${guid}, дата=${created}, VIOLATION_TYPE=${rawViolationType}`
+          `rowId=${rowId || "—"}, documentId=${documentId}, GUID=${guid}, дата=${created}, VIOLATION_TYPE=${rawViolationType}`
       );
 
       if (!DRY_RUN) {
@@ -248,7 +254,7 @@ async function main() {
           failed += 1;
           const msg = e?.response?.data?.error?.message || e?.message || "Неизвестная ошибка";
           console.log(
-            `[VIOLATION_TYPE] Ошибка обновления id=${documentId}, GUID=${guid}: ${msg}`
+            `[VIOLATION_TYPE] Ошибка обновления rowId=${rowId || "—"}, documentId=${documentId}, GUID=${guid}: ${msg}`
           );
           continue;
         }
