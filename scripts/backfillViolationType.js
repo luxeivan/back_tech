@@ -16,6 +16,7 @@ const APPLY = hasFlag("--apply");
 const DRY_RUN = hasFlag("--dry-run") || !APPLY;
 const LIMIT = Math.max(1, Number(getArg("--limit", "100")) || 100);
 const PAGE_SIZE = Math.max(10, Math.min(200, Number(getArg("--page-size", "100")) || 100));
+const GUID = norm(getArg("--guid", ""));
 const STRAPI_URL = String(process.env.URL_STRAPI || process.env.STRAPI_URL || "").replace(/\/$/, "");
 
 if (!STRAPI_URL) {
@@ -84,6 +85,20 @@ async function fetchPage(token, page) {
   };
 }
 
+async function fetchByGuid(token, guid) {
+  const { data } = await http.get("/api/teh-narusheniyas", {
+    params: {
+      "filters[guid][$eq]": guid,
+      "pagination[pageSize]": 1,
+    },
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  return Array.isArray(data?.data) ? data.data[0] || null : null;
+}
+
 async function patchViolationType(token, documentId, violationType) {
   await http.put(
     `/api/teh-narusheniyas/${documentId}`,
@@ -105,7 +120,11 @@ async function main() {
   console.log(
     `[VIOLATION_TYPE] Режим: ${DRY_RUN ? "dry-run (без записи)" : "apply (с записью)"}`
   );
-  console.log(`[VIOLATION_TYPE] Лимит обновлений: ${LIMIT}`);
+  if (GUID) {
+    console.log(`[VIOLATION_TYPE] Точечный режим по GUID: ${GUID}`);
+  } else {
+    console.log(`[VIOLATION_TYPE] Лимит обновлений: ${LIMIT}`);
+  }
   console.log(`[VIOLATION_TYPE] Размер страницы Strapi: ${PAGE_SIZE}`);
 
   const token = await getJwt();
@@ -122,6 +141,57 @@ async function main() {
   let skippedHasTop = 0;
   let skippedNoRaw = 0;
   let failed = 0;
+
+  if (GUID) {
+    console.log("[VIOLATION_TYPE] Ищем запись по GUID...");
+    const item = await fetchByGuid(token, GUID);
+
+    if (!item) {
+      console.log(`[VIOLATION_TYPE] Запись с GUID=${GUID} не найдена`);
+      process.exit(1);
+    }
+
+    scanned = 1;
+    const raw = getRaw(item);
+    const documentId = getDocumentId(item);
+    const topViolationType = getTopViolationType(item, raw);
+    const rawViolationType = getRawViolationType(raw);
+    const guid = getGuid(item, raw) || GUID;
+    const created = getCreateDate(item, raw);
+
+    console.log(
+      `[VIOLATION_TYPE] Найдена запись: id=${documentId}, GUID=${guid}, дата=${created}, верхнее=${topViolationType || "пусто"}, внутреннее=${rawViolationType || "пусто"}`
+    );
+
+    if (!documentId) {
+      console.log("[VIOLATION_TYPE] Не найден documentId/id, обновление невозможно");
+      process.exit(1);
+    }
+
+    if (topViolationType) {
+      skippedHasTop = 1;
+      console.log("[VIOLATION_TYPE] Верхнее поле уже заполнено, обновление не требуется");
+      return;
+    }
+
+    if (!rawViolationType) {
+      skippedNoRaw = 1;
+      console.log("[VIOLATION_TYPE] Во внутреннем json нет VIOLATION_TYPE, обновление невозможно");
+      return;
+    }
+
+    console.log(
+      `[VIOLATION_TYPE] ${DRY_RUN ? "DRY-RUN" : "Обновляем"}: id=${documentId}, GUID=${guid}, VIOLATION_TYPE=${rawViolationType}`
+    );
+
+    if (!DRY_RUN) {
+      await patchViolationType(token, documentId, rawViolationType);
+    }
+
+    updated = 1;
+    console.log("[VIOLATION_TYPE] Точечный режим завершён успешно");
+    return;
+  }
 
   while (page <= pageCount && updated < LIMIT) {
     console.log(`[VIOLATION_TYPE] Читаем страницу ${page}...`);
