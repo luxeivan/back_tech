@@ -41,8 +41,6 @@ jobs:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: verify
     runs-on: ubuntu-latest
-    env:
-      HEALTHCHECK_URL: ${{ vars.DEPLOY_HEALTHCHECK_URL }}
 
     steps:
       - name: Деплой на сервер
@@ -66,22 +64,28 @@ jobs:
             echo "[deploy] Готово"
 
       - name: Проверяем бэк после деплоя
-        run: |
-          set -e
-          URL="${HEALTHCHECK_URL:-https://jtv.mosoblenergo.ru/services/webhooks}"
-          echo "[health] Проверяем ${URL}"
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.ACTIONS_DEPLOY_SSH_KEY }}
+          port: 22
+          script: |
+            set -e
+            URL="http://127.0.0.1:5000/services/webhooks"
+            echo "[health] Проверяем ${URL}"
 
-          for attempt in 1 2 3 4 5; do
-            code="$(curl -k -sS -o /dev/null -w "%{http_code}" "$URL" || true)"
-            echo "[health] Попытка ${attempt}: HTTP ${code}"
+            for attempt in 1 2 3 4 5; do
+              code="$(curl -sS -o /dev/null -w "%{http_code}" "$URL" || true)"
+              echo "[health] Попытка ${attempt}: HTTP ${code}"
 
-            if [ "$code" = "200" ]; then
-              echo "[health] Бэк отвечает 200"
-              exit 0
-            fi
+              if [ "$code" = "200" ]; then
+                echo "[health] Бэк отвечает 200"
+                exit 0
+              fi
 
-            sleep 5
-          done
+              sleep 5
+            done
 
-          echo "[health] Бэк не ответил 200 после деплоя"
-          exit 1
+            echo "[health] Бэк не ответил 200 после деплоя"
+            exit 1
