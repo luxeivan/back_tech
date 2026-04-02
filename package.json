@@ -6,6 +6,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "nodemon app.js",
     "start": "node app.js",
+    "tn:violation-type:backfill": "node scripts/backfillViolationType.js --limit 100 --apply",
+    "tn:violation-type:backfill:dry": "node scripts/backfillViolationType.js --limit 100 --dry-run",
     "pes:import:dry": "node scripts/importPesDirectories.js",
     "pes:import": "node scripts/importPesDirectories.js --apply",
     "pes:branches:po:dry": "node scripts/importPesBranchesPo.js",
