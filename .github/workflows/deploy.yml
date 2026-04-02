@@ -1,0 +1,87 @@
+name: Автодеплой бэка
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: back-pipeline-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Проверка бэка
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Забираем репозиторий
+        uses: actions/checkout@v4
+
+      - name: Ставим Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Устанавливаем зависимости
+        run: npm ci
+
+      - name: Проверяем синтаксис
+        run: |
+          set -e
+          find . -path './node_modules' -prune -o -name '*.js' -print0 | xargs -0 -n1 node --check
+
+  deploy:
+    name: Деплой бэка
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-latest
+    env:
+      HEALTHCHECK_URL: ${{ vars.DEPLOY_HEALTHCHECK_URL }}
+
+    steps:
+      - name: Деплой на сервер
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.ACTIONS_DEPLOY_SSH_KEY }}
+          port: 22
+          script: |
+            set -e
+            cd "${{ secrets.DEPLOY_PATH }}"
+            echo "[deploy] Текущая папка: $(pwd)"
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            nvm use default
+            echo "[deploy] node: $(node -v)"
+            echo "[deploy] npm: $(npm -v)"
+            git pull --ff-only origin main
+            npm ci
+            echo "[deploy] Готово"
+
+      - name: Проверяем бэк после деплоя
+        run: |
+          set -e
+          URL="${HEALTHCHECK_URL:-https://jtv.mosoblenergo.ru/services/webhooks}"
+          echo "[health] Проверяем ${URL}"
+
+          for attempt in 1 2 3 4 5; do
+            code="$(curl -k -sS -o /dev/null -w "%{http_code}" "$URL" || true)"
+            echo "[health] Попытка ${attempt}: HTTP ${code}"
+
+            if [ "$code" = "200" ]; then
+              echo "[health] Бэк отвечает 200"
+              exit 0
+            fi
+
+            sleep 5
+          done
+
+          echo "[health] Бэк не ответил 200 после деплоя"
+          exit 1
