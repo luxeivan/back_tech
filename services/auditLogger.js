@@ -169,6 +169,12 @@ const jwtCache = {
   inFlight: null,
 };
 
+const usersDirectoryCache = {
+  byUsername: new Map(),
+  expiresAt: 0,
+  inFlight: null,
+};
+
 async function getServiceJwt() {
   const options = cfg();
   if (!options.strapiUrl) {
@@ -231,6 +237,82 @@ async function strapiRequest(method, { params, data, timeoutMs } = {}) {
   }
 
   throw lastError || new Error("Strapi audit endpoint not found");
+}
+
+function normalizeUserRows(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.results)) return payload.results;
+  return [];
+}
+
+async function loadUsersDirectory() {
+  const now = Date.now();
+  if (usersDirectoryCache.byUsername.size > 0 && usersDirectoryCache.expiresAt > now) {
+    return usersDirectoryCache.byUsername;
+  }
+  if (usersDirectoryCache.inFlight) return usersDirectoryCache.inFlight;
+
+  usersDirectoryCache.inFlight = (async () => {
+    const options = cfg();
+    const token = await getServiceJwt();
+    const map = new Map();
+    let page = 1;
+    let pageCount = 1;
+    const maxPages = 20;
+
+    while (page <= pageCount && page <= maxPages) {
+      const resp = await axios.get(`${options.strapiUrl}/api/users`, {
+        headers: { Authorization: `Bearer ${token}` },
+        params: {
+          "pagination[page]": page,
+          "pagination[pageSize]": 200,
+        },
+        timeout: options.queryTimeoutMs,
+      });
+
+      const rows = normalizeUserRows(resp?.data);
+      for (const row of rows) {
+        const username = toStr(row?.username || row?.fullName || row?.name, "");
+        if (!username) continue;
+        const key = username.toLowerCase();
+        const email = toStr(row?.email, "");
+        const existing = map.get(key);
+        if (!existing || (!existing.email && email)) {
+          map.set(key, { username, email });
+        }
+      }
+
+      const pagination = resp?.data?.meta?.pagination;
+      if (!pagination || !Number.isFinite(Number(pagination.pageCount))) {
+        break;
+      }
+      pageCount = Math.max(1, Number(pagination.pageCount));
+      page += 1;
+    }
+
+    usersDirectoryCache.byUsername = map;
+    usersDirectoryCache.expiresAt = Date.now() + 5 * 60 * 1000;
+    return map;
+  })();
+
+  try {
+    return await usersDirectoryCache.inFlight;
+  } finally {
+    usersDirectoryCache.inFlight = null;
+  }
+}
+
+function attachEmailByUsername(rows, directory) {
+  if (!Array.isArray(rows) || rows.length === 0) return rows || [];
+  return rows.map((row) => {
+    const key = String(row?.username || "").trim().toLowerCase();
+    const match = key ? directory.get(key) : null;
+    return {
+      ...row,
+      email: row?.email || match?.email || "",
+    };
+  });
 }
 
 function extractActor(req, body = {}) {
@@ -369,6 +451,7 @@ function rowToUi(item) {
     documentId: item?.documentId ?? raw?.documentId ?? null,
     created_at: raw.event_time || raw.createdAt || null,
     username: raw.username || "",
+    email: raw.email || "",
     role: raw.view_role || "system",
     page: raw.page || "",
     action: raw.action || "",
@@ -471,8 +554,15 @@ async function readAuditEvents({
   const resp = await strapiRequest("get", { params, timeoutMs: cfg().queryTimeoutMs });
   const rawRows = Array.isArray(resp?.data?.data) ? resp.data.data : [];
   const mapped = rawRows.map(rowToUi);
+  let mappedWithEmail = mapped;
+  try {
+    const directory = await loadUsersDirectory();
+    mappedWithEmail = attachEmailByUsername(mapped, directory);
+  } catch {
+    mappedWithEmail = mapped;
+  }
   const searchNeedle = String(search || "").trim().toLowerCase();
-  const filtered = mapped.filter((row) => {
+  const filtered = mappedWithEmail.filter((row) => {
     const hasSearch =
       !searchNeedle ||
       containsCi(row.entity_id, searchNeedle) ||
@@ -543,11 +633,26 @@ async function readAuditUsers({ query = "", limit = 50, from = "", to = "" } = {
     page += 1;
   }
 
+  let data = users.map((username) => ({ username, email: "" }));
+  try {
+    const directory = await loadUsersDirectory();
+    data = users.map((username) => {
+      const key = String(username).toLowerCase();
+      const match = directory.get(key);
+      return {
+        username,
+        email: match?.email || "",
+      };
+    });
+  } catch {
+    data = users.map((username) => ({ username, email: "" }));
+  }
+
   return {
     ok: true,
-    data: users,
+    data,
     meta: {
-      count: users.length,
+      count: data.length,
       limit: safeLimit,
     },
   };
