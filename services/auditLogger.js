@@ -69,6 +69,7 @@ function parseDetailsMaybeJson(v) {
 function humanAction(action) {
   const map = {
     page_view: "Открыл страницу",
+    // page_leave временно отключен, чтобы не засорять журнал.
     page_leave: "Покинул страницу",
     click_dashboard: "Перешел на дашборд",
     click_audit_logging: "Перешел в журнал действий",
@@ -90,6 +91,31 @@ function humanAction(action) {
     audit_logs_filter: "Обновил фильтры журнала действий",
   };
   return map[action] || action;
+}
+
+const ALLOWED_ACTIONS = new Set([
+  "tn_field_edit",
+  "tn_description_edit",
+  "tn_resource_edit",
+  "send_edds_ok",
+  "send_edds_error",
+  "send_mes_ok",
+  "send_mes_error",
+  "send_error",
+  "edds_send",
+  "mes_upload",
+]);
+
+function normalizeAction(action) {
+  return String(action || "").trim().toLowerCase();
+}
+
+function isLoggingPagePath(page) {
+  return String(page || "").trim().toLowerCase() === "/logging";
+}
+
+function isAllowedAction(action) {
+  return ALLOWED_ACTIONS.has(normalizeAction(action));
 }
 
 function normalizeDetails(action, details) {
@@ -331,6 +357,12 @@ function extractActor(req, body = {}) {
 
 async function logAuditEvent(event) {
   if (!isEnabled()) return { ok: false, skipped: true, reason: "audit_logger_disabled" };
+  if (!isAllowedAction(event?.action)) {
+    return { ok: false, skipped: true, reason: "action_not_allowed" };
+  }
+  if (isLoggingPagePath(event?.page)) {
+    return { ok: false, skipped: true, reason: "logging_page_suppressed" };
+  }
 
   const options = cfg();
   if (isDegraded()) {
@@ -563,6 +595,8 @@ async function readAuditEvents({
   }
   const searchNeedle = String(search || "").trim().toLowerCase();
   const filtered = mappedWithEmail.filter((row) => {
+    if (!isAllowedAction(row?.action)) return false;
+    if (isLoggingPagePath(row?.page)) return false;
     const hasSearch =
       !searchNeedle ||
       containsCi(row.entity_id, searchNeedle) ||
@@ -619,6 +653,8 @@ async function readAuditUsers({ query = "", limit = 50, from = "", to = "" } = {
     const rawRows = Array.isArray(resp?.data?.data) ? resp.data.data : [];
     for (const row of rawRows) {
       const mapped = rowToUi(row);
+      if (!isAllowedAction(mapped?.action)) continue;
+      if (isLoggingPagePath(mapped?.page)) continue;
       const username = String(mapped?.username || "").trim();
       if (!username) continue;
       const key = username.toLowerCase();
