@@ -9,6 +9,7 @@ const pesModuleRoutes = require("./routers/pesModule");
 const disconnectedRoutes = require("./routers/disconnected");
 const minEnergoRoutes = require("./routers/minenergo");
 const auditRoutes = require("./routers/audit");
+const integrationMappingsRoutes = require("./routers/integrationMappings");
 
 const webhooks = require("./routers/webhooks");
 const { sseHandler, broadcast } = require("./services/sse");
@@ -49,6 +50,7 @@ app.use("/services/pes/module", pesModuleRoutes);
 app.use("/services/disconnected", disconnectedRoutes);
 app.use("/services/minenergo", minEnergoRoutes);
 app.use("/services/audit", auditRoutes);
+app.use("/services/integration-mappings", integrationMappingsRoutes);
 
 app.use("/services/webhooks", webhooks);
 app.get("/services/event", sseHandler);
