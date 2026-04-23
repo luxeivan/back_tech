@@ -133,10 +133,11 @@ function roleFromReq(req) {
 }
 
 function requireManageRole(req, res, next) {
-  if (roleFromReq(req) !== "standart") {
+  const role = roleFromReq(req);
+  if (!["standart", "preview"].includes(role)) {
     return res.status(403).json({
       ok: false,
-      message: "Операция доступна только пользователю с ролью standart",
+      message: "Операция доступна только пользователям с ролью standart или preview",
     });
   }
   next();
