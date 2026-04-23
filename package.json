@@ -17,6 +17,8 @@
     "pes:import": "node scripts/importPesDirectories.js --apply",
     "integration:mappings:seed:dry": "node scripts/seedIntegrationMappings.js",
     "integration:mappings:seed": "node scripts/seedIntegrationMappings.js --apply",
+    "pes:map:allowlist:dry": "node scripts/seedPesMapAllowlist.js",
+    "pes:map:allowlist": "node scripts/seedPesMapAllowlist.js --apply",
     "pes:branches:po:dry": "node scripts/importPesBranchesPo.js",
     "pes:branches:po": "node scripts/importPesBranchesPo.js --apply",
     "pes:units:po-prioritet:dry": "node scripts/updatePesUnitsPoPriority.js",
