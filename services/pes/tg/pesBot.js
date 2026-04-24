@@ -1,3 +1,7 @@
+/*
+ * ARCHIVE: Telegram ПЭС отключен в пользу MAX.
+ * Исходная реализация ниже сохранена только как комментарий.
+
 const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
@@ -1116,6 +1120,22 @@ async function sendPesSubscribersNotification({
   }
   if (!total) return { ok: true, skipped: true, reason: "no-matching-subscribers", sent: 0 };
   return { ok: failed === 0, sent, failed, total };
+}
+
+module.exports = {
+  startPesBotPolling,
+  sendPesSubscribersNotification,
+};
+
+*/
+
+// Telegram-бот ПЭС отключен в пользу MAX. Файл оставлен как архив старой реализации.
+async function startPesBotPolling() {
+  console.log('[pes-bot] Telegram отключен: polling не запускается');
+}
+
+async function sendPesSubscribersNotification() {
+  return { ok: true, skipped: true, reason: 'telegram-disabled' };
 }
 
 module.exports = {

@@ -1,6 +1,7 @@
 // Конфиг MAX-бота: env-переменные, базовые флаги и логирование.
 const MAX_BOT_TOKEN = String(process.env.PES_MAX_BOT_TOKEN || "").trim();
-const MAX_BOT_ENABLED = String(process.env.PES_MAX_BOT_ENABLED || "1") === "1";
+// MAX-бот должен запускаться только явно, чтобы локалка и прод не отвечали одновременно.
+const MAX_BOT_ENABLED = String(process.env.PES_MAX_BOT_ENABLED || "0") === "1";
 const MAX_API_BASE = String(
   process.env.PES_MAX_API_BASE || "https://platform-api.max.ru"
 ).replace(/\/$/, "");

@@ -12,6 +12,8 @@ const PES_ENDPOINTS = {
   BOT_STATES: process.env.STRAPI_PES_BOT_STATES_ENDPOINT || "pes-bot-states",
   SUBSCRIBERS:
     process.env.STRAPI_PES_SUBSCRIBERS_ENDPOINT || "pes-telegram-subscribers",
+  MAX_SUBSCRIBERS:
+    process.env.STRAPI_PES_MAX_SUBSCRIBERS_ENDPOINT || "pes-max-subscribers",
   BRANCHES: process.env.STRAPI_PES_BRANCHES_ENDPOINT || "pes-branches",
 };
 

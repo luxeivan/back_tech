@@ -88,6 +88,13 @@ function humanAction(action) {
     edds_send: "Запрос отправки в ЕДДС",
     mes_upload: "Запрос отправки в МосЭнергоСбыт",
     pes_command: "Команда в модуле ПЭС",
+    pes_dispatch: "ПЭС: команда на выезд",
+    pes_reroute: "ПЭС: корректировка маршрута",
+    pes_cancel: "ПЭС: отмена выезда",
+    pes_depart: "ПЭС: фактический выезд",
+    pes_connect: "ПЭС: подключена",
+    pes_ready: "ПЭС: возврат в резерв",
+    pes_repair: "ПЭС: перевод в ремонт",
     audit_logs_filter: "Обновил фильтры журнала действий",
   };
   return map[action] || action;
@@ -104,6 +111,14 @@ const ALLOWED_ACTIONS = new Set([
   "send_error",
   "edds_send",
   "mes_upload",
+  "pes_command",
+  "pes_dispatch",
+  "pes_reroute",
+  "pes_cancel",
+  "pes_depart",
+  "pes_connect",
+  "pes_ready",
+  "pes_repair",
 ]);
 
 function normalizeAction(action) {
@@ -444,6 +459,8 @@ async function logAuditFromReq(req, event = {}) {
     action: event.action || "unknown",
     entity: event.entity || "ui",
     entity_id: event.entity_id || "",
+    status_event: event.status_event || event.status || "",
+    source: event.source || "",
     details: parseDetailsMaybeJson(event.details || ""),
     ip: inferIp(req),
     user_agent: req.get("user-agent") || "",

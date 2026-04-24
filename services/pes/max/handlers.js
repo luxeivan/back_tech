@@ -1,8 +1,11 @@
 // Обработчики update MAX-бота: старт, меню, филиалы, ПО и подписки.
+const axios = require("axios");
 const { getBranchesList, findBranchByText } = require("./catalog");
 const {
   getMessageText,
   getReplyTarget,
+  getSenderNode,
+  getSenderUserId,
   getCallbackId,
   getCallbackPayload,
   decodeAction,
@@ -25,6 +28,55 @@ const {
   resolveScopeBranch,
 } = require("./ui");
 const { norm } = require("./utils");
+
+function getLocalBackendBase() {
+  const port = Number(process.env.PORT) || 5000;
+  return `http://127.0.0.1:${port}`;
+}
+
+function buildAuditUsernameFromUpdate(update) {
+  const sender = getSenderNode(update) || {};
+  const username = norm(sender.username);
+  const firstName = norm(sender.first_name);
+  const lastName = norm(sender.last_name);
+  const fullName = norm([firstName, lastName].filter(Boolean).join(" "));
+  const userId = getSenderUserId(update);
+  return norm(
+    [
+      "MAX",
+      username ? `@${username}` : "",
+      fullName || "",
+      userId ? `id:${userId}` : "",
+    ]
+      .filter(Boolean)
+      .join(" ")
+  ) || "MAX unknown";
+}
+
+async function runPesModuleCommand({ action, pesId, update }) {
+  const userId = getSenderUserId(update);
+  const payload = {
+    action,
+    pesIds: [pesId],
+    source: "max",
+    sourceChatId: Number(userId) || null,
+  };
+  if (action === "depart") payload.actualDepartureAt = new Date().toISOString();
+
+  const { data } = await axios.post(
+    `${getLocalBackendBase()}/services/pes/module/command`,
+    payload,
+    {
+      headers: {
+        "x-view-role": "standart",
+        "x-audit-role": "system",
+        "x-audit-username": encodeURIComponent(buildAuditUsernameFromUpdate(update)),
+      },
+      timeout: 20000,
+    }
+  );
+  return data;
+}
 
 async function sendMainMenu(update, { callbackId = "" } = {}) {
   const text = buildMainMenuText(update);
@@ -104,7 +156,7 @@ async function sendPoMenu(update, user, branch, { callbackId = "" } = {}) {
 async function handleMessage(update) {
   const rawText = getMessageText(update);
   const text = rawText.toLowerCase();
-  const user = upsertUserState(update);
+  const user = await upsertUserState(update);
 
   if (!rawText) return;
 
@@ -124,13 +176,13 @@ async function handleMessage(update) {
   }
 
   if (text === "подписаться на все") {
-    const saved = setUserSubscribeAll(user);
+    const saved = await setUserSubscribeAll(user);
     await sendMySubscriptions(update, saved);
     return;
   }
 
   if (text === "очистить") {
-    const saved = clearUserScopes(user);
+    const saved = await clearUserScopes(user);
     await sendMySubscriptions(update, saved);
   }
 }
@@ -138,7 +190,7 @@ async function handleMessage(update) {
 async function handleCallback(update) {
   const callbackId = getCallbackId(update);
   const payload = decodeAction(getCallbackPayload(update));
-  const user = upsertUserState(update);
+  const user = await upsertUserState(update);
 
   if (!callbackId) {
     maxLog("callback без callback_id", {
@@ -163,8 +215,41 @@ async function handleCallback(update) {
     return;
   }
 
+  if (payload.action === "pes") {
+    const [cmd, pesId] = norm(payload.value).split("|").map(norm);
+    const allowed = new Set(["depart", "connect", "ready"]);
+    if (!cmd || !pesId) {
+      await answerCallback(callbackId, {
+        notification: "Некорректная команда",
+      });
+      return;
+    }
+    if (!allowed.has(cmd)) {
+      await answerCallback(callbackId, {
+        notification: "Недоступно",
+      });
+      return;
+    }
+
+    try {
+      await runPesModuleCommand({
+        action: cmd,
+        pesId,
+        update,
+      });
+      await answerCallback(callbackId, {
+        notification: "Готово",
+      });
+    } catch (e) {
+      await answerCallback(callbackId, {
+        notification: norm(e?.response?.data?.message || e?.message || "Ошибка").slice(0, 180),
+      });
+    }
+    return;
+  }
+
   if (payload.action === "suball") {
-    const saved = setUserSubscribeAll(user);
+    const saved = await setUserSubscribeAll(user);
     await answerCallback(callbackId, {
       text: formatUserSubs(saved),
       attachments: buildMainMenuAttachments(),
@@ -174,7 +259,7 @@ async function handleCallback(update) {
   }
 
   if (payload.action === "clear") {
-    const saved = clearUserScopes(user);
+    const saved = await clearUserScopes(user);
     await answerCallback(callbackId, {
       text: formatUserSubs(saved),
       attachments: buildMainMenuAttachments(),
@@ -205,7 +290,7 @@ async function handleCallback(update) {
       return;
     }
 
-    const saved = toggleScope(user, scopeName);
+    const saved = await toggleScope(user, scopeName);
     await sendPoMenu(update, saved, resolveScopeBranch(scopeName), {
       callbackId,
     });
@@ -221,7 +306,7 @@ async function processUpdate(update) {
   const updateType = norm(update?.update_type).toLowerCase();
 
   if (updateType === "bot_started") {
-    upsertUserState(update);
+    await upsertUserState(update);
     await sendMainMenu(update);
     return;
   }

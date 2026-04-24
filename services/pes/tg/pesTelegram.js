@@ -1,3 +1,7 @@
+/*
+ * ARCHIVE: Telegram ПЭС отключен в пользу MAX.
+ * Исходная реализация ниже сохранена только как комментарий.
+
 const axios = require("axios");
 
 function escapeHtml(value) {
@@ -191,3 +195,19 @@ async function sendPesTelegram({ action, branch, items, destination, comment }) 
 }
 
 module.exports = { sendPesTelegram, buildText };
+
+*/
+
+// Telegram-рассылка ПЭС отключена в пользу MAX. Файл оставлен как архив старой реализации.
+function buildText() {
+  return '';
+}
+
+async function sendPesTelegram() {
+  return { ok: true, skipped: true, reason: 'telegram-disabled' };
+}
+
+module.exports = {
+  sendPesTelegram,
+  buildText,
+};

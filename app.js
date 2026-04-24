@@ -13,7 +13,8 @@ const integrationMappingsRoutes = require("./routers/integrationMappings");
 
 const webhooks = require("./routers/webhooks");
 const { sseHandler, broadcast } = require("./services/sse");
-const { startPesBotPolling } = require("./services/pes/tg/pesBot");
+// Telegram-бот ПЭС отключен в пользу MAX, код оставлен в services/pes/tg как архив.
+// const { startPesBotPolling } = require("./services/pes/tg/pesBot");
 const { startPesMaxBotPolling } = require("./services/pes/max/pesMaxBot");
 
 require("dotenv").config();
@@ -66,9 +67,9 @@ app.post("/services/event", (req, res) => {
 
 app.listen(port, () => {
   console.log(`Приложение запущено на ${port} порту и каким-то чудом работает`);
-  // Telegram-бот временно не стартуем, чтобы не шумел polling 409 во время диагностики.
+  // Telegram-бот ПЭС полностью отключен в пользу MAX.
   // startPesBotPolling();
-  console.log("[pes-bot] polling временно отключен локально");
+  console.log("[pes-bot] Telegram отключен, работает MAX");
   startPesMaxBotPolling();
 });
 

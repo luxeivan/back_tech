@@ -6,8 +6,12 @@ const {
   loadTpDestinations,
   loadTpHints,
 } = require("../services/pes/pesModuleData");
-const { sendPesTelegram } = require("../services/pes/tg/pesTelegram");
-const { sendPesSubscribersNotification } = require("../services/pes/tg/pesBot");
+// Telegram-рассылка ПЭС отключена: оставляем код в архиве, но не импортируем.
+// const { sendPesTelegram } = require("../services/pes/tg/pesTelegram");
+// const { sendPesSubscribersNotification } = require("../services/pes/tg/pesBot");
+const {
+  sendPesMaxSubscribersNotification,
+} = require("../services/pes/max/pesMaxNotifications");
 const { logAuditFromReq } = require("../services/auditLogger");
 const {
   PES_ENDPOINTS,
@@ -30,6 +34,26 @@ const PES_STATUS = {
 };
 
 const MAX_DELAY_MS = 15 * 60 * 1000;
+
+const PES_AUDIT_ACTIONS = {
+  dispatch: "pes_dispatch",
+  reroute: "pes_reroute",
+  cancel: "pes_cancel",
+  depart: "pes_depart",
+  connect: "pes_connect",
+  ready: "pes_ready",
+  repair: "pes_repair",
+};
+
+const PES_AUDIT_TITLES = {
+  dispatch: "Команда на выезд",
+  reroute: "Корректировка маршрута",
+  cancel: "Отмена выезда",
+  depart: "Фактический выезд",
+  connect: "Подключена",
+  ready: "Возврат в резерв",
+  repair: "Перевод в ремонт",
+};
 
 function clone(v) {
   return JSON.parse(JSON.stringify(v));
@@ -66,6 +90,56 @@ function toPositiveInt(value, fallback = 1) {
 function randomId() {
   if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function pesAuditAction(action) {
+  return PES_AUDIT_ACTIONS[norm(action).toLowerCase()] || "pes_command";
+}
+
+function pesAuditTitle(action) {
+  return PES_AUDIT_TITLES[norm(action).toLowerCase()] || "Операция ПЭС";
+}
+
+function pesAuditDetails({
+  action,
+  items,
+  destination,
+  comment,
+  statusCode,
+  durationMs,
+  source,
+  sourceChatId,
+  errorMessage,
+}) {
+  const list = Array.isArray(items) ? items : [];
+  return {
+    action: norm(action),
+    action_ru: pesAuditTitle(action),
+    source: norm(source) || "web",
+    source_chat_id: Number.isFinite(Number(sourceChatId)) ? Number(sourceChatId) : null,
+    result: Number(statusCode || 0) >= 200 && Number(statusCode || 0) < 400 ? "success" : "error",
+    http_status: Number(statusCode || 0) || null,
+    duration_ms: Number(durationMs || 0) || null,
+    pes_count: list.length,
+    pes: list.map((item) => ({
+      id: item.id,
+      number: item.number,
+      name: item.name,
+      branch: item.branch,
+      po: item.po,
+      status: effectiveStatus(item),
+    })),
+    destination: destination
+      ? {
+          type: destination.type || null,
+          id: destination.id || null,
+          title: destination.title || null,
+          address: destination.address || null,
+        }
+      : null,
+    comment: comment || "",
+    error: errorMessage || "",
+  };
 }
 
 function safeToken(value) {
@@ -130,6 +204,18 @@ function toDto(item) {
 
 function roleFromReq(req) {
   return String(req.get("x-view-role") || "standart").trim().toLowerCase();
+}
+
+function actorRoleForLog(req) {
+  const source = norm(req.body?.source).toLowerCase();
+  if (source === "telegram" || source === "max") return "telegram";
+
+  const role = roleFromReq(req);
+  if (role === "supergeneral") return "supergeneral";
+
+  // В Strapi enum для истории ПЭС пока нет preview/max.
+  // Preview имеет права управления, но в журнал пишем как web-оператора.
+  return "standart";
 }
 
 function requireManageRole(req, res, next) {
@@ -339,7 +425,8 @@ function logStatusTo(status) {
 
 function normalizeUpdateSource(source, fallback = "web") {
   const value = norm(source).toLowerCase();
-  if (value === "web" || value === "telegram" || value === "system") return value;
+  if (value === "max") return "telegram";
+  if (["web", "telegram", "system"].includes(value)) return value;
   return fallback;
 }
 
@@ -396,7 +483,7 @@ async function appendOperationLogs({
       destination_address: destination?.address || null,
       destination_lat: toNum(destination?.lat),
       destination_lon: toNum(destination?.lon),
-      actor_role: roleFromReq(req),
+      actor_role: actorRoleForLog(req),
       actor_login: norm(req.get("x-audit-username") || "") || null,
       actor_chat_id: Number.isFinite(Number(sourceChatId))
         ? Number(sourceChatId)
@@ -528,13 +615,18 @@ router.get("/history", async (req, res) => {
 });
 
 router.get("/config", (req, res) => {
-  const hasToken = Boolean(process.env.PES_TELEGRAM_BOT_TOKEN);
-  const hasChats = Boolean(process.env.PES_TELEGRAM_CHATS);
-  const botSubsEnabled = String(process.env.PES_BOT_ENABLED || "1") === "1";
+  // Telegram отключен в пользу MAX.
+  // const hasToken = Boolean(process.env.PES_TELEGRAM_BOT_TOKEN);
+  // const hasChats = Boolean(process.env.PES_TELEGRAM_CHATS);
+  // const botSubsEnabled = String(process.env.PES_BOT_ENABLED || "1") === "1";
+  const maxConfigured =
+    Boolean(process.env.PES_MAX_BOT_TOKEN) &&
+    String(process.env.PES_MAX_BOT_ENABLED || "0") === "1";
   res.json({
     ok: true,
-    telegramConfigured: hasToken && (hasChats || botSubsEnabled),
-    strictMode: String(process.env.PES_TELEGRAM_STRICT || "0") === "1",
+    telegramConfigured: false,
+    maxConfigured,
+    strictMode: false,
   });
 });
 
@@ -549,7 +641,7 @@ router.get("/destinations", async (req, res) => {
   const needTp = tpAllowed && destinationType !== "assembly";
 
   const assembly = needAssembly ? await loadAssemblyDestinations({ branch }) : [];
-  const tpHints = await loadTpHints();
+  const tpHints = needTp ? await loadTpHints() : [];
   // Для ТП без выбранного филиала не тянем тяжелый полный справочник:
   // UI сначала показывает филиалы/ПО, затем запрашивает ТП уже в контексте филиала.
   const tp = needTp && branch ? await loadTpDestinations({ branch, po }) : [];
@@ -568,6 +660,9 @@ router.get("/destinations", async (req, res) => {
 
 router.post("/command", requireManageRole, async (req, res) => {
   const startedAt = Date.now();
+  let auditItems = [];
+  let auditDestination = null;
+  let auditError = "";
   const reject400 = (message) => {
     const msg = String(message || "Bad Request");
     console.warn("[pes-module] command 400:", {
@@ -600,6 +695,7 @@ router.post("/command", requireManageRole, async (req, res) => {
     const snapshot = await loadSnapshot();
     const byId = new Map(snapshot.map((x) => [x.id, x]));
     const items = pesIds.map((id) => byId.get(id)).filter(Boolean);
+    auditItems = items;
 
     if (items.length !== pesIds.length) {
       return res.status(404).json({ ok: false, message: "Часть ПЭС не найдена" });
@@ -652,6 +748,7 @@ router.post("/command", requireManageRole, async (req, res) => {
         branchHint,
       });
       destination = pick?.value || null;
+      auditDestination = destination;
     }
 
     const now = Date.now();
@@ -703,18 +800,21 @@ router.post("/command", requireManageRole, async (req, res) => {
 
     const branch = items[0]?.branch || "";
 
-    let telegramResult = { ok: true, skipped: true, reason: "not-required" };
-    if (["dispatch", "cancel", "reroute"].includes(action)) {
-      telegramResult = await sendPesTelegram({
-        action,
-        branch,
-        items,
-        destination,
-        comment,
-      });
-    }
+    // Telegram полностью отключен в пользу MAX.
+    const telegramResult = { ok: true, skipped: true, reason: "telegram-disabled" };
+    const subscribersResult = { ok: true, skipped: true, reason: "telegram-disabled" };
+    // if (["dispatch", "cancel", "reroute"].includes(action)) {
+    //   telegramResult = await sendPesTelegram({ action, branch, items, destination, comment });
+    // }
+    // const subscribersResult = await sendPesSubscribersNotification({
+    //   action,
+    //   branch,
+    //   items,
+    //   destination,
+    //   comment,
+    // });
 
-    const subscribersResult = await sendPesSubscribersNotification({
+    const maxResult = await sendPesMaxSubscribersNotification({
       action,
       branch,
       items,
@@ -738,6 +838,7 @@ router.post("/command", requireManageRole, async (req, res) => {
       ok: true,
       telegram: telegramResult,
       subscribers: subscribersResult,
+      max: maxResult,
       updated: items.map((x) => toDto(x)),
       summary: summaryOf(refreshed),
     });
@@ -748,21 +849,32 @@ router.post("/command", requireManageRole, async (req, res) => {
       e?.message ||
       "Ошибка обработки команды ПЭС";
     console.error("[pes-module] command error", apiMsg);
+    auditError = apiMsg;
     res.status(500).json({ ok: false, message: apiMsg });
   } finally {
     setImmediate(() => {
+      const action = req.body?.action || "";
+      const ids = Array.isArray(req.body?.pesIds)
+        ? req.body.pesIds.join(",")
+        : "";
       logAuditFromReq(req, {
         page: "/services/pes/module/command",
-        action: "pes_command",
+        action: pesAuditAction(action),
         entity: "pes",
-        entity_id: Array.isArray(req.body?.pesIds)
-          ? req.body.pesIds.join(",")
-          : "",
-        details: {
-          command: req.body?.action || "",
-          status: res.statusCode,
-          duration_ms: Date.now() - startedAt,
-        },
+        entity_id: ids,
+        source: req.body?.source === "max" ? "bot" : "backend",
+        status_event: res.statusCode >= 200 && res.statusCode < 400 ? "success" : "error",
+        details: pesAuditDetails({
+          action,
+          items: auditItems,
+          destination: auditDestination,
+          comment: req.body?.comment || "",
+          statusCode: res.statusCode,
+          durationMs: Date.now() - startedAt,
+          source: req.body?.source || "web",
+          sourceChatId: req.body?.sourceChatId,
+          errorMessage: auditError,
+        }),
       }).catch(() => {});
     });
   }

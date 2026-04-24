@@ -40,17 +40,17 @@ function getReplyTarget(update) {
   const message = getMessageNode(update);
 
   const chatId = Number(message?.recipient?.chat_id);
-  if (Number.isFinite(chatId)) {
+  if (Number.isFinite(chatId) && chatId > 0) {
     return { chat_id: chatId };
   }
 
   const userId = getSenderUserId(update);
-  if (Number.isFinite(userId)) {
+  if (Number.isFinite(userId) && userId > 0) {
     return { user_id: userId };
   }
 
   const dialogUserId = Number(message?.recipient?.chat?.dialog_with_user?.user_id);
-  if (Number.isFinite(dialogUserId)) {
+  if (Number.isFinite(dialogUserId) && dialogUserId > 0) {
     return { user_id: dialogUserId };
   }
 
