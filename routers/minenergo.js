@@ -44,6 +44,7 @@ router.get("/", async (req, res) => {
       params: {
         "pagination[page]": 1,
         "pagination[pageSize]": 1000,
+        "filters[BASE_TYPE][$eq]": 0,
         sort: "updatedAt:desc",
       },
     });
@@ -53,12 +54,10 @@ router.get("/", async (req, res) => {
 
     rows.forEach((item) => {
       const raw = pickRaw(item);
-      const violationType = String(
-        item?.VIOLATION_TYPE || item?.data?.VIOLATION_TYPE || raw?.VIOLATION_TYPE || ""
-      ).trim().toUpperCase();
+      const baseType = Number(item?.BASE_TYPE ?? item?.data?.BASE_TYPE ?? raw?.BASE_TYPE);
       const statusName = getStatusName(item, raw);
 
-      if (violationType === "П") return;
+      if (baseType !== 0) return;
       if (!(isOpen(item, raw) || statusName === "открыта")) return;
 
       const name = raw.DISTRICT || raw.SCNAME || item?.dispCenter || "—";
