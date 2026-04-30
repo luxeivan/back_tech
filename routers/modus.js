@@ -40,6 +40,11 @@ const norm = (s) =>
   String(s || "")
     .trim()
     .toLowerCase();
+const parseBaseType = (value) => {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return parsed === 0 || parsed === 1 ? parsed : null;
+};
 const isFinalStatus = (s) =>
   ["закрыта", "запитана", "удалена"].includes(norm(s));
 
@@ -61,11 +66,11 @@ router.put("/", async (req, res) => {
     const mapItem = (item) => {
       const status = (item.STATUS_NAME || "").toString().trim().toLowerCase();
       const isActive = status === "открыта";
-      return {
+      const baseType = parseBaseType(item.BASE_TYPE);
+      const mapped = {
         guid: item.VIOLATION_GUID_STR,
         number: `${item.F81_010_NUMBER}`,
         energoObject: item.F81_041_ENERGOOBJECTNAME,
-        BASE_TYPE: item.BASE_TYPE,
         createDateTime: item.F81_060_EVENTDATETIME,
         recoveryPlanDateTime: item.F81_070_RESTOR_SUPPLAYDATETIME,
         addressList: item.ADDRESS_LIST,
@@ -76,6 +81,10 @@ router.put("/", async (req, res) => {
         isActive,
         data: item,
       };
+      if (baseType !== null) {
+        mapped.BASE_TYPE = baseType;
+      }
+      return mapped;
     };
 
     const buildPatch = (current, next) => {
@@ -87,7 +96,7 @@ router.put("/", async (req, res) => {
           typeof nextVal === "object" && nextVal !== null
             ? JSON.stringify(prevVal) === JSON.stringify(nextVal)
             : prevVal === nextVal;
-        if (!eq) patch[key] = nextVal;
+        if (!eq && nextVal !== undefined) patch[key] = nextVal;
       });
       return patch;
     };
@@ -547,22 +556,28 @@ router.post("/", async (req, res) => {
         .json({ status: "error", message: "Не хватает требуемых данных" });
     }
     const data = req.body.Data;
-    const prepareData = data.map((item) => ({
-      guid: item.VIOLATION_GUID_STR,
-      number: `${item.F81_010_NUMBER}`,
-      energoObject: item.F81_041_ENERGOOBJECTNAME,
-      BASE_TYPE: item.BASE_TYPE,
-      createDateTime: item.F81_060_EVENTDATETIME,
-      recoveryPlanDateTime: item.F81_070_RESTOR_SUPPLAYDATETIME,
-      addressList: item.ADDRESS_LIST,
-      // description: item.F81_042_DISPNAME,
-      recoveryFactDateTime: item.F81_290_RECOVERYDATETIME,
-      dispCenter: item.DISPCENTER_NAME_,
-      STATUS_NAME: (item.STATUS_NAME || "").toString().trim(),
-      isActive:
-        (item.STATUS_NAME || "").toString().trim().toLowerCase() === "открыта",
-      data: item,
-    }));
+    const prepareData = data.map((item) => {
+      const baseType = parseBaseType(item.BASE_TYPE);
+      const prepared = {
+        guid: item.VIOLATION_GUID_STR,
+        number: `${item.F81_010_NUMBER}`,
+        energoObject: item.F81_041_ENERGOOBJECTNAME,
+        createDateTime: item.F81_060_EVENTDATETIME,
+        recoveryPlanDateTime: item.F81_070_RESTOR_SUPPLAYDATETIME,
+        addressList: item.ADDRESS_LIST,
+        // description: item.F81_042_DISPNAME,
+        recoveryFactDateTime: item.F81_290_RECOVERYDATETIME,
+        dispCenter: item.DISPCENTER_NAME_,
+        STATUS_NAME: (item.STATUS_NAME || "").toString().trim(),
+        isActive:
+          (item.STATUS_NAME || "").toString().trim().toLowerCase() === "открыта",
+        data: item,
+      };
+      if (baseType !== null) {
+        prepared.BASE_TYPE = baseType;
+      }
+      return prepared;
+    });
 
     const results = await sendDataSequentially(prepareData);
     if (!results) {

@@ -16,10 +16,10 @@ const APPLY = hasFlag("--apply");
 const DRY_RUN = hasFlag("--dry-run") || !APPLY;
 const PROCESS_ALL = hasFlag("--all");
 const WITH_STATS = hasFlag("--stats");
+const FALLBACK_ZERO = hasFlag("--fallback-zero");
 const LIMIT = Math.max(1, Number(getArg("--limit", "1000")) || 1000);
 const PAGE_SIZE = Math.max(10, Math.min(200, Number(getArg("--page-size", "100")) || 100));
 const GUID = norm(getArg("--guid", ""));
-const TARGET_BASE_TYPE = 0;
 const STRAPI_URL = String(process.env.URL_STRAPI || process.env.STRAPI_URL || "").replace(/\/$/, "");
 
 if (!STRAPI_URL) {
@@ -50,7 +50,19 @@ function getTopBaseType(item) {
 }
 
 function getRawBaseType(raw) {
-  return hasFilledValue(raw?.BASE_TYPE) ? Number(raw.BASE_TYPE) : null;
+  if (!hasFilledValue(raw?.BASE_TYPE)) return null;
+  const value = Number(raw.BASE_TYPE);
+  return Number.isFinite(value) ? value : null;
+}
+
+function isValidBaseType(value) {
+  return value === 0 || value === 1;
+}
+
+function resolveTargetBaseType(rawBaseType) {
+  if (isValidBaseType(rawBaseType)) return rawBaseType;
+  if (FALLBACK_ZERO) return 0;
+  return null;
 }
 
 function getDocumentId(item) {
@@ -180,6 +192,7 @@ async function processItem({ token, item, dryRunLabel }) {
   const created = getCreateDate(item, raw);
   const topBaseType = getTopBaseType(item);
   const rawBaseType = getRawBaseType(raw);
+  const targetBaseType = resolveTargetBaseType(rawBaseType);
 
   if (!documentId) {
     return {
@@ -197,18 +210,32 @@ async function processItem({ token, item, dryRunLabel }) {
     };
   }
 
+  if (targetBaseType === null) {
+    return {
+      ok: true,
+      skippedHasTop: 0,
+      skippedNoRaw: 1,
+      message:
+        `[BASE_TYPE] Пропуск: не найден корректный внутренний data.BASE_TYPE для ` +
+        `rowId=${rowId || "—"}, documentId=${documentId}, GUID=${guid}, дата=${created}. ` +
+        `Верхнее поле пустое, внутреннее=${rawBaseType === null ? "пусто/некорректно" : rawBaseType}. ` +
+        `Если нужно принудительно проставить 0, запустите с --fallback-zero.`,
+    };
+  }
+
   const message =
     `[BASE_TYPE] ${dryRunLabel}: ` +
     `rowId=${rowId || "—"}, documentId=${documentId}, GUID=${guid}, дата=${created}, ` +
-    `верхнее=пусто, внутреннее=${rawBaseType === null ? "пусто" : rawBaseType}, ставим=${TARGET_BASE_TYPE}`;
+    `верхнее=пусто, внутреннее=${rawBaseType === null ? "пусто" : rawBaseType}, ставим=${targetBaseType}`;
 
   if (!DRY_RUN) {
-    await patchBaseType(token, documentId, TARGET_BASE_TYPE);
+    await patchBaseType(token, documentId, targetBaseType);
   }
 
   return {
     ok: true,
     skippedHasTop: 0,
+    skippedNoRaw: 0,
     message,
   };
 }
@@ -219,7 +246,10 @@ async function main() {
 
   console.log("[BASE_TYPE] Старт backfill верхнего поля BASE_TYPE");
   console.log(`[BASE_TYPE] Режим: ${DRY_RUN ? "dry-run (без записи)" : "apply (с записью)"}`);
-  console.log("[BASE_TYPE] Правило: пустое верхнее BASE_TYPE -> 0");
+  console.log("[BASE_TYPE] Правило: пустое верхнее BASE_TYPE -> значение из data.BASE_TYPE");
+  if (FALLBACK_ZERO) {
+    console.log("[BASE_TYPE] Включён fallback: если data.BASE_TYPE пустой/некорректный, ставим 0");
+  }
   console.log("[BASE_TYPE] Уже заполненные значения не перетираем");
   if (GUID) {
     console.log(`[BASE_TYPE] Точечный режим по GUID: ${GUID}`);
@@ -248,6 +278,7 @@ async function main() {
   let scanned = 0;
   let updated = 0;
   let skippedHasTop = 0;
+  let skippedNoRaw = 0;
   let failed = 0;
 
   if (GUID) {
@@ -268,10 +299,12 @@ async function main() {
 
     console.log(result.message);
     skippedHasTop += result.skippedHasTop;
-    updated = result.skippedHasTop ? 0 : 1;
+    skippedNoRaw += result.skippedNoRaw || 0;
+    updated = result.skippedHasTop || result.skippedNoRaw ? 0 : 1;
 
     console.log("[BASE_TYPE] Точечный режим завершён");
     console.log(`[BASE_TYPE] Обновлено записей: ${DRY_RUN ? 0 : updated}`);
+    console.log(`[BASE_TYPE] Пропущено без внутреннего data.BASE_TYPE: ${skippedNoRaw}`);
     console.log(`[BASE_TYPE] Время выполнения: ${((Date.now() - startedAt) / 1000).toFixed(2)} сек`);
     return;
   }
@@ -301,7 +334,8 @@ async function main() {
           });
           console.log(result.message);
           skippedHasTop += result.skippedHasTop;
-          if (!result.skippedHasTop) updated += 1;
+          skippedNoRaw += result.skippedNoRaw || 0;
+          if (!result.skippedHasTop && !result.skippedNoRaw) updated += 1;
         } catch (e) {
           failed += 1;
           const msg = e?.response?.data?.error?.message || e?.message || "Неизвестная ошибка";
@@ -339,7 +373,8 @@ async function main() {
           });
           console.log(result.message);
           skippedHasTop += result.skippedHasTop;
-          if (!result.skippedHasTop) updated += 1;
+          skippedNoRaw += result.skippedNoRaw || 0;
+          if (!result.skippedHasTop && !result.skippedNoRaw) updated += 1;
         } catch (e) {
           failed += 1;
           const msg = e?.response?.data?.error?.message || e?.message || "Неизвестная ошибка";
@@ -360,6 +395,7 @@ async function main() {
   console.log(`[BASE_TYPE] Просмотрено записей: ${scanned}`);
   console.log(`[BASE_TYPE] ${DRY_RUN ? "Будет обновлено при apply" : "Обновлено записей"}: ${updated}`);
   console.log(`[BASE_TYPE] Пропущено (верхнее поле уже заполнено): ${skippedHasTop}`);
+  console.log(`[BASE_TYPE] Пропущено без корректного внутреннего data.BASE_TYPE: ${skippedNoRaw}`);
   console.log(`[BASE_TYPE] Ошибок: ${failed}`);
   console.log(`[BASE_TYPE] Время выполнения: ${((Date.now() - startedAt) / 1000).toFixed(2)} сек`);
   console.log(
