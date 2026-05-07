@@ -34,6 +34,16 @@ const LOAD_BASE = MES_MODE === "prod" ? MES_PROD_LOAD_URL : MES_TEST_LOAD_URL;
 
 const router = express.Router();
 
+function readPositiveIntEnv(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function normalizeHttpMethod(v, fallback = "post") {
+  const method = String(v || fallback).trim().toLowerCase();
+  return method === "get" ? "get" : "post";
+}
+
 const MES_LOGIN = process.env.MES_LOGIN;
 const MES_PASSWORD = process.env.MES_PASSWORD;
 const SYS_CONTACT = process.env.MES_SYSTEM_CONTACT || "102"; // 1=РМР, 2=МОЭ
@@ -42,6 +52,10 @@ const KD_ORG = process.env.MES_ORG_CODE || "2"; // 2=МОЭ
 const FACILITY_ID = process.env.MES_FACILITY_ID || "1";
 const CAMPAIGN_TYPE = process.env.MES_CAMPAIGN_TYPE || "SETI_NOTICE";
 const MES_REQUEST_LOG = String(process.env.MES_REQUEST_LOG || "1") !== "0";
+const MES_AUTH_METHOD = normalizeHttpMethod(process.env.MES_AUTH_METHOD, "post");
+const MES_AUTH_TIMEOUT_MS = readPositiveIntEnv("MES_AUTH_TIMEOUT_MS", 12000);
+const MES_UPLOAD_TIMEOUT_MS = readPositiveIntEnv("MES_UPLOAD_TIMEOUT_MS", 30000);
+const MES_RETRY_ATTEMPTS = readPositiveIntEnv("MES_RETRY_ATTEMPTS", 1);
 
 /* ---------------- utils ---------------- */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -165,22 +179,49 @@ function makeAuthParams(masked = false) {
   };
 }
 
+async function sendMesAuthRequest({ method = MES_AUTH_METHOD, timeoutMs = MES_AUTH_TIMEOUT_MS } = {}) {
+  const params = makeAuthParams(false);
+  const normalizedMethod = normalizeHttpMethod(method, MES_AUTH_METHOD);
+  const startedAt = Date.now();
+
+  const response =
+    normalizedMethod === "get"
+      ? await axios.get(AUTH_BASE, { params, timeout: timeoutMs })
+      : await axios.post(AUTH_BASE, null, { params, timeout: timeoutMs });
+
+  return {
+    data: response.data,
+    durationMs: Date.now() - startedAt,
+    request: {
+      method: normalizedMethod.toUpperCase(),
+      url: AUTH_BASE,
+      query: makeAuthParams(true),
+      timeout_ms: timeoutMs,
+    },
+  };
+}
+
 /* ---------------- auth ---------------- */
 async function mesAuth() {
   if (!AUTH_BASE || !MES_LOGIN || !MES_PASSWORD) {
     throw new Error("MES_* не настроены в .env");
   }
-  const params = makeAuthParams(false);
 
-  // Было timeout 15000 → увеличил до 45000 + ретраи
   logMes("[МосЭнергоСбыт] auth: отправляем запрос", {
     mode: MES_MODE,
     url: AUTH_BASE,
+    method: MES_AUTH_METHOD.toUpperCase(),
+    timeout_ms: MES_AUTH_TIMEOUT_MS,
+    retry_attempts: MES_RETRY_ATTEMPTS,
     query: makeAuthParams(true),
   });
   const { data } = await withRetry(
-    () => axios.post(AUTH_BASE, null, { params, timeout: 45000 }),
-    { attempts: 3, baseDelay: 1500 }
+    () =>
+      sendMesAuthRequest({
+        method: MES_AUTH_METHOD,
+        timeoutMs: MES_AUTH_TIMEOUT_MS,
+      }),
+    { attempts: MES_RETRY_ATTEMPTS, baseDelay: 1500 }
   );
 
   const session = data?.data?.[0]?.session;
@@ -188,30 +229,25 @@ async function mesAuth() {
   return session;
 }
 
-async function mesAuthDiagnostic() {
+async function mesAuthDiagnostic(method = MES_AUTH_METHOD) {
   if (!AUTH_BASE || !MES_LOGIN || !MES_PASSWORD) {
     throw new Error("MES_* не настроены в .env");
   }
 
-  const params = makeAuthParams(false);
-  const request = {
-    method: "POST",
-    url: AUTH_BASE,
-    query: makeAuthParams(true),
-  };
+  const normalizedMethod = normalizeHttpMethod(method, MES_AUTH_METHOD);
 
   console.log("[МосЭнергоСбыт] Диагностика: попытка 1 из 1");
-  console.log("[МосЭнергоСбыт] Диагностика: отправляем action=auth");
+  console.log(
+    `[МосЭнергоСбыт] Диагностика: отправляем action=auth методом ${normalizedMethod.toUpperCase()}`
+  );
   console.log(
     `[МосЭнергоСбыт] Диагностика: логин=${MES_LOGIN}, пароль=${maskSecret(MES_PASSWORD)}`
   );
 
-  const startedAt = Date.now();
-  const { data } = await axios.post(AUTH_BASE, null, {
-    params,
-    timeout: 12000,
+  const { data, durationMs, request } = await sendMesAuthRequest({
+    method: normalizedMethod,
+    timeoutMs: MES_AUTH_TIMEOUT_MS,
   });
-  const durationMs = Date.now() - startedAt;
 
   console.log(`[МосЭнергоСбыт] Диагностика: внешний сервер ответил за ${durationMs}мс`);
 
@@ -344,16 +380,15 @@ async function mesUploadRegistry(items, { externalId } = {}) {
     vl_registry: items,
   });
 
-  // Было timeout 30000 → поднял до 60000 + ретраи
   const { data } = await withRetry(
     () =>
       axios.post(LOAD_BASE, form, {
         params,
         headers: form.getHeaders(),
-        timeout: 60000,
+        timeout: MES_UPLOAD_TIMEOUT_MS,
         maxBodyLength: Infinity,
       }),
-    { attempts: 3, baseDelay: 1500 }
+    { attempts: MES_RETRY_ATTEMPTS, baseDelay: 1500 }
   );
 
   const idRegistry = data?.data?.[0]?.id_registry;
@@ -529,6 +564,10 @@ router.get("/ping", async (req, res) => {
       LOAD_BASE: !!LOAD_BASE,
       auth_url: AUTH_BASE || null,
       load_url: LOAD_BASE || null,
+      auth_method: MES_AUTH_METHOD.toUpperCase(),
+      auth_timeout_ms: MES_AUTH_TIMEOUT_MS,
+      upload_timeout_ms: MES_UPLOAD_TIMEOUT_MS,
+      retry_attempts: MES_RETRY_ATTEMPTS,
     });
   } catch (e) {
     return res
@@ -538,19 +577,22 @@ router.get("/ping", async (req, res) => {
 });
 
 // Диагностика авторизации
-router.get("/auth-test", async (_req, res) => {
+router.get("/auth-test", async (req, res) => {
   const startedAt = Date.now();
   const startedIso = new Date(startedAt).toISOString();
+  const method = normalizeHttpMethod(req.query.method, MES_AUTH_METHOD);
 
   console.log("[МосЭнергоСбыт] Тест авторизации: старт");
   console.log(`[МосЭнергоСбыт] AUTH_BASE: ${AUTH_BASE || "не задан"}`);
-  console.log("[МосЭнергоСбыт] Режим диагностики: timeout=12000мс, retry=1");
+  console.log(
+    `[МосЭнергоСбыт] Режим диагностики: method=${method.toUpperCase()}, timeout=${MES_AUTH_TIMEOUT_MS}мс, retry=1`
+  );
   console.log(
     `[МосЭнергоСбыт] Учетные данные: login=${MES_LOGIN || "не задан"}, password=${maskSecret(MES_PASSWORD) || "не задан"}`
   );
 
   try {
-    const result = await mesAuthDiagnostic();
+    const result = await mesAuthDiagnostic(method);
     const durationMs = Date.now() - startedAt;
     console.log(
       `[МосЭнергоСбыт] Тест авторизации: session получен успешно за ${durationMs}мс`
@@ -565,7 +607,8 @@ router.get("/auth-test", async (_req, res) => {
         duration_ms: durationMs,
         mode: MES_MODE,
         auth_url: AUTH_BASE,
-        timeout_ms: 12000,
+        auth_method: method.toUpperCase(),
+        timeout_ms: MES_AUTH_TIMEOUT_MS,
         retry_attempts: 1,
         credentials: {
           login: MES_LOGIN || null,
@@ -610,9 +653,10 @@ router.get("/auth-test", async (_req, res) => {
           password: maskSecret(MES_PASSWORD),
         },
         request: {
-          method: "POST",
+          method: method.toUpperCase(),
           url: AUTH_BASE,
           query: makeAuthParams(true),
+          timeout_ms: MES_AUTH_TIMEOUT_MS,
         },
         http_status: e?.response?.status || null,
       },
