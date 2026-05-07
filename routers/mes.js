@@ -6,11 +6,25 @@ const FormData = require("form-data");
 const dayjs = require("dayjs");
 const { logAuditFromReq } = require("../services/auditLogger");
 
-const AUTH_BASE = process.env.MES_AUTH_URL || process.env.MES_BASE_URL;
-const LOAD_BASE = process.env.MES_LOAD_URL || process.env.MES_BASE_URL;
+const MES_MODE = String(process.env.MES_MODE || process.env.MES_ENV || "test")
+  .trim()
+  .toLowerCase();
+
+const MES_TEST_AUTH_URL =
+  process.env.MES_TEST_AUTH_URL || process.env.MES_AUTH_URL || process.env.MES_BASE_URL;
+const MES_TEST_LOAD_URL =
+  process.env.MES_TEST_LOAD_URL || process.env.MES_LOAD_URL || process.env.MES_BASE_URL;
+const MES_PROD_AUTH_URL =
+  process.env.MES_PROD_AUTH_URL || process.env.MES_AUTH_URL || process.env.MES_BASE_URL;
+const MES_PROD_LOAD_URL =
+  process.env.MES_PROD_LOAD_URL || process.env.MES_LOAD_URL || process.env.MES_BASE_URL;
+
+const AUTH_BASE = MES_MODE === "prod" ? MES_PROD_AUTH_URL : MES_TEST_AUTH_URL;
+const LOAD_BASE = MES_MODE === "prod" ? MES_PROD_LOAD_URL : MES_TEST_LOAD_URL;
 
 (function logMesEndpoints() {
   try {
+    console.log(`[MES] mode=${MES_MODE}`);
     console.log(`[MES] AUTH_BASE: ${AUTH_BASE}`);
   } catch (_) {}
   try {
@@ -25,6 +39,9 @@ const MES_PASSWORD = process.env.MES_PASSWORD;
 const SYS_CONTACT = process.env.MES_SYSTEM_CONTACT || "102"; // 1=РМР, 2=МОЭ
 const KD_CHANNEL = process.env.MES_CHANNEL || "3"; // 3=ЕЛКК ФЛ
 const KD_ORG = process.env.MES_ORG_CODE || "2"; // 2=МОЭ
+const FACILITY_ID = process.env.MES_FACILITY_ID || "1";
+const CAMPAIGN_TYPE = process.env.MES_CAMPAIGN_TYPE || "SETI_NOTICE";
+const MES_REQUEST_LOG = String(process.env.MES_REQUEST_LOG || "1") !== "0";
 
 /* ---------------- utils ---------------- */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -53,18 +70,114 @@ function clean(v) {
   return String(v);
 }
 
+function maskSecret(v) {
+  if (!v) return null;
+  const s = String(v);
+  if (s.length <= 4) return "****";
+  return `${s.slice(0, 2)}***${s.slice(-2)}`;
+}
+
+function maskSession(v) {
+  if (!v) return null;
+  const s = String(v);
+  if (s.length <= 10) return "********";
+  return `${s.slice(0, 6)}***${s.slice(-4)}`;
+}
+
+function sanitizeMesResponse(data) {
+  if (!data || typeof data !== "object") return data;
+  const copy = JSON.parse(JSON.stringify(data));
+  if (Array.isArray(copy.data)) {
+    copy.data = copy.data.map((row) => {
+      if (row && typeof row === "object" && row.session) {
+        return { ...row, session: maskSession(row.session) };
+      }
+      return row;
+    });
+  }
+  return copy;
+}
+
+function logMes(...args) {
+  if (MES_REQUEST_LOG) console.log(...args);
+}
+
+function splitFirst(v) {
+  const val = clean(v);
+  if (!val) return null;
+  return (
+    val
+      .split(/[;,]/)
+      .map((s) => s.trim())
+      .filter(Boolean)[0] || null
+  );
+}
+
+function normalizeBaseType(v) {
+  if (v === undefined || v === null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function getBaseTypeFromPayload(p = {}) {
+  return normalizeBaseType(p.base_type ?? p.BASE_TYPE);
+}
+
+function getBaseTypeFromTn(tn) {
+  const raw = tn?.data?.data || {};
+  const obj = tn?.data || {};
+  return normalizeBaseType(obj.BASE_TYPE ?? raw.BASE_TYPE);
+}
+
+function getExternalIdFromPayload(p = {}) {
+  return (
+    clean(p.external_id) ||
+    clean(p.VIOLATION_GUID_STR) ||
+    clean(p.guid) ||
+    clean(p.id_registry_ext) ||
+    null
+  );
+}
+
+function getExternalIdFromTn(tn) {
+  const raw = tn?.data?.data || {};
+  const obj = tn?.data || {};
+  return (
+    clean(raw.VIOLATION_GUID_STR) ||
+    clean(obj.guid) ||
+    clean(obj.documentId) ||
+    clean(obj.id) ||
+    null
+  );
+}
+
+function buildRegistryExternalId(externalId) {
+  const base = clean(externalId) || "mosoblenergo";
+  const safeBase = base.replace(/[^\w.-]+/g, "_").slice(0, 80);
+  return `${safeBase}_${dayjs().format("YYYYMMDDHHmmss")}`;
+}
+
+function makeAuthParams(masked = false) {
+  return {
+    action: "auth",
+    login: MES_LOGIN,
+    pwd_password: masked ? maskSecret(MES_PASSWORD) : MES_PASSWORD,
+  };
+}
+
 /* ---------------- auth ---------------- */
 async function mesAuth() {
   if (!AUTH_BASE || !MES_LOGIN || !MES_PASSWORD) {
     throw new Error("MES_* не настроены в .env");
   }
-  const params = {
-    action: "auth",
-    login: MES_LOGIN,
-    pwd_password: MES_PASSWORD,
-  };
+  const params = makeAuthParams(false);
 
   // Было timeout 15000 → увеличил до 45000 + ретраи
+  logMes("[МосЭнергоСбыт] auth: отправляем запрос", {
+    mode: MES_MODE,
+    url: AUTH_BASE,
+    query: makeAuthParams(true),
+  });
   const { data } = await withRetry(
     () => axios.post(AUTH_BASE, null, { params, timeout: 45000 }),
     { attempts: 3, baseDelay: 1500 }
@@ -80,21 +193,17 @@ async function mesAuthDiagnostic() {
     throw new Error("MES_* не настроены в .env");
   }
 
-  const params = {
-    action: "auth",
-    login: MES_LOGIN,
-    pwd_password: MES_PASSWORD,
-  };
+  const params = makeAuthParams(false);
   const request = {
     method: "POST",
     url: AUTH_BASE,
-    query: params,
+    query: makeAuthParams(true),
   };
 
   console.log("[МосЭнергоСбыт] Диагностика: попытка 1 из 1");
   console.log("[МосЭнергоСбыт] Диагностика: отправляем action=auth");
   console.log(
-    `[МосЭнергоСбыт] Диагностика: логин=${MES_LOGIN}, пароль=${MES_PASSWORD}`
+    `[МосЭнергоСбыт] Диагностика: логин=${MES_LOGIN}, пароль=${maskSecret(MES_PASSWORD)}`
   );
 
   const startedAt = Date.now();
@@ -108,42 +217,33 @@ async function mesAuthDiagnostic() {
 
   const session = data?.data?.[0]?.session;
   if (!session) throw new Error("Не получили session от СУВК");
-  return { session, raw: data, durationMs, request };
+  return { session, raw: sanitizeMesResponse(data), durationMs, request };
 }
 
 /* ---------------- mapping ---------------- */
 function mapNotification(tn) {
   const raw = tn?.data?.data || {};
-  const type = clean(raw.VIOLATION_TYPE || tn?.data?.type) || "";
   const status = clean(raw.STATUS_NAME || tn?.data?.STATUS_NAME) || "";
-  const t = type.toLowerCase();
   const s = status.toLowerCase();
-  if (t.includes("план") || t === "п") return "3";
   if (s.includes("запитан") || s.includes("закрыт")) return "2";
+  if (getBaseTypeFromTn(tn) === 1) return "3";
   return "1";
 }
 
 function firstFiasHouse(tn) {
   const raw = tn?.data?.data || {};
-  const val = clean(
+  return splitFirst(
     raw.FIAS_LIST || tn?.data?.FIAS_LIST || tn?.data?.house_fias_list
-  );
-  if (!val) return null;
-  return (
-    val
-      .split(/[;,]/)
-      .map((s) => s.trim())
-      .filter(Boolean)[0] || null
   );
 }
 
 function buildRegistryItemFromMesPayload(p, idx = 1) {
-  const fias = clean(p.fias) || clean(p.Guid2) || clean(p.FIAS_LIST) || "";
-  const st = (clean(p.status) || "").toLowerCase();
+  const fias = splitFirst(p.fias) || splitFirst(p.Guid2) || splitFirst(p.FIAS_LIST) || "";
   const cond = (clean(p.condition) || "").toLowerCase();
+  const baseType = getBaseTypeFromPayload(p);
   let kdNotif = "1";
-  if (st === "п" || st.includes("план")) kdNotif = "3";
-  else if (cond.includes("запитан") || cond.includes("закрыт")) kdNotif = "2";
+  if (cond.includes("запитан") || cond.includes("закрыт")) kdNotif = "2";
+  else if (baseType === 1) kdNotif = "3";
 
   const item = {
     id_regline_ext: String(p.id_regline_ext || idx),
@@ -180,7 +280,9 @@ function buildRegistryItem(tn, idx = 1) {
   const datePlan = toIsoT(
     raw.F81_070_RESTOR_SUPPLAYDATETIME || obj.recoveryPlanDateTime
   );
-  const dateFact = toIsoT(raw.F81_290_RECOVERYDATETIME || obj.recoveryDateTime);
+  const dateFact = toIsoT(
+    raw.F81_290_RECOVERYDATETIME || obj.recoveryFactDateTime || obj.recoveryDateTime
+  );
   const reason = (
     clean(obj.description) ||
     clean(raw.DESCRIPTION) ||
@@ -195,6 +297,9 @@ function buildRegistryItem(tn, idx = 1) {
     KD_ORG,
   };
 
+  const fias = firstFiasHouse(tn);
+  if (fias) item.GUID_FIAS_HOUSE = fias;
+
   if (dateOff) item.DT_OUTAGE_TIME_PLANNED = dateOff;
   if (kdNotif === "2") {
     if (dateFact) item.DT_RESTORATION_TIME_PLANNED = dateFact;
@@ -208,26 +313,35 @@ function buildRegistryItem(tn, idx = 1) {
 }
 
 /* ---------------- upload + status ---------------- */
-async function mesUploadRegistry(items) {
+async function mesUploadRegistry(items, { externalId } = {}) {
   const session = await mesAuth();
+  const idRegistryExt = buildRegistryExternalId(externalId);
 
   const params = {
     action: "upload",
     query: "FwdRegistryLoad",
     session,
-    id_registry_ext: String(Date.now()).slice(-9),
+    id_registry_ext: idRegistryExt,
     kd_system_contact: SYS_CONTACT,
     kd_channel: KD_CHANNEL,
     dt_campaign_beg: dayjs().format("YYYY-MM-DD"),
     dt_campaign_end: dayjs().add(3, "day").format("YYYY-MM-DD"),
-    id_facility: "1",
-    kd_tp_campaign: "SETI_NOTICE",
+    id_facility: FACILITY_ID,
+    kd_tp_campaign: CAMPAIGN_TYPE,
   };
 
   const form = new FormData();
   form.append("vl_registry", Buffer.from(JSON.stringify(items, null, 2)), {
     filename: "registry.json",
     contentType: "application/json",
+  });
+
+  logMes("[МосЭнергоСбыт] upload: отправляем реестр", {
+    mode: MES_MODE,
+    url: LOAD_BASE,
+    query: { ...params, session: maskSession(session) },
+    rows: items.length,
+    vl_registry: items,
   });
 
   // Было timeout 30000 → поднял до 60000 + ретраи
@@ -244,7 +358,8 @@ async function mesUploadRegistry(items) {
 
   const idRegistry = data?.data?.[0]?.id_registry;
   if (!idRegistry) throw new Error("Не получили id_registry в ответе СУВК");
-  return { idRegistry, session, raw: data };
+  logMes("[МосЭнергоСбыт] upload: ответ внешней системы", sanitizeMesResponse(data));
+  return { idRegistry, idRegistryExt, session, raw: data };
 }
 
 async function mesCheckStatus({ session, idRegistry }) {
@@ -266,29 +381,38 @@ router.post("/upload", express.json({ limit: "20mb" }), async (req, res) => {
   try {
     const body = req.body || {};
     let items = [];
+    let externalId = null;
 
     const list = Array.isArray(body?.tns)
       ? body.tns
       : [body?.tn].filter(Boolean);
-    if (list.length) items = list.map((tn, i) => buildRegistryItem(tn, i + 1));
+    if (list.length) {
+      items = list.map((tn, i) => buildRegistryItem(tn, i + 1));
+      externalId = getExternalIdFromTn(list[0]);
+    }
 
     const looksLikeMes =
       body &&
       (body.date_off ||
         body.massage ||
         body.status ||
+        body.base_type !== undefined ||
+        body.BASE_TYPE !== undefined ||
+        body.external_id ||
         body.condition ||
         body.fias ||
         body.Guid2 ||
         body.FIAS_LIST);
-    if (!items.length && looksLikeMes)
+    if (!items.length && looksLikeMes) {
       items = [buildRegistryItemFromMesPayload(body, 1)];
+      externalId = getExternalIdFromPayload(body);
+    }
 
     if (!items.length) {
       return res.status(400).json({
         ok: false,
         message:
-          "Передай tn/tns или MES-поля (date_off/.../condition) + fias/Guid2/FIAS_LIST",
+          "Передай tn/tns или MES-поля (date_off/.../condition/base_type) + fias/Guid2/FIAS_LIST",
       });
     }
 
@@ -303,16 +427,30 @@ router.post("/upload", express.json({ limit: "20mb" }), async (req, res) => {
         dryRun: true,
         id_registry: fakeId,
         session: "TEST-SESSION",
+        id_registry_ext: buildRegistryExternalId(externalId),
         vl_registry: items,
       });
     }
 
     console.log(`МосЭнергоСбыт UPLOAD: строк реестра = ${items.length}`);
-    const { idRegistry, session } = await mesUploadRegistry(items);
+    const { idRegistry, idRegistryExt, session } = await mesUploadRegistry(items, {
+      externalId,
+    });
     console.log("МосЭнергоСбыт: id_registry =", idRegistry);
+    console.log("МосЭнергоСбыт: id_registry_ext =", idRegistryExt);
 
-    auditDetails = { result: "ok", rows: items.length, id_registry: idRegistry };
-    return res.json({ ok: true, id_registry: idRegistry, session });
+    auditDetails = {
+      result: "ok",
+      rows: items.length,
+      id_registry: idRegistry,
+      id_registry_ext: idRegistryExt,
+    };
+    return res.json({
+      ok: true,
+      id_registry: idRegistry,
+      id_registry_ext: idRegistryExt,
+      session: maskSession(session),
+    });
   } catch (e) {
     const status = e?.response?.status || 502;
     const details = e?.response?.data;
@@ -338,7 +476,13 @@ router.post("/upload", express.json({ limit: "20mb" }), async (req, res) => {
         page: "/services/mes/upload",
         action: "mes_upload",
         entity: "mes",
-        entity_id: String(req.body?.tn?.data?.number || req.body?.number || ""),
+        entity_id: String(
+          req.body?.tn?.data?.number ||
+            req.body?.number ||
+            req.body?.external_id ||
+            req.body?.VIOLATION_GUID_STR ||
+            ""
+        ),
         details: {
           ...auditDetails,
           duration_ms: Date.now() - startedAt,
@@ -380,8 +524,11 @@ router.get("/ping", async (req, res) => {
         .json({ ok: false, message: "MES_* URL не настроены" });
     return res.json({
       ok: true,
+      mode: MES_MODE,
       AUTH_BASE: !!AUTH_BASE,
       LOAD_BASE: !!LOAD_BASE,
+      auth_url: AUTH_BASE || null,
+      load_url: LOAD_BASE || null,
     });
   } catch (e) {
     return res
@@ -399,7 +546,7 @@ router.get("/auth-test", async (_req, res) => {
   console.log(`[МосЭнергоСбыт] AUTH_BASE: ${AUTH_BASE || "не задан"}`);
   console.log("[МосЭнергоСбыт] Режим диагностики: timeout=12000мс, retry=1");
   console.log(
-    `[МосЭнергоСбыт] Учетные данные: login=${MES_LOGIN || "не задан"}, password=${MES_PASSWORD || "не задан"}`
+    `[МосЭнергоСбыт] Учетные данные: login=${MES_LOGIN || "не задан"}, password=${maskSecret(MES_PASSWORD) || "не задан"}`
   );
 
   try {
@@ -412,16 +559,17 @@ router.get("/auth-test", async (_req, res) => {
     return res.json({
       ok: true,
       message: "Сессионный токен получен",
-      session: result.session,
+      session: maskSession(result.session),
       debug: {
         started_at: startedIso,
         duration_ms: durationMs,
+        mode: MES_MODE,
         auth_url: AUTH_BASE,
         timeout_ms: 12000,
         retry_attempts: 1,
         credentials: {
           login: MES_LOGIN || null,
-          password: MES_PASSWORD || null,
+          password: maskSecret(MES_PASSWORD),
         },
         request: result.request,
         raw_response: result.raw,
@@ -459,16 +607,12 @@ router.get("/auth-test", async (_req, res) => {
         retry_attempts: 1,
         credentials: {
           login: MES_LOGIN || null,
-          password: MES_PASSWORD || null,
+          password: maskSecret(MES_PASSWORD),
         },
         request: {
           method: "POST",
           url: AUTH_BASE,
-          query: {
-            action: "auth",
-            login: MES_LOGIN || null,
-            pwd_password: MES_PASSWORD || null,
-          },
+          query: makeAuthParams(true),
         },
         http_status: e?.response?.status || null,
       },
