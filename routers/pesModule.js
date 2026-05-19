@@ -4,11 +4,9 @@ const {
   loadPesItems,
   loadAssemblyDestinations,
   loadTpDestinations,
+  loadTpDestinationById,
   loadTpHints,
 } = require("../services/pes/pesModuleData");
-// Telegram-рассылка ПЭС отключена: оставляем код в архиве, но не импортируем.
-// const { sendPesTelegram } = require("../services/pes/tg/pesTelegram");
-// const { sendPesSubscribersNotification } = require("../services/pes/tg/pesBot");
 const {
   sendPesMaxSubscribersNotification,
 } = require("../services/pes/max/pesMaxNotifications");
@@ -208,7 +206,7 @@ function roleFromReq(req) {
 
 function actorRoleForLog(req) {
   const source = norm(req.body?.source).toLowerCase();
-  if (source === "telegram" || source === "max") return "telegram";
+  if (source === "max") return "telegram";
 
   const role = roleFromReq(req);
   if (role === "supergeneral") return "supergeneral";
@@ -258,9 +256,14 @@ async function pickDestination({
 
   // Защита от рассинхрона справочника/филиала:
   // если точка не нашлась в "филиальном" списке, пробуем глобальный список.
-  if (!found && destinationType === "assembly") {
-    const globalList = await loadAssemblyDestinations({ branch: "" });
-    found = globalList.find((x) => String(x.id || "") === destinationKey) || null;
+  // Для ТП это нужно при отправке ПЭС в ТП другого филиала.
+  if (!found) {
+    if (destinationType === "tp") {
+      found = await loadTpDestinationById(destinationKey);
+    } else {
+      const globalList = await loadAssemblyDestinations({ branch: "" });
+      found = globalList.find((x) => String(x.id || "") === destinationKey) || null;
+    }
   }
 
   if (!found) return null;
@@ -615,17 +618,13 @@ router.get("/history", async (req, res) => {
 });
 
 router.get("/config", (req, res) => {
-  // Telegram отключен в пользу MAX.
-  // const hasToken = Boolean(process.env.PES_TELEGRAM_BOT_TOKEN);
-  // const hasChats = Boolean(process.env.PES_TELEGRAM_CHATS);
-  // const botSubsEnabled = String(process.env.PES_BOT_ENABLED || "1") === "1";
   const maxConfigured =
     Boolean(process.env.PES_MAX_BOT_TOKEN) &&
     String(process.env.PES_MAX_BOT_ENABLED || "0") === "1";
   res.json({
     ok: true,
-    telegramConfigured: false,
     maxConfigured,
+    maxMode: "webhook",
     strictMode: false,
   });
 });
@@ -800,20 +799,6 @@ router.post("/command", requireManageRole, async (req, res) => {
 
     const branch = items[0]?.branch || "";
 
-    // Telegram полностью отключен в пользу MAX.
-    const telegramResult = { ok: true, skipped: true, reason: "telegram-disabled" };
-    const subscribersResult = { ok: true, skipped: true, reason: "telegram-disabled" };
-    // if (["dispatch", "cancel", "reroute"].includes(action)) {
-    //   telegramResult = await sendPesTelegram({ action, branch, items, destination, comment });
-    // }
-    // const subscribersResult = await sendPesSubscribersNotification({
-    //   action,
-    //   branch,
-    //   items,
-    //   destination,
-    //   comment,
-    // });
-
     const maxResult = await sendPesMaxSubscribersNotification({
       action,
       branch,
@@ -836,8 +821,6 @@ router.post("/command", requireManageRole, async (req, res) => {
 
     res.json({
       ok: true,
-      telegram: telegramResult,
-      subscribers: subscribersResult,
       max: maxResult,
       updated: items.map((x) => toDto(x)),
       summary: summaryOf(refreshed),

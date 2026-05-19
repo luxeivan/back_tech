@@ -19,6 +19,18 @@ const cache = {
 const TTL_UNITS_MS = 60 * 1000;
 const TTL_POINTS_MS = 60 * 1000;
 const TTL_ELECTRO_MS = 10 * 60 * 1000;
+const ELECTRO_FIELDS = [
+  "keylink",
+  "subcontrol_area_name",
+  "enobj_name",
+  "subclass_name",
+  "class_name",
+  "rclass_name",
+  "address",
+  "settlement",
+  "lat",
+  "lon",
+];
 
 const BRANCH_CANONICAL = new Map([
   ["домодедовск", "ДОМОДЕДОВСКИЙ"],
@@ -53,6 +65,15 @@ const PO_TITLE_OVERRIDES = new Map([
   ["голицынск", "Голицынское ПО"],
   ["краснознамен", "Краснознаменное ПО"],
   ["щелков", "Щелковское ПО"],
+]);
+
+const PO_SEARCH_OVERRIDES = new Map([
+  ["лесногород", ["городок"]],
+]);
+
+const TP_HINT_EXCLUDED_PO_KEYS = new Set([
+  // В electro-objects нет ТП для этой записи, а точка сбора в Strapi без адреса.
+  "загородный",
 ]);
 
 function norm(v) {
@@ -176,10 +197,49 @@ function branchNeedle(branch) {
 }
 
 function poNeedle(po) {
-  return normLc(po)
+  return norm(po)
+    .toLowerCase()
     .replace(/ё/g, "е")
-    .replace(/\b(по|су|ср|уч|участок|филиал)\b/g, "")
-    .replace(/[^а-яa-z0-9]/gi, "");
+    .split(/[^а-яa-z0-9]+/gi)
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .filter((x) => !["по", "су", "ср", "уч", "участок", "филиал"].includes(x))
+    .join("");
+}
+
+function poSearchTerm(po) {
+  const key = poNeedle(po);
+  for (const [needle, terms] of PO_SEARCH_OVERRIDES.entries()) {
+    if (key.includes(needle) || needle.includes(key)) return terms[0];
+  }
+  for (const [needle, label] of PO_TITLE_OVERRIDES.entries()) {
+    if (samePo(label, po)) return needle;
+  }
+  const [token] = matchTokens(po);
+  if (token && token.length > 5 && token.endsWith("ск")) return token.slice(0, -2);
+  return token || poNeedle(po);
+}
+
+function rowContainsPoTerm(row, term) {
+  const needle = norm(term).toLowerCase().replace(/ё/g, "е");
+  if (!needle) return false;
+  return normForMatch(
+    `${row?.subcontrol_area_name || ""} ${row?.settlement || ""} ${row?.address || ""} ${row?.enobj_name || ""}`
+  )
+    .replace(/\s+/g, "")
+    .includes(needle);
+}
+
+function mergeRowsByKeylink(lists) {
+  const map = new Map();
+  for (const list of lists) {
+    for (const row of Array.isArray(list) ? list : []) {
+      const key = norm(row?.keylink) || norm(row?.documentId) || String(row?.id || "");
+      if (!key || map.has(key)) continue;
+      map.set(key, row);
+    }
+  }
+  return Array.from(map.values());
 }
 
 function samePo(a, b) {
@@ -279,14 +339,15 @@ async function getToken() {
   return jwt;
 }
 
-async function fetchAll(endpoint, fields, token) {
+async function fetchAll(endpoint, fields, token, extraParams = {}) {
   if (!STRAPI_URL) throw new Error("URL_STRAPI не задан");
   const rows = [];
-  let page = 1;
   const pageSize = 100;
+  const concurrency = 6;
 
-  while (true) {
+  const fetchPage = async (page) => {
     const params = {
+      ...extraParams,
       "pagination[page]": page,
       "pagination[pageSize]": pageSize,
     };
@@ -301,18 +362,32 @@ async function fetchAll(endpoint, fields, token) {
     });
 
     const batch = Array.isArray(data?.data) ? data.data : [];
+    const pageRows = [];
     for (const row of batch) {
       const attrs = row?.attributes || row || {};
-      rows.push({
+      pageRows.push({
         id: row?.id ?? attrs?.id ?? null,
         documentId: row?.documentId || attrs?.documentId || null,
         ...attrs,
       });
     }
 
-    const pg = data?.meta?.pagination;
-    if (!pg || page >= Number(pg.pageCount || 1)) break;
-    page += 1;
+    return {
+      rows: pageRows,
+      pageCount: Number(data?.meta?.pagination?.pageCount || 1),
+    };
+  };
+
+  const first = await fetchPage(1);
+  rows.push(...first.rows);
+
+  const pages = [];
+  for (let page = 2; page <= first.pageCount; page += 1) pages.push(page);
+
+  for (let i = 0; i < pages.length; i += concurrency) {
+    const chunk = pages.slice(i, i + concurrency);
+    const results = await Promise.all(chunk.map((page) => fetchPage(page)));
+    for (const result of results) rows.push(...result.rows);
   }
 
   return rows;
@@ -394,24 +469,14 @@ async function getElectro() {
     return cache.electro.rows;
   }
   const token = await getToken();
-  const rows = await fetchAll(
-    ENDPOINT_ELECTRO,
-    [
-      "keylink",
-      "subcontrol_area_name",
-      "enobj_name",
-      "subclass_name",
-      "class_name",
-      "rclass_name",
-      "address",
-      "settlement",
-      "lat",
-      "lon",
-    ],
-    token
-  );
+  const rows = await fetchAll(ENDPOINT_ELECTRO, ELECTRO_FIELDS, token);
   cache.electro = { ts: now, rows };
   return rows;
+}
+
+async function getElectroFiltered(extraParams = {}) {
+  const token = await getToken();
+  return fetchAll(ENDPOINT_ELECTRO, ELECTRO_FIELDS, token, extraParams);
 }
 
 function pickPointMeta(unit, points) {
@@ -560,13 +625,13 @@ async function loadAssemblyDestinations({ branch = "" } = {}) {
     });
 }
 
-async function loadTpDestinations({ branch = "", po = "" } = {}) {
+async function mapTpRows(rows, { branch = "", po = "" } = {}) {
   const branchNorm = canonicalBranch(branch);
   const hasBranchFilter = Boolean(normLc(branchNorm));
   const poNorm = norm(po);
   const hasPoFilter = Boolean(poNorm);
 
-  const [rows, points] = await Promise.all([getElectro(), getPoints()]);
+  const points = await getPoints();
   const poBranchIndex = buildPoBranchIndex(points);
 
   return rows
@@ -577,42 +642,74 @@ async function loadTpDestinations({ branch = "", po = "" } = {}) {
       if (forcedBranch) return hasBranchFilter ? sameBranch(forcedBranch, branchNorm) : true;
       const mappedBranch = poBranchIndex.get(key) || "";
       if (mappedBranch) return hasBranchFilter ? sameBranch(mappedBranch, branchNorm) : true;
+      if (hasPoFilter && rowContainsPoTerm(r, poSearchTerm(poNorm))) return true;
       return hasBranchFilter ? matchesBranch(r, branchNorm) : true;
     })
-    .map((r) => ({
-      id: `tp-${norm(r.keylink)}`,
-      keylink: norm(r.keylink),
-      branch:
-        canonicalBranch(
-          resolvePoBranchOverride(poNeedle(r.subcontrol_area_name)) ||
-            poBranchIndex.get(poNeedle(r.subcontrol_area_name)) ||
-            branchNorm
-        ) || branchNorm || "",
-      po: canonicalPoTitle(r.subcontrol_area_name),
-      title: norm(r.enobj_name) || norm(r.keylink),
-      address: norm(r.address) || norm(r.settlement) || norm(r.subcontrol_area_name),
-      lat: toNum(r.lat),
-      lon: toNum(r.lon),
-      type: "tp",
-    }))
+    .map((r) => {
+      const rawPo = canonicalPoTitle(r.subcontrol_area_name);
+      const poTitle =
+        hasPoFilter && !samePo(rawPo, poNorm) && rowContainsPoTerm(r, poSearchTerm(poNorm))
+          ? poNorm
+          : rawPo;
+      return {
+        id: `tp-${norm(r.keylink)}`,
+        keylink: norm(r.keylink),
+        branch:
+          canonicalBranch(
+            resolvePoBranchOverride(poNeedle(r.subcontrol_area_name)) ||
+              poBranchIndex.get(poNeedle(r.subcontrol_area_name)) ||
+              branchNorm
+          ) || branchNorm || "",
+        po: poTitle,
+        title: norm(r.enobj_name) || norm(r.keylink),
+        address: norm(r.address) || norm(r.settlement) || norm(r.subcontrol_area_name),
+        lat: toNum(r.lat),
+        lon: toNum(r.lon),
+        type: "tp",
+      };
+    })
     .filter((x) => (hasPoFilter ? samePo(x.po, poNorm) : true));
 }
 
+async function loadTpDestinations({ branch = "", po = "" } = {}) {
+  const poNorm = norm(po);
+  const poFilter = poSearchTerm(poNorm);
+  const rows = poFilter
+    ? mergeRowsByKeylink(
+        await Promise.all([
+          getElectroFiltered({
+            "filters[subcontrol_area_name][$containsi]": poFilter,
+          }),
+          getElectroFiltered({
+            "filters[settlement][$containsi]": poFilter,
+          }),
+        ])
+      )
+    : await getElectro();
+
+  return mapTpRows(rows, { branch, po });
+}
+
+async function loadTpDestinationById(destinationId) {
+  const key = norm(destinationId).replace(/^tp-/i, "");
+  if (!key) return null;
+
+  const rows = await getElectroFiltered({
+    "filters[keylink][$eq]": key,
+  });
+  const mapped = await mapTpRows(rows);
+  return mapped.find((x) => String(x.id || "") === `tp-${key}`) || null;
+}
+
 async function loadTpHints() {
-  const [rows, points] = await Promise.all([getElectro(), getPoints()]);
-  const poBranchIndex = buildPoBranchIndex(points);
-
   const map = new Map();
+  const points = await getPoints();
 
-  for (const r of rows) {
-    if (!isTpLike(r)) continue;
-
-    const key = poNeedle(r.subcontrol_area_name);
-    const forcedBranch = resolvePoBranchOverride(key);
-    const mappedBranch = poBranchIndex.get(key) || "";
-    const branch = canonicalBranch(forcedBranch || mappedBranch || "");
-    const po = canonicalPoTitle(r.subcontrol_area_name);
+  for (const point of points) {
+    const branch = canonicalBranch(point.branch);
+    const po = canonicalPoTitle(point.po);
     if (!branch || !po) continue;
+    if (TP_HINT_EXCLUDED_PO_KEYS.has(poNeedle(po))) continue;
 
     if (!map.has(branch)) map.set(branch, new Set());
     map.get(branch).add(po);
@@ -630,5 +727,6 @@ module.exports = {
   loadPesItems,
   loadAssemblyDestinations,
   loadTpDestinations,
+  loadTpDestinationById,
   loadTpHints,
 };

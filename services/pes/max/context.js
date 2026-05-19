@@ -7,10 +7,25 @@ function getMessageNode(update) {
 
 function getSenderNode(update) {
   const message = getMessageNode(update);
+  if (update?.update_type === "bot_started") {
+    return (
+      update?.user ||
+      update?.sender ||
+      update?.chat?.dialog_with_user ||
+      null
+    );
+  }
+
+  if (update?.callback) {
+    return (
+      update.callback.sender ||
+      update.callback.user ||
+      null
+    );
+  }
+
   return (
     message?.sender ||
-    update?.callback?.sender ||
-    update?.callback?.user ||
     null
   );
 }
@@ -29,15 +44,24 @@ function getSenderName(update) {
 function getSenderUserId(update) {
   const sender = getSenderNode(update);
   const userId = Number(
-    sender?.user_id ||
+    update?.user_id ||
+      update?.user?.user_id ||
+      update?.sender?.user_id ||
       update?.callback?.user_id ||
-      update?.callback?.user?.user_id
+      update?.callback?.sender?.user_id ||
+      update?.callback?.user?.user_id ||
+      sender?.user_id
   );
   return Number.isFinite(userId) ? userId : null;
 }
 
 function getReplyTarget(update) {
   const message = getMessageNode(update);
+
+  const directChatId = Number(update?.chat_id || update?.chat?.chat_id);
+  if (Number.isFinite(directChatId) && directChatId > 0) {
+    return { chat_id: directChatId };
+  }
 
   const chatId = Number(message?.recipient?.chat_id);
   if (Number.isFinite(chatId) && chatId > 0) {

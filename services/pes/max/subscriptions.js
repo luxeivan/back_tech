@@ -14,6 +14,7 @@ const {
   updateOne,
   manyRelation,
 } = require("../pesStrapiStore");
+const { maxLog } = require("./config");
 
 function normalizeSubscriber(row) {
   const branchScopes = manyRelation(row?.branches)
@@ -36,6 +37,27 @@ function normalizeSubscriber(row) {
     subscribe_all: Boolean(row?.subscribe_all),
     branchScopes,
     branches: branchScopes.map((branch) => branch.name),
+  };
+}
+
+function formatSubscriberLog(user) {
+  if (!user) return null;
+  const name = norm(
+    [user.first_name, user.last_name].filter(Boolean).join(" ")
+  ) || user.username || "-";
+  const scopes = user.subscribe_all
+    ? "все филиалы"
+    : Array.isArray(user.branches) && user.branches.length
+      ? user.branches.join(", ")
+      : "нет подписок";
+
+  return {
+    user: `${name} user_id=${user.max_user_id || "-"} chat_id=${user.max_chat_id || "-"}`,
+    username: user.username || "",
+    subscribe_all: Boolean(user.subscribe_all),
+    scopes,
+    muted: Boolean(user.muted),
+    active: user.is_active !== false,
   };
 }
 
@@ -73,6 +95,19 @@ async function findUsersByMaxUserId(userId) {
   return fetchAll(PES_ENDPOINTS.MAX_SUBSCRIBERS, {
     params: {
       "filters[max_user_id][$eq]": id,
+      populate: "branches",
+      "sort[0]": "updatedAt:desc",
+    },
+  });
+}
+
+async function findUsersByMaxChatId(chatId) {
+  const id = Number(chatId || 0);
+  if (!Number.isFinite(id) || id <= 0) return [];
+
+  return fetchAll(PES_ENDPOINTS.MAX_SUBSCRIBERS, {
+    params: {
+      "filters[max_chat_id][$eq]": id,
       populate: "branches",
       "sort[0]": "updatedAt:desc",
     },
@@ -175,6 +210,20 @@ async function saveUserState(user) {
     );
   }
 
+  if (Number.isFinite(chatId) && chatId > 0) {
+    const sameChatRows = await findUsersByMaxChatId(chatId);
+    const conflicts = sameChatRows
+      .map(normalizeSubscriber)
+      .filter((item) => item.max_user_id && item.max_user_id !== userId);
+    if (conflicts.length) {
+      maxLog("подписчик MAX: один chat_id привязан к разным user_id", {
+        chat_id: chatId,
+        current_user_id: userId,
+        conflicts: conflicts.map(formatSubscriberLog),
+      });
+    }
+  }
+
   if (existingRows.length) {
     for (const item of existingRows) {
       if (!item?.documentId) continue;
@@ -213,7 +262,24 @@ async function upsertUserState(update) {
     branches: Array.isArray(current.branches) ? current.branches : [],
   };
 
-  return saveUserState(next);
+  const saved = await saveUserState(next);
+  maxLog("подписчик MAX: сохранен/обновлен", {
+    update_type: update?.update_type || "",
+    callback_payload: norm(
+      update?.callback?.payload ||
+        update?.callback?.data ||
+        update?.callback?.value
+    ),
+    sender: {
+      user_id: userId,
+      username: norm(sender.username),
+      first_name: norm(sender.first_name),
+      last_name: norm(sender.last_name),
+    },
+    target,
+    saved: formatSubscriberLog(saved),
+  });
+  return saved;
 }
 
 async function setUserScopes(user, scopes) {
@@ -227,11 +293,13 @@ async function setUserScopes(user, scopes) {
 }
 
 async function setUserSubscribeAll(user) {
-  return saveUserState({
+  const saved = await saveUserState({
     ...user,
     subscribe_all: true,
     branches: [],
   });
+  maxLog("подписчик MAX: подписан на все филиалы", formatSubscriberLog(saved));
+  return saved;
 }
 
 async function clearUserScopes(user) {

@@ -1,6 +1,13 @@
-// HTTP-обертки над MAX API: сообщения, callback-ответы и polling updates.
+// HTTP-обертки над MAX API: сообщения, callback-ответы, webhook subscriptions.
 const axios = require("axios");
-const { MAX_API_BASE, MAX_BOT_TOKEN, buildHeaders } = require("./config");
+const {
+  MAX_API_BASE,
+  MAX_BOT_TOKEN,
+  MAX_WEBHOOK_SECRET,
+  MAX_WEBHOOK_UPDATE_TYPES,
+  MAX_WEBHOOK_URL,
+  buildHeaders,
+} = require("./config");
 
 async function sendMessage(target, text, attachments = []) {
   if (!target) return { ok: false, skipped: true, reason: "no-target" };
@@ -69,8 +76,53 @@ async function fetchUpdates({ marker, timeout = 25, limit = 100 } = {}) {
   };
 }
 
+async function listWebhookSubscriptions() {
+  const { data } = await axios.get(`${MAX_API_BASE}/subscriptions`, {
+    headers: {
+      Authorization: MAX_BOT_TOKEN,
+    },
+    timeout: 20000,
+  });
+
+  return data;
+}
+
+async function createWebhookSubscription({
+  url = MAX_WEBHOOK_URL,
+  secret = MAX_WEBHOOK_SECRET,
+  updateTypes = MAX_WEBHOOK_UPDATE_TYPES,
+} = {}) {
+  const body = {
+    url,
+    update_types: updateTypes,
+  };
+  if (secret) body.secret = secret;
+
+  const { data } = await axios.post(`${MAX_API_BASE}/subscriptions`, body, {
+    headers: buildHeaders(),
+    timeout: 20000,
+  });
+
+  return data;
+}
+
+async function deleteWebhookSubscription({ url = MAX_WEBHOOK_URL } = {}) {
+  const { data } = await axios.delete(`${MAX_API_BASE}/subscriptions`, {
+    headers: {
+      Authorization: MAX_BOT_TOKEN,
+    },
+    params: { url },
+    timeout: 20000,
+  });
+
+  return data;
+}
+
 module.exports = {
   sendMessage,
   answerCallback,
   fetchUpdates,
+  listWebhookSubscriptions,
+  createWebhookSubscription,
+  deleteWebhookSubscription,
 };

@@ -6,6 +6,7 @@ const mesRoutes = require("./routers/mes");
 const aiRouter = require("./routers/ai");
 const pesRoutes = require("./routers/pes");
 const pesModuleRoutes = require("./routers/pesModule");
+const pesMaxRoutes = require("./routers/pesMax");
 const disconnectedRoutes = require("./routers/disconnected");
 const minEnergoRoutes = require("./routers/minenergo");
 const auditRoutes = require("./routers/audit");
@@ -13,10 +14,6 @@ const integrationMappingsRoutes = require("./routers/integrationMappings");
 
 const webhooks = require("./routers/webhooks");
 const { sseHandler, broadcast } = require("./services/sse");
-// Telegram-бот ПЭС отключен в пользу MAX, код оставлен в services/pes/tg как архив.
-// const { startPesBotPolling } = require("./services/pes/tg/pesBot");
-const { startPesMaxBotPolling } = require("./services/pes/max/pesMaxBot");
-
 require("dotenv").config();
 
 const app = express();
@@ -32,7 +29,7 @@ app.use((req, res, next) => {
   );
   res.header(
     "Access-Control-Allow-Headers",
-    "Authorization,Content-Type,X-Requested-With,X-Audit-Username,X-Audit-Role,X-Audit-Page,X-View-Role"
+    "Authorization,Content-Type,X-Requested-With,X-Audit-Username,X-Audit-Role,X-Audit-Page,X-View-Role,X-Max-Bot-Api-Secret"
   );
   res.header("Access-Control-Allow-Credentials", "true");
   if (req.method === "OPTIONS") return res.sendStatus(204);
@@ -48,6 +45,7 @@ app.use("/services/mes", mesRoutes);
 app.use("/services/ai", aiRouter);
 app.use("/services/pes", pesRoutes);
 app.use("/services/pes/module", pesModuleRoutes);
+app.use("/services/pes/max", pesMaxRoutes);
 app.use("/services/disconnected", disconnectedRoutes);
 app.use("/services/minenergo", minEnergoRoutes);
 app.use("/services/audit", auditRoutes);
@@ -67,10 +65,7 @@ app.post("/services/event", (req, res) => {
 
 app.listen(port, () => {
   console.log(`Приложение запущено на ${port} порту и каким-то чудом работает`);
-  // Telegram-бот ПЭС полностью отключен в пользу MAX.
-  // startPesBotPolling();
-  console.log("[pes-bot] Telegram отключен, работает MAX");
-  startPesMaxBotPolling();
+  console.log("[pes-max-bot] MAX работает через webhook");
 });
 
 // const express = require('express')

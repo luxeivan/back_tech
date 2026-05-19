@@ -1,5 +1,5 @@
 // Рассылка операций ПЭС подписчикам MAX.
-const { canRunMaxBot } = require("./config");
+const { canRunMaxBot, maxLog } = require("./config");
 const { button, keyboard } = require("./context");
 const { sendMessage } = require("./transport");
 const { listUsers } = require("./subscriptions");
@@ -162,6 +162,45 @@ function isUserSubscribedToTarget(user, branch, po) {
   });
 }
 
+function formatSubscriberName(user) {
+  const name = [user?.first_name, user?.last_name].map(norm).filter(Boolean).join(" ");
+  const username = norm(user?.username);
+  const label = name || (username ? `@${username}` : "без имени");
+  return `${label} user_id=${user?.max_user_id || "-"} chat_id=${user?.max_chat_id || "-"}`;
+}
+
+function formatSubscriberScopes(user) {
+  if (user?.subscribe_all) return "все филиалы";
+  const branches = Array.isArray(user?.branches) ? user.branches : [];
+  return branches.length ? branches.join("; ") : "нет подписок";
+}
+
+function getSkipReason(user, branch, po) {
+  if (!user) return "empty-user";
+  if (user.is_active === false) return "inactive";
+  if (user.muted) return "muted";
+  if (user.subscribe_all) return "";
+
+  const list = Array.isArray(user?.branches) ? user.branches : [];
+  if (!list.length) return "no-scopes";
+
+  const branchTarget = branchNorm(branch);
+  const branchMatched = list.some(
+    (item) => !parsePoScopeName(item) && branchNorm(item) === branchTarget
+  );
+  if (branchMatched) return "";
+
+  const poTarget = poNorm(po);
+  if (!poTarget) return "no-po-target";
+
+  const poMatched = list.some((item) => {
+    const parsed = parsePoScopeName(item);
+    if (!parsed) return false;
+    return branchNorm(parsed.branch) === branchTarget && poNorm(parsed.po) === poTarget;
+  });
+  return poMatched ? "" : "scope-mismatch";
+}
+
 async function sendPesMaxSubscribersNotification({
   action,
   branch,
@@ -169,10 +208,36 @@ async function sendPesMaxSubscribersNotification({
   destination,
   comment,
 }) {
-  if (!canRunMaxBot()) return { ok: false, skipped: true, reason: "max-bot-disabled" };
+  if (!canRunMaxBot()) {
+    maxLog("рассылка пропущена: MAX отключен");
+    return { ok: false, skipped: true, reason: "max-bot-disabled" };
+  }
 
   const list = Array.isArray(items) ? items.filter(Boolean) : [];
-  if (!list.length) return { ok: true, skipped: true, reason: "empty-items", sent: 0 };
+  if (!list.length) {
+    maxLog("рассылка пропущена: нет ПЭС в событии");
+    return { ok: true, skipped: true, reason: "empty-items", sent: 0 };
+  }
+
+  maxLog("рассылка ПЭС: старт", {
+    action,
+    branch: branch || "",
+    items: list.map((item) => ({
+      id: item?.id,
+      number: item?.number,
+      branch: item?.branch,
+      po: item?.po,
+    })),
+    destination: destination
+      ? {
+          type: destination.type || "",
+          name: destination.name || "",
+          address: destination.address || "",
+          po: destination.po || "",
+        }
+      : null,
+    hasComment: Boolean(norm(comment)),
+  });
 
   let users = [];
   try {
@@ -189,17 +254,42 @@ async function sendPesMaxSubscribersNotification({
     };
   }
   if (!users.length) {
+    maxLog("рассылка ПЭС: в Strapi нет активных подписчиков");
     return { ok: true, skipped: true, reason: "no-subscribers", sent: 0 };
   }
+
+  maxLog(
+    `рассылка ПЭС: активных подписчиков ${users.length}`,
+    users.map((user) => ({
+      user: formatSubscriberName(user),
+      subscribe_all: Boolean(user.subscribe_all),
+      scopes: formatSubscriberScopes(user),
+      muted: Boolean(user.muted),
+      active: user.is_active !== false,
+    }))
+  );
 
   let sent = 0;
   let failed = 0;
   let total = 0;
+  const recipients = [];
+  const skipped = [];
+  const sentKeys = new Set();
 
   for (const user of users) {
     for (const item of list) {
       const eventBranch = norm(item?.branch) || norm(branch);
-      if (!isUserSubscribedToTarget(user, eventBranch, item?.po)) continue;
+      if (!isUserSubscribedToTarget(user, eventBranch, item?.po)) {
+        skipped.push({
+          user: formatSubscriberName(user),
+          pes: item?.number || item?.id || "-",
+          branch: eventBranch || "-",
+          po: item?.po || "-",
+          reason: getSkipReason(user, eventBranch, item?.po),
+          scopes: formatSubscriberScopes(user),
+        });
+        continue;
+      }
 
       total += 1;
       const chatId = Number(user.max_chat_id || 0);
@@ -210,6 +300,34 @@ async function sendPesMaxSubscribersNotification({
         );
         continue;
       }
+
+      const deliveryKey = `${chatId}:${item?.id || item?.number || ""}`;
+      if (sentKeys.has(deliveryKey)) {
+        skipped.push({
+          user: formatSubscriberName(user),
+          pes: item?.number || item?.id || "-",
+          branch: eventBranch || "-",
+          po: item?.po || "-",
+          reason: "duplicate-chat",
+          scopes: formatSubscriberScopes(user),
+        });
+        maxLog("рассылка ПЭС: пропущен дубль chat_id", {
+          chat_id: chatId,
+          user: formatSubscriberName(user),
+          pes: item?.number || item?.id || "-",
+        });
+        continue;
+      }
+
+      const recipient = {
+        user: formatSubscriberName(user),
+        pes: item?.number || item?.id || "-",
+        branch: eventBranch || "-",
+        po: item?.po || "-",
+        scopes: formatSubscriberScopes(user),
+      };
+      recipients.push(recipient);
+      maxLog("рассылка ПЭС: отправляю", recipient);
 
       try {
         await sendMessage(
@@ -224,6 +342,8 @@ async function sendPesMaxSubscribersNotification({
           buildPesInlineKeyboard(action, item.id)
         );
         sent += 1;
+        sentKeys.add(deliveryKey);
+        maxLog("рассылка ПЭС: отправлено", recipient);
       } catch (e) {
         failed += 1;
         console.error(
@@ -234,7 +354,18 @@ async function sendPesMaxSubscribersNotification({
     }
   }
 
-  if (!total) return { ok: true, skipped: true, reason: "no-matching-subscribers", sent: 0 };
+  if (!total) {
+    maxLog("рассылка ПЭС: нет подходящих подписчиков", skipped);
+    return { ok: true, skipped: true, reason: "no-matching-subscribers", sent: 0 };
+  }
+
+  maxLog("рассылка ПЭС: итог", {
+    total,
+    sent,
+    failed,
+    recipients,
+    skipped_count: skipped.length,
+  });
   return { ok: failed === 0, sent, failed, total };
 }
 

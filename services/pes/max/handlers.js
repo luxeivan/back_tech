@@ -29,6 +29,12 @@ const {
 } = require("./ui");
 const { norm } = require("./utils");
 
+const PES_ACTION_TEXT = {
+  depart: "Фактический выезд принят",
+  connect: "ПЭС переведена в работу",
+  ready: "ПЭС возвращена в резерв",
+};
+
 function getLocalBackendBase() {
   const port = Number(process.env.PORT) || 5000;
   return `http://127.0.0.1:${port}`;
@@ -95,10 +101,18 @@ async function sendMainMenu(update, { callbackId = "" } = {}) {
   if (!target) {
     maxLog("не найден target для стартового меню", {
       update_type: update?.update_type,
+      keys: update && typeof update === "object" ? Object.keys(update) : [],
+      sender: getSenderNode(update) || null,
+      user_id: getSenderUserId(update),
     });
     return;
   }
 
+  maxLog("стартовое меню: отправка", {
+    update_type: update?.update_type,
+    target,
+    user_id: getSenderUserId(update),
+  });
   await sendMessage(target, text, attachments);
 }
 
@@ -218,6 +232,12 @@ async function handleCallback(update) {
   if (payload.action === "pes") {
     const [cmd, pesId] = norm(payload.value).split("|").map(norm);
     const allowed = new Set(["depart", "connect", "ready"]);
+    maxLog("callback ПЭС: команда", {
+      cmd,
+      pesId,
+      user_id: getSenderUserId(update),
+    });
+
     if (!cmd || !pesId) {
       await answerCallback(callbackId, {
         notification: "Некорректная команда",
@@ -232,17 +252,40 @@ async function handleCallback(update) {
     }
 
     try {
-      await runPesModuleCommand({
+      const result = await runPesModuleCommand({
         action: cmd,
         pesId,
         update,
       });
+      const item = Array.isArray(result?.items) ? result.items[0] : null;
+      maxLog("callback ПЭС: выполнено", {
+        cmd,
+        pesId,
+        number: item?.number || "",
+        status: item?.status || "",
+      });
       await answerCallback(callbackId, {
         notification: "Готово",
       });
+
+      const target = getReplyTarget(update);
+      if (target) {
+        const number = item?.number ? ` №${item.number}` : "";
+        await sendMessage(
+          target,
+          `${PES_ACTION_TEXT[cmd] || "Команда ПЭС выполнена"}${number}.`
+        );
+      }
     } catch (e) {
+      const message = norm(e?.response?.data?.message || e?.message || "Ошибка").slice(0, 180);
+      maxLog("callback ПЭС: ошибка", {
+        cmd,
+        pesId,
+        message,
+        status: e?.response?.status || null,
+      });
       await answerCallback(callbackId, {
-        notification: norm(e?.response?.data?.message || e?.message || "Ошибка").slice(0, 180),
+        notification: message,
       });
     }
     return;
