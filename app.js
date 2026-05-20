@@ -9,6 +9,7 @@ const pesModuleRoutes = require("./routers/pesModule");
 const pesMaxRoutes = require("./routers/pesMax");
 const disconnectedRoutes = require("./routers/disconnected");
 const minEnergoRoutes = require("./routers/minenergo");
+const siteEmergencyOutagesRoutes = require("./routers/siteEmergencyOutages");
 const auditRoutes = require("./routers/audit");
 const integrationMappingsRoutes = require("./routers/integrationMappings");
 
@@ -48,6 +49,7 @@ app.use("/services/pes/module", pesModuleRoutes);
 app.use("/services/pes/max", pesMaxRoutes);
 app.use("/services/disconnected", disconnectedRoutes);
 app.use("/services/minenergo", minEnergoRoutes);
+app.use("/services/site/emergency-outages", siteEmergencyOutagesRoutes);
 app.use("/services/audit", auditRoutes);
 app.use("/services/integration-mappings", integrationMappingsRoutes);
 
