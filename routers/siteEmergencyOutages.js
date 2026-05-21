@@ -7,6 +7,7 @@ const router = express.Router();
 const STRAPI_URL = process.env.URL_STRAPI;
 const STRAPI_LOGIN = process.env.LOGIN_STRAPI;
 const STRAPI_PASSWORD = process.env.PASSWORD_STRAPI;
+const SITE_EMERGENCY_DURATION_HOURS = 2;
 
 async function getJwt() {
   const res = await axios.post(`${STRAPI_URL}/api/auth/local`, {
@@ -41,18 +42,8 @@ function firstNonEmpty(...values) {
   return "";
 }
 
-function durationHours(raw, startIso) {
-  const explicit = Number(raw?.F81_090);
-  if (Number.isFinite(explicit) && explicit > 0) return explicit;
-
-  const endIso = firstNonEmpty(raw?.F81_290_RECOVERYDATETIME, raw?.F81_070_RESTOR_SUPPLAYDATETIME);
-  const start = startIso ? new Date(startIso).getTime() : NaN;
-  const end = endIso ? new Date(endIso).getTime() : NaN;
-  if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
-    return Math.ceil((end - start) / 3_600_000);
-  }
-
-  return "";
+function durationHours() {
+  return SITE_EMERGENCY_DURATION_HOURS;
 }
 
 router.get("/", async (req, res) => {
@@ -83,7 +74,7 @@ router.get("/", async (req, res) => {
           go: firstNonEmpty(raw?.DISTRICT, raw?.SCNAME, item?.dispCenter),
           addressDisconnected: firstNonEmpty(raw?.ADDRESS_LIST, item?.addressList, raw?.HOUSE_LIST),
           dateDisconnected: startIso,
-          durationSolution: durationHours(raw, startIso),
+          durationSolution: durationHours(),
           disconnectedSubscribers: Number(raw?.POINTALL) || 0,
           guid: firstNonEmpty(raw?.VIOLATION_GUID_STR, item?.guid),
         },
