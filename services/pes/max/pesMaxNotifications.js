@@ -58,6 +58,18 @@ function buildActionTitle(action) {
   return "Операция по ПЭС";
 }
 
+function formatMoscowDateTime(value = new Date()) {
+  return value.toLocaleString("ru-RU", {
+    timeZone: "Europe/Moscow",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
 function buildNotificationText({ action, branch, items, destination, comment }) {
   const list = formatPesList(items) || "№... мощностью ... кВт";
   const addr = norm(destination?.address) || "-";
@@ -108,7 +120,7 @@ function buildNotificationText({ action, branch, items, destination, comment }) 
     return lines.join("\n");
   }
 
-  const now = new Date().toLocaleString("ru-RU");
+  const now = formatMoscowDateTime();
   const lines = [
     `ПЭС: ${buildActionTitle(action)}`,
     `Филиал: ${branch || "-"}`,
