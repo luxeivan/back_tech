@@ -332,6 +332,25 @@ function buildPoBranchIndex(points) {
   return out;
 }
 
+function findPointDispatcherPhone(points, { branch = "", po = "" } = {}) {
+  const poTitle = norm(po);
+  if (!poTitle) return "";
+
+  const branchTitle = canonicalBranch(branch);
+  const matched = points.filter((point) => {
+    if (!samePo(point.po, poTitle)) return false;
+    if (!branchTitle) return true;
+    return sameBranch(point.branch, branchTitle);
+  });
+
+  const selected =
+    matched.find((point) => point.point_kind === "base" && norm(point.dispatcher_phone)) ||
+    matched.find((point) => norm(point.dispatcher_phone)) ||
+    null;
+
+  return norm(selected?.dispatcher_phone);
+}
+
 async function getToken() {
   if (STRAPI_API_TOKEN) return STRAPI_API_TOKEN;
   const jwt = await getJwt();
@@ -651,20 +670,25 @@ async function mapTpRows(rows, { branch = "", po = "" } = {}) {
         hasPoFilter && !samePo(rawPo, poNorm) && rowContainsPoTerm(r, poSearchTerm(poNorm))
           ? poNorm
           : rawPo;
+      const branchTitle =
+        canonicalBranch(
+          resolvePoBranchOverride(poNeedle(r.subcontrol_area_name)) ||
+            poBranchIndex.get(poNeedle(r.subcontrol_area_name)) ||
+            branchNorm
+        ) || branchNorm || "";
       return {
         id: `tp-${norm(r.keylink)}`,
         keylink: norm(r.keylink),
-        branch:
-          canonicalBranch(
-            resolvePoBranchOverride(poNeedle(r.subcontrol_area_name)) ||
-              poBranchIndex.get(poNeedle(r.subcontrol_area_name)) ||
-              branchNorm
-          ) || branchNorm || "",
+        branch: branchTitle,
         po: poTitle,
         title: norm(r.enobj_name) || norm(r.keylink),
         address: norm(r.address) || norm(r.settlement) || norm(r.subcontrol_area_name),
         lat: toNum(r.lat),
         lon: toNum(r.lon),
+        dispatcherPhone: findPointDispatcherPhone(points, {
+          branch: branchTitle,
+          po: poTitle,
+        }),
         type: "tp",
       };
     })
