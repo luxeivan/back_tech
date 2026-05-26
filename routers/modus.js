@@ -153,7 +153,11 @@ router.put("/", async (req, res) => {
         const nextStatus = norm(mapped?.STATUS_NAME);
         const statusChanged = prevStatus !== nextStatus;
         const nextIsFinal = isFinalStatus(nextStatus);
-        const needEdds = statusChanged && nextIsFinal;
+        const nextBaseType =
+          parseBaseType(mapped?.BASE_TYPE) ??
+          parseBaseType(currentAttrs?.BASE_TYPE) ??
+          parseBaseType(currentRaw?.BASE_TYPE);
+        const needEdds = statusChanged && nextIsFinal && nextBaseType === 0;
 
         if (!documentId) {
           acc.push({
