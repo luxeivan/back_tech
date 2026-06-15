@@ -7,59 +7,48 @@ const { resolveAccidentLocation } = require("../services/edds/resolveAccidentLoc
 
 const router = express.Router();
 
-const EDDS_URL = process.env.EDDS_URL;
+const EDDS_NEW_BASE_URL = process.env.EDDS_NEW_BASE_URL;
 const EDDS_TOKEN = process.env.EDDS_TOKEN;
-const EDDS_URL_PUT = process.env.EDDS_URL_PUT;
-
 const URL_STRAPI = process.env.URL_STRAPI;
 const LOGIN_STRAPI = process.env.LOGIN_STRAPI;
 const PASSWORD_STRAPI = process.env.PASSWORD_STRAPI;
-
-function jsonForShell(data) {
-  return JSON.stringify(data).replace(/'/g, `'\\''`);
-}
-
-function maskToken(t) {
-  if (!t || typeof t !== "string") return "";
-  if (t.length <= 8) return "****";
-  return `${t.slice(0, 4)}…${t.slice(-4)}`;
-}
 
 function pretty(obj) {
   try { return JSON.stringify(obj, null, 2); } catch { return String(obj); }
 }
 
-function logPayload(payload, { debug = false, direction = "→" } = {}) {
+function logPayload(payload, { debug = false } = {}) {
   const p = payload || {};
   const keys = Object.keys(p);
   console.log(`\n${"─".repeat(60)}`);
-  console.log(`  ЕДДС-NEW ${direction} payload  (${keys.length} полей)`);
+  console.log(`  ЕДДС-NEW → payload  (${keys.length} полей)`);
   console.log(`${"─".repeat(60)}`);
   if (debug) {
     console.log(pretty(p));
   } else {
     const short = {};
-    if (p.districtFiasIds) short.district = p.districtFiasIds;
+    if (p.districtFiasIds) short.districtFiasIds = p.districtFiasIds;
     if (p.equipmentType) short.equipmentType = p.equipmentType;
     if (p.equipmentName) short.equipmentName = p.equipmentName;
     if (p.accidentLocation) short.accidentLocation = p.accidentLocation;
     if (p.shutdownInfo) {
       short.shutdownInfo = {
-        type: p.shutdownInfo.shutdownType,
-        deenergized: p.shutdownInfo.deenergizedType,
+        shutdownType: p.shutdownInfo.shutdownType,
+        deenergizedType: p.shutdownInfo.deenergizedType,
         disabledAt: p.shutdownInfo.disabledAt,
         plannedInclusionAt: p.shutdownInfo.plannedInclusionAt,
         reasons: p.shutdownInfo.reasons,
         fiasCount: p.shutdownInfo.fiasIds?.length,
       };
     }
+    if (p.affectedObjectsCount) short.affectedObjectsCount = p.affectedObjectsCount;
     if (p.comment?.text) short.commentLength = p.comment.text.length;
     console.log(pretty(short));
   }
   console.log(`${"─".repeat(60)}\n`);
 }
 
-function logResponse(resp, { url = "", label = "" } = {}) {
+function logResponse(resp, { url = "" } = {}) {
   if (resp.httpCode) {
     const icon = resp.httpCode >= 200 && resp.httpCode < 300 ? "✓" : "✗";
     console.log(`\n  ${icon} ЕДДС-NEW ← HTTP ${resp.httpCode}${url ? `  ${url}` : ""}`);
@@ -76,20 +65,18 @@ function logResponse(resp, { url = "", label = "" } = {}) {
   console.log();
 }
 
-function runCurl(url, payload, { debug } = {}) {
+function runCurl(url, payload, { method = "POST", debug = {} } = {}) {
   return new Promise((resolve) => {
     try {
-      const jsonEscaped = jsonForShell(payload);
+      const jsonEscaped = JSON.stringify(payload).replace(/'/g, `'\\''`);
+      const authHeader = `Service: ${EDDS_TOKEN}`;
       if (debug) {
-        console.log(
-          `[ЕДДС-NEW] curl -sS -X POST -H "Content-Type: application/json" ` +
-          `-H "HTTP-X-API-TOKEN: ${maskToken(EDDS_TOKEN)}" -d '<payload>' "${url}" --insecure`
-        );
+        console.log(`[ЕДДС-NEW] curl -X ${method} "${url}"`);
       }
       const command =
-        `curl -sS -X POST ` +
+        `curl -sS -X ${method} ` +
         `-H "Content-Type: application/json" ` +
-        `-H "HTTP-X-API-TOKEN: ${EDDS_TOKEN}" ` +
+        `-H "Authorization: ${authHeader}" ` +
         `-d '${jsonEscaped}' ` +
         `-w "\\nHTTP_CODE:%{http_code}" ` +
         `"${url}" --insecure`;
@@ -122,44 +109,20 @@ function runCurl(url, payload, { debug } = {}) {
   });
 }
 
-function isDuplicateError(resp) {
-  try {
-    const msg = String(
-      (resp?.parsed && (resp.parsed.message || resp.parsed.error)) || resp?.stdout || ""
-    );
-    return /существует|уже существует/i.test(msg);
-  } catch { return false; }
-}
-
-// ─── POST — create (with auto-fallback to update on duplicate) ──────────────
+// ─── POST — create ─────────────────────────────────────────────────────────
 router.post("/", async (req, res) => {
-  const startedAt = Date.now();
   const debug = String(req.query.debug || "").trim() === "1";
-  const dryRun = String(req.query.dryRun || req.query.dry || "").trim() === "1";
   const ip = req.ip || req.headers["x-forwarded-for"] || req.connection?.remoteAddress;
 
   console.log(`\n${"═".repeat(60)}`);
-  console.log(`  ЕДДС-NEW POST  dryRun=${dryRun}  ip=${ip}`);
+  console.log(`  ЕДДС-NEW POST  ip=${ip}`);
   console.log(`${"═".repeat(60)}`);
 
-  const authHeader = req.headers["authorization"] || "";
-  if (!authHeader) {
-    return res.status(403).json({ ok: false, error: "Нет токена авторизации" });
-  }
-  try {
-    await axios.get(`${URL_STRAPI}/api/users/me`, {
-      headers: { Authorization: authHeader },
-    });
-  } catch (e) {
-    console.log("  ✗ Авторизация не пройдена:", e?.response?.status);
-    return res.status(403).json({ ok: false, error: "Доступ запрещён" });
-  }
-
-  if (!EDDS_URL) return res.status(500).json({ ok: false, error: "EDDS_URL не задан в .env" });
-  if (!EDDS_TOKEN && !dryRun) return res.status(500).json({ ok: false, error: "EDDS_TOKEN не задан в .env" });
+  if (!EDDS_NEW_BASE_URL) return res.status(500).json({ ok: false, error: "EDDS_NEW_BASE_URL не задан в .env" });
+  if (!EDDS_TOKEN) return res.status(500).json({ ok: false, error: "EDDS_TOKEN не задан в .env" });
 
   const payload = req.body ?? {};
-  logPayload(payload, { debug, direction: "→" });
+  logPayload(payload, { debug });
 
   // accidentLocation — optional, non-blocking
   try {
@@ -174,103 +137,52 @@ router.post("/", async (req, res) => {
     console.log(`  ⚠ accidentLocation error: ${e?.message} — отправка продолжается`);
   }
 
-  if (dryRun) {
-    console.log("  DRY RUN — запрос не выполняется\n");
-    return res.json({ ok: true, dryRun: true, debug, preview: payload });
+  const url = `${EDDS_NEW_BASE_URL}/edds/external/requests/electricity`;
+  const resp = await runCurl(url, payload, { method: "POST", debug });
+  logResponse(resp, { url });
+
+  // Save request ID for future updates
+  const requestId = resp.parsed?.data?.id || null;
+  if (requestId) {
+    console.log(`  💾 edds_electricityRequestId: ${requestId}`);
   }
 
-  try {
-    const resp1 = await runCurl(EDDS_URL, payload, { debug });
+  setImmediate(() => writeJournal({ operation: "create", reqBody: payload, result: resp }).catch(() => {}));
 
-    if (!resp1.ok && !EDDS_URL_PUT) {
-      logResponse(resp1, { url: EDDS_URL });
-      setImmediate(() => writeJournal({ target: "ЕДДС-NEW", operation: "create", reqBody: payload, endpoint: EDDS_URL, result: resp1 }).catch(() => {}));
-      return res.status(502).json({ ok: false, error: "Ошибка curl", code: resp1.code, stderr: resp1.stderr });
-    }
-
-    // Auto-fallback to update if duplicate
-    if (resp1.ok && resp1.parsed?.success === false && EDDS_URL_PUT && isDuplicateError(resp1)) {
-      console.log("  ⚡ Дубликат — пробуем update.php…");
-      const resp2 = await runCurl(EDDS_URL_PUT, payload, { debug });
-      logResponse(resp2, { url: EDDS_URL_PUT });
-
-      setImmediate(() => writeJournal({ target: "ЕДДС-NEW", operation: "update", reqBody: payload, endpoint: EDDS_URL_PUT, result: resp2 }).catch(() => {}));
-
-      if (!resp2.ok) {
-        return res.status(502).json({ ok: false, error: "Ошибка curl (update)", code: resp2.code, stderr: resp2.stderr });
-      }
-      return res.json(debug ? { ...resp2.parsed, _via: "update" } : (resp2.parsed || { raw: resp2.stdout }));
-    }
-
-    logResponse(resp1, { url: EDDS_URL });
-    setImmediate(() => writeJournal({ target: "ЕДДС-NEW", operation: "create", reqBody: payload, endpoint: EDDS_URL, result: resp1 }).catch(() => {}));
-    return res.json(debug ? { ...resp1.parsed, _via: "create" } : (resp1.parsed || { raw: resp1.stdout }));
-  } catch (e) {
-    return res.status(500).json({ ok: false, error: e.message });
+  if (!resp.ok) {
+    return res.status(502).json({ ok: false, error: "Ошибка curl", code: resp.code, stderr: resp.stderr });
   }
+
+  return res.json({ ok: true, httpCode: resp.httpCode, data: resp.parsed?.data || null, requestId });
 });
 
-// ─── PUT — update (force update mode) ──────────────────────────────────────
-router.put("/", async (req, res) => {
-  const startedAt = Date.now();
+// ─── PUT — update ──────────────────────────────────────────────────────────
+router.put("/:requestId", async (req, res) => {
+  const { requestId } = req.params;
   const debug = String(req.query.debug || "").trim() === "1";
-  const dryRun = String(req.query.dryRun || req.query.dry || "").trim() === "1";
   const ip = req.ip || req.headers["x-forwarded-for"] || req.connection?.remoteAddress;
 
   console.log(`\n${"═".repeat(60)}`);
-  console.log(`  ЕДДС-NEW PUT  dryRun=${dryRun}  ip=${ip}`);
+  console.log(`  ЕДДС-NEW PUT  requestId=${requestId}  ip=${ip}`);
   console.log(`${"═".repeat(60)}`);
 
-  const authHeader = req.headers["authorization"] || "";
-  if (!authHeader) {
-    return res.status(403).json({ ok: false, error: "Нет токена авторизации" });
-  }
-  try {
-    await axios.get(`${URL_STRAPI}/api/users/me`, {
-      headers: { Authorization: authHeader },
-    });
-  } catch (e) {
-    console.log("  ✗ Авторизация не пройдена:", e?.response?.status);
-    return res.status(403).json({ ok: false, error: "Доступ запрещён" });
-  }
-
-  if (!EDDS_URL_PUT) return res.status(500).json({ ok: false, error: "EDDS_URL_PUT не задан в .env" });
-  if (!EDDS_TOKEN && !dryRun) return res.status(500).json({ ok: false, error: "EDDS_TOKEN не задан в .env" });
+  if (!EDDS_NEW_BASE_URL) return res.status(500).json({ ok: false, error: "EDDS_NEW_BASE_URL не задан в .env" });
+  if (!EDDS_TOKEN) return res.status(500).json({ ok: false, error: "EDDS_TOKEN не задан в .env" });
 
   const payload = req.body ?? {};
-  logPayload(payload, { debug, direction: "→" });
+  logPayload(payload, { debug });
 
-  // accidentLocation — optional, non-blocking
-  try {
-    const locationResult = await resolveAccidentLocation(payload);
-    if (locationResult.ok) {
-      payload.accidentLocation = locationResult.accidentLocation;
-      console.log(`  📍 accidentLocation: ${JSON.stringify(locationResult.accidentLocation)} (${locationResult.resolvedCount}/${locationResult.totalFias} FIAS)`);
-    } else {
-      console.log(`  ⚠ accidentLocation: ${locationResult.message} — отправка продолжается`);
-    }
-  } catch (e) {
-    console.log(`  ⚠ accidentLocation error: ${e?.message} — отправка продолжается`);
+  const url = `${EDDS_NEW_BASE_URL}/edds/external/requests/electricity/${requestId}`;
+  const resp = await runCurl(url, payload, { method: "PUT", debug });
+  logResponse(resp, { url });
+
+  setImmediate(() => writeJournal({ operation: "update", reqBody: { ...payload, _requestId: requestId }, result: resp }).catch(() => {}));
+
+  if (!resp.ok) {
+    return res.status(502).json({ ok: false, error: "Ошибка curl", code: resp.code, stderr: resp.stderr });
   }
 
-  if (dryRun) {
-    console.log("  DRY RUN — запрос не выполняется\n");
-    return res.json({ ok: true, dryRun: true, debug, preview: payload });
-  }
-
-  try {
-    const resp = await runCurl(EDDS_URL_PUT, payload, { debug });
-    logResponse(resp, { url: EDDS_URL_PUT });
-
-    setImmediate(() => writeJournal({ target: "ЕДДС-NEW", operation: "update", reqBody: payload, endpoint: EDDS_URL_PUT, result: resp }).catch(() => {}));
-
-    if (!resp.ok) {
-      return res.status(502).json({ ok: false, error: "Ошибка curl", code: resp.code, stderr: resp.stderr });
-    }
-    return res.json(debug ? { ...resp.parsed, _via: "update" } : (resp.parsed || { raw: resp.stdout }));
-  } catch (e) {
-    return res.status(500).json({ ok: false, error: e.message });
-  }
+  return res.json({ ok: true, httpCode: resp.httpCode, data: resp.parsed?.data || null });
 });
 
 // ─── Journal helpers ────────────────────────────────────────────────────────
@@ -364,7 +276,7 @@ async function appendToJournalSingle(line, jwt) {
   }
 }
 
-async function writeJournal({ target, operation, reqBody, endpoint, result }) {
+async function writeJournal({ operation, reqBody, result }) {
   try {
     const jwt = await getJwt();
     if (!jwt) return;
@@ -382,13 +294,11 @@ async function writeJournal({ target, operation, reqBody, endpoint, result }) {
       } else if (result.parsed.success === false) {
         msg = "Ошибка";
       }
-    } else if (typeof result?.stdout === "string" && /<html|<!DOCTYPE/i.test(result.stdout)) {
-      msg = "HTML response";
     } else if (result?.ok === false) {
       msg = "curl error";
     }
 
-    const line = `[NEW] №${tnNumber ?? "—"} - ${guid ?? "—"} - ${human} - ${target}${msg ? ` - ${msg}` : ""}`;
+    const line = `[NEW-v2] №${tnNumber ?? "—"} - ${guid ?? "—"} - ${human} - ${operation}${msg ? ` - ${msg}` : ""}`;
 
     try {
       await appendToJournalSingle(line, jwt);
