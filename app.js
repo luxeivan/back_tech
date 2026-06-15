@@ -2,6 +2,7 @@ const express = require("express");
 const bodyParser = require("body-parser");
 const modus = require("./routers/modus");
 const eddsRoutes = require("./routers/edds");
+const eddsNewRoutes = require("./routers/eddsnew");
 const mesRoutes = require("./routers/mes");
 const aiRouter = require("./routers/ai");
 const pesRoutes = require("./routers/pes");
@@ -42,6 +43,7 @@ app.use(bodyParser.urlencoded({ extended: true, limit: "20mb" }));
 
 app.use("/services/modus", modus);
 app.use("/services/edds", eddsRoutes);
+app.use("/services/eddsnew", eddsNewRoutes);
 app.use("/services/mes", mesRoutes);
 app.use("/services/ai", aiRouter);
 app.use("/services/pes", pesRoutes);
