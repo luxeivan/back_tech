@@ -85,6 +85,146 @@ function toPositiveInt(value, fallback = 1) {
   return n;
 }
 
+function parseDateMs(value) {
+  if (!value) return null;
+  const t = new Date(value).getTime();
+  return Number.isFinite(t) ? t : null;
+}
+
+function cleanStatus(value) {
+  return norm(value).toLowerCase().replace(/,+$/, "");
+}
+
+function historyPesKey(row) {
+  const unit = oneRelation(row?.pes_unit);
+  if (unit?.id) return `id:${unit.id}`;
+  if (unit?.code) return `code:${unit.code}`;
+  const parts = norm(row?.event_uid).split("_");
+  if (parts[1]) return `event:${parts[1]}`;
+  return `row:${row?.id || row?.documentId || randomId()}`;
+}
+
+function historyPesNumber(row) {
+  const unit = oneRelation(row?.pes_unit);
+  const fromRelation = norm(unit?.garage_number || unit?.code || unit?.pes_name);
+  if (fromRelation) return fromRelation;
+  const parts = norm(row?.event_uid).split("_");
+  return norm(parts[1]);
+}
+
+function clipDurationMs(startMs, endMs, rangeStartMs, rangeEndMs) {
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return 0;
+  const from = Number.isFinite(rangeStartMs) ? Math.max(startMs, rangeStartMs) : startMs;
+  const to = Number.isFinite(rangeEndMs) ? Math.min(endMs, rangeEndMs) : endMs;
+  return Math.max(0, to - from);
+}
+
+function historyPesMatches(row, selectedPesIds) {
+  const values = Array.isArray(selectedPesIds) ? selectedPesIds.map((x) => norm(x).toLowerCase()).filter(Boolean) : [];
+  if (!values.length) return true;
+  const unit = oneRelation(row?.pes_unit);
+  const haystack = [
+    unit?.id,
+    unit?.documentId,
+    unit?.code,
+    unit?.garage_number,
+    unit?.pes_name,
+    historyPesNumber(row),
+  ]
+    .map((v) => norm(v).toLowerCase())
+    .filter(Boolean);
+  return values.some((value) => haystack.includes(value));
+}
+
+function parseMultiQuery(value) {
+  if (Array.isArray(value)) return value.map(norm).filter(Boolean);
+  return String(value || "")
+    .split(",")
+    .map(norm)
+    .filter(Boolean);
+}
+
+function buildHistoryFilterOptions(rows) {
+  const actions = new Set();
+  const statuses = new Set();
+  const pesMap = new Map();
+
+  for (const row of rows || []) {
+    const action = norm(row?.action).toLowerCase();
+    if (action) actions.add(action);
+
+    const from = cleanStatus(row?.status_from);
+    const to = cleanStatus(row?.status_to);
+    if (from) statuses.add(from);
+    if (to) statuses.add(to);
+
+    const unit = oneRelation(row?.pes_unit);
+    const value = norm(unit?.code || unit?.id || historyPesNumber(row));
+    if (!value || pesMap.has(value)) continue;
+    const number = norm(unit?.garage_number || historyPesNumber(row));
+    const name = norm(unit?.pes_name);
+    const branch = norm(unit?.branch || row?.branch);
+    pesMap.set(value, {
+      value,
+      number,
+      name,
+      branch,
+      label: [`№${number || value}`, name, branch].filter(Boolean).join(" · "),
+    });
+  }
+
+  return {
+    actions: Array.from(actions).sort(),
+    statuses: Array.from(statuses).sort(),
+    pes: Array.from(pesMap.values()).sort((a, b) => norm(a.number || a.value).localeCompare(norm(b.number || b.value), "ru")),
+  };
+}
+
+function summarizeHistoryRows(rows, { countRows = rows, dateFromMs = null, dateToMs = null } = {}) {
+  const nowMs = Date.now();
+  const hardEndMs = Number.isFinite(dateToMs) ? dateToMs : nowMs;
+  const byPes = new Map();
+
+  for (const row of rows || []) {
+    const key = historyPesKey(row);
+    if (!byPes.has(key)) byPes.set(key, []);
+    byPes.get(key).push(row);
+  }
+
+  let travelMs = 0;
+  let workMs = 0;
+  let repairMs = 0;
+
+  for (const groupRows of byPes.values()) {
+    const sorted = groupRows
+      .slice()
+      .sort((a, b) => (parseDateMs(a.event_time) || 0) - (parseDateMs(b.event_time) || 0));
+
+    for (let i = 0; i < sorted.length; i += 1) {
+      const row = sorted[i];
+      const startMs = parseDateMs(row.event_time);
+      if (!Number.isFinite(startMs)) continue;
+      const nextMs = parseDateMs(sorted[i + 1]?.event_time);
+      const endMs = Number.isFinite(nextMs) ? nextMs : hardEndMs;
+      const statusTo = cleanStatus(row.status_to);
+      const durationMs = clipDurationMs(startMs, endMs, dateFromMs, dateToMs);
+
+      if (statusTo === PES_STATUS.EN_ROUTE) travelMs += durationMs;
+      if (statusTo === PES_STATUS.CONNECTED) workMs += durationMs;
+      if (statusTo === PES_STATUS.REPAIR) repairMs += durationMs;
+    }
+  }
+
+  return {
+    eventsCount: countRows.length,
+    departuresCount: countRows.filter((row) => norm(row.action).toLowerCase() === "dispatch").length,
+    actualDeparturesCount: countRows.filter((row) => norm(row.action).toLowerCase() === "depart").length,
+    travelMs,
+    workMs,
+    repairMs,
+  };
+}
+
 function randomId() {
   if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -583,32 +723,70 @@ router.get("/history", async (req, res) => {
     const branch = norm(req.query.branch);
     const po = norm(req.query.po);
     const action = norm(req.query.action).toLowerCase();
-    const pesId = norm(req.query.pesId);
+    const status = cleanStatus(req.query.status);
+    const selectedPesIds = parseMultiQuery(req.query.pesIds || req.query.pesId);
+    const dateFromMs = parseDateMs(req.query.dateFrom);
+    const dateToMs = parseDateMs(req.query.dateTo);
 
     const params = {
-      "sort[0]": "event_time:desc",
-      "pagination[page]": page,
-      "pagination[pageSize]": pageSize,
+      "sort[0]": "event_time:asc",
       populate: "pes_unit",
     };
 
     if (branch) params["filters[branch][$containsi]"] = branch;
     if (po) params["filters[po][$containsi]"] = po;
-    if (action) params["filters[action][$eq]"] = action;
-    if (pesId) params["filters[pes_unit][code][$eq]"] = pesId;
+    if (Number.isFinite(dateToMs)) params["filters[event_time][$lte]"] = new Date(dateToMs).toISOString();
 
-    const { rows, pagination } = await fetchPage(PES_ENDPOINTS.OPERATION_LOGS, {
+    const allRows = await fetchAll(PES_ENDPOINTS.OPERATION_LOGS, {
       params,
+      pageSize: 200,
     });
+
+    const filterOptions = buildHistoryFilterOptions(allRows);
+    let visibleRows = allRows;
+    if (action) {
+      visibleRows = visibleRows.filter((row) => norm(row.action).toLowerCase() === action);
+    }
+    if (status) {
+      visibleRows = visibleRows.filter(
+        (row) => cleanStatus(row.status_from) === status || cleanStatus(row.status_to) === status
+      );
+    }
+    if (selectedPesIds.length) {
+      visibleRows = visibleRows.filter((row) => historyPesMatches(row, selectedPesIds));
+    }
+
+    visibleRows = visibleRows.filter((row) => {
+      const eventMs = parseDateMs(row.event_time);
+      if (!Number.isFinite(eventMs)) return false;
+      if (Number.isFinite(dateFromMs) && eventMs < dateFromMs) return false;
+      if (Number.isFinite(dateToMs) && eventMs > dateToMs) return false;
+      return true;
+    });
+
+    const durationRows = selectedPesIds.length
+      ? allRows.filter((row) => historyPesMatches(row, selectedPesIds))
+      : allRows;
+    const metrics = summarizeHistoryRows(durationRows, { countRows: visibleRows, dateFromMs, dateToMs });
+    const sortedRows = visibleRows
+      .slice()
+      .sort((a, b) => (parseDateMs(b.event_time) || 0) - (parseDateMs(a.event_time) || 0));
+    const total = sortedRows.length;
+    const pageCount = Math.max(1, Math.ceil(total / pageSize));
+    const safePage = Math.min(page, pageCount);
+    const offset = (safePage - 1) * pageSize;
+    const pageRows = sortedRows.slice(offset, offset + pageSize);
 
     res.json({
       ok: true,
-      items: rows.map(toHistoryDto),
+      items: pageRows.map(toHistoryDto),
+      metrics,
+      filterOptions,
       pagination: {
-        page: Number(pagination.page || page),
-        pageSize: Number(pagination.pageSize || pageSize),
-        pageCount: Number(pagination.pageCount || 1),
-        total: Number(pagination.total || 0),
+        page: safePage,
+        pageSize,
+        pageCount,
+        total,
       },
     });
   } catch (e) {
