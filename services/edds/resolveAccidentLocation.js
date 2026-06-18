@@ -18,11 +18,16 @@ async function resolveFiasCoordinates(fiasIds) {
 
   for (let i = 0; i < ids.length; i += BATCH_SIZE) {
     const batch = ids.slice(i, i + BATCH_SIZE);
-    const filterParts = batch
-      .map((id, idx) => `filters[fiasId][$eq][$${idx + 1}]=${encodeURIComponent(id)}`)
-      .join("&");
+    const params = new URLSearchParams();
+    batch.forEach((id, idx) => {
+      params.append(`filters[fiasId][$in][${idx}]`, id);
+    });
+    params.append("pagination[pageSize]", String(batch.length));
+    params.append("fields[0]", "fiasId");
+    params.append("fields[1]", "lat");
+    params.append("fields[2]", "lon");
 
-    const url = `${STRAPI_URL}/api/${ADDRESS_COLLECTION}?${filterParts}&pagination[pageSize]=${batch.length}&fields[0]=fiasId&fields[1]=lat&fields[2]=lon`;
+    const url = `${STRAPI_URL}/api/${ADDRESS_COLLECTION}?${params.toString()}`;
 
     try {
       const r = await axios.get(url, {
@@ -49,6 +54,30 @@ async function resolveFiasCoordinates(fiasIds) {
   return results;
 }
 
+function isValidCoordinatePair(value) {
+  if (!value || typeof value !== "object") return false;
+  if (
+    value.latitude === null ||
+    value.latitude === undefined ||
+    value.latitude === "" ||
+    value.longitude === null ||
+    value.longitude === undefined ||
+    value.longitude === ""
+  ) {
+    return false;
+  }
+  const latitude = Number(value.latitude);
+  const longitude = Number(value.longitude);
+  return (
+    Number.isFinite(latitude) &&
+    Number.isFinite(longitude) &&
+    latitude >= -90 &&
+    latitude <= 90 &&
+    longitude >= -180 &&
+    longitude <= 180
+  );
+}
+
 function computeCentroid(coordinates) {
   if (!coordinates.length) return null;
   const sumLat = coordinates.reduce((s, c) => s + c.lat, 0);
@@ -60,6 +89,19 @@ function computeCentroid(coordinates) {
 }
 
 async function resolveAccidentLocation(payload) {
+  if (isValidCoordinatePair(payload?.accidentLocation)) {
+    return {
+      ok: true,
+      accidentLocation: {
+        latitude: Math.round(Number(payload.accidentLocation.latitude) * 1e6) / 1e6,
+        longitude: Math.round(Number(payload.accidentLocation.longitude) * 1e6) / 1e6,
+      },
+      resolvedCount: 1,
+      totalFias: 0,
+      source: "payload",
+    };
+  }
+
   let fiasIds = [];
 
   const shutdownInfo = payload?.shutdownInfo;

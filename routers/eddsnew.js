@@ -124,17 +124,24 @@ router.post("/", async (req, res) => {
   const payload = req.body ?? {};
   logPayload(payload, { debug });
 
-  // accidentLocation — optional, non-blocking
   try {
     const locationResult = await resolveAccidentLocation(payload);
     if (locationResult.ok) {
       payload.accidentLocation = locationResult.accidentLocation;
       console.log(`  📍 accidentLocation: ${JSON.stringify(locationResult.accidentLocation)} (${locationResult.resolvedCount}/${locationResult.totalFias} FIAS)`);
     } else {
-      console.log(`  ⚠ accidentLocation: ${locationResult.message} — отправка продолжается`);
+      console.log(`  ✗ accidentLocation: ${locationResult.message} — отправка остановлена`);
+      return res.status(locationResult.status || 422).json({
+        ok: false,
+        error: locationResult.message,
+      });
     }
   } catch (e) {
-    console.log(`  ⚠ accidentLocation error: ${e?.message} — отправка продолжается`);
+    console.log(`  ✗ accidentLocation error: ${e?.message} — отправка остановлена`);
+    return res.status(422).json({
+      ok: false,
+      error: e?.message || "Не удалось определить обязательные координаты accidentLocation",
+    });
   }
 
   const url = `${EDDS_NEW_BASE_URL}/edds/external/requests/electricity`;
