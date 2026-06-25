@@ -13,6 +13,128 @@ const router = express.Router();
 const authCache = new Map();
 const rateLimitMap = new Map();
 
+/**
+ * @swagger
+ * /services/audit/health:
+ *   get:
+ *     summary: Проверка состояния аудит-системы
+ *     tags: ["Audit"]
+ *     responses:
+ *       200:
+ *         description: Состояние системы
+ *       401:
+ *         description: Требуется авторизация
+ *
+ * /services/audit/events:
+ *   get:
+ *     summary: Получение аудит-событий
+ *     tags: ["Audit"]
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 200
+ *       - in: query
+ *         name: action
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: username
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: from
+ *         schema:
+ *           type: string
+ *         description: Дата начала (ISO)
+ *       - in: query
+ *         name: to
+ *         schema:
+ *           type: string
+ *         description: Дата окончания (ISO)
+ *       - in: query
+ *         name: statusEvent
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: tnType
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: tnValue
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Список событий
+ *
+ * /services/audit/users:
+ *   get:
+ *     summary: Список пользователей аудита
+ *     tags: ["Audit"]
+ *     parameters:
+ *       - in: query
+ *         name: query
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 50
+ *       - in: query
+ *         name: from
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: to
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Список пользователей
+ *
+ * /services/audit/event:
+ *   post:
+ *     summary: Запись аудит-события
+ *     tags: ["Audit"]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               username:
+ *                 type: string
+ *               role:
+ *                 type: string
+ *               page:
+ *                 type: string
+ *               action:
+ *                 type: string
+ *               entity:
+ *                 type: string
+ *               entity_id:
+ *                 type: string
+ *               details:
+ *                 type: object
+ *     responses:
+ *       200:
+ *         description: Событие записано
+ *       429:
+ *         description: Превышен лимит запросов
+ */
+
 function env(name, fallback = "") {
   const v = process.env[name];
   return v == null || v === "" ? fallback : String(v);

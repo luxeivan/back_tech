@@ -13,6 +13,57 @@ require("dotenv").config();
 const router = express.Router();
 const secretModus = process.env.SECRET_FOR_MODUS;
 
+/**
+ * @swagger
+ * /services/modus:
+ *   put:
+ *     summary: Обновление технологических нарушений
+ *     tags: ["Modus"]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               data:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *     responses:
+ *       200:
+ *         description: Результат обработки
+ *       403:
+ *         description: Доступ запрещён
+ *       500:
+ *         description: Внутренняя ошибка сервера
+ *   post:
+ *     summary: Создание технологических нарушений
+ *     tags: ["Modus"]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               Data:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *     responses:
+ *       200:
+ *         description: Результат обработки
+ *       400:
+ *         description: Не хватает данных
+ *       403:
+ *         description: Доступ запрещён
+ *       409:
+ *         description: Дубликат записи
+ *       500:
+ *         description: Внутренняя ошибка сервера
+ */
+
 const isAuthorized = (req) => {
   const raw = (
     req.get("authorization") ||

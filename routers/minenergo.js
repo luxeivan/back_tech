@@ -4,6 +4,19 @@ require("dotenv").config();
 
 const router = express.Router();
 
+/**
+ * @swagger
+ * /services/minenergo:
+ *   get:
+ *     summary: Получение данных для МинЭнерго РФ
+ *     tags: ["MinEnergo"]
+ *     responses:
+ *       200:
+ *         description: Агрегированные данные по районам
+ *       500:
+ *         description: Ошибка сервера
+ */
+
 const STRAPI_URL = process.env.URL_STRAPI;
 const STRAPI_LOGIN = process.env.LOGIN_STRAPI;
 const STRAPI_PASSWORD = process.env.PASSWORD_STRAPI;

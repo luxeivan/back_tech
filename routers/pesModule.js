@@ -22,6 +22,155 @@ const {
 
 const router = express.Router();
 
+/**
+ * @swagger
+ * /services/pes/module/items:
+ *   get:
+ *     summary: Получение списка ПЭС с текущими статусами
+ *     tags: ["PES Module"]
+ *     parameters:
+ *       - in: query
+ *         name: branch
+ *         schema:
+ *           type: string
+ *         description: Фильтр по филиалу
+ *       - in: query
+ *         name: po
+ *         schema:
+ *           type: string
+ *         description: Фильтр по ПО
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [ready, command_sent, delay, en_route, connected, repair]
+ *         description: Фильтр по статусу
+ *     responses:
+ *       200:
+ *         description: Список ПЭС
+ *
+ * /services/pes/module/history:
+ *   get:
+ *     summary: История операций с ПЭС
+ *     tags: ["PES Module"]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *       - in: query
+ *         name: pageSize
+ *         schema:
+ *           type: integer
+ *           default: 50
+ *       - in: query
+ *         name: branch
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: action
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: pesIds
+ *         schema:
+ *           type: string
+ *         description: Список ID ПЭС через запятую
+ *       - in: query
+ *         name: dateFrom
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *       - in: query
+ *         name: dateTo
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *     responses:
+ *       200:
+ *         description: История операций
+ *
+ * /services/pes/module/config:
+ *   get:
+ *     summary: Конфигурация модуля ПЭС
+ *     tags: ["PES Module"]
+ *     responses:
+ *       200:
+ *         description: Конфигурация
+ *
+ * /services/pes/module/destinations:
+ *   get:
+ *     summary: Справочник точек назначения ПЭС
+ *     tags: ["PES Module"]
+ *     parameters:
+ *       - in: query
+ *         name: mode
+ *         schema:
+ *           type: string
+ *           enum: [single, multi]
+ *           default: single
+ *       - in: query
+ *         name: branch
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: po
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: destinationType
+ *         schema:
+ *           type: string
+ *           enum: [assembly, tp]
+ *     responses:
+ *       200:
+ *         description: Точки назначения
+ *
+ * /services/pes/module/command:
+ *   post:
+ *     summary: Выдача команды ПЭС
+ *     tags: ["PES Module"]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [action, pesIds]
+ *             properties:
+ *               action:
+ *                 type: string
+ *                 enum: [dispatch, reroute, cancel, depart, connect, ready, repair]
+ *               pesIds:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *               destinationType:
+ *                 type: string
+ *                 enum: [assembly, tp]
+ *               destinationId:
+ *                 type: string
+ *               comment:
+ *                 type: string
+ *               source:
+ *                 type: string
+ *                 enum: [web, telegram, max]
+ *     responses:
+ *       200:
+ *         description: Команда выполнена
+ *       400:
+ *         description: Ошибка валидации
+ *       403:
+ *         description: Недостаточно прав
+ *       404:
+ *         description: ПЭС не найдена
+ */
+
 const PES_STATUS = {
   READY: "ready",
   COMMAND_SENT: "command_sent",

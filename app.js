@@ -16,6 +16,7 @@ const integrationMappingsRoutes = require("./routers/integrationMappings");
 
 const webhooks = require("./routers/webhooks");
 const { sseHandler, broadcast } = require("./services/sse");
+const swaggerSetup = require("./swagger");
 require("dotenv").config();
 
 const app = express();
@@ -66,6 +67,8 @@ app.post("/services/event", (req, res) => {
     res.status(500).json({ error: "Ошибка рассылки события" });
   }
 });
+
+swaggerSetup(app);
 
 app.listen(port, () => {
   console.log(`Приложение запущено на ${port} порту и каким-то чудом работает`);

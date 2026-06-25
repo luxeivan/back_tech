@@ -7,6 +7,42 @@ const { resolveAccidentLocation } = require("../services/edds/resolveAccidentLoc
 
 const router = express.Router();
 
+/**
+ * @swagger
+ * /services/edds:
+ *   post:
+ *     summary: Отправка данных в ЕДДС (старый API)
+ *     tags: ["EDDS"]
+ *     parameters:
+ *       - in: query
+ *         name: debug
+ *         schema:
+ *           type: string
+ *         description: Включить отладочный режим (debug=1)
+ *       - in: query
+ *         name: dry
+ *         schema:
+ *           type: string
+ *         description: Тестовый прогон без реальной отправки (dry=1)
+ *       - in: query
+ *         name: mode
+ *         schema:
+ *           type: string
+ *           enum: [create, update]
+ *         description: Режим отправки
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *     responses:
+ *       200:
+ *         description: Результат отправки
+ *       502:
+ *         description: Ошибка ЕДДС
+ */
+
 const EDDS_URL = process.env.EDDS_URL;
 const EDDS_TOKEN = process.env.EDDS_TOKEN;
 const EDDS_URL_PUT = process.env.EDDS_URL_PUT;

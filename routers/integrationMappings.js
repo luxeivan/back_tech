@@ -6,6 +6,19 @@ require("dotenv").config();
 
 const router = express.Router();
 
+/**
+ * @swagger
+ * /services/integration-mappings/edds-new:
+ *   get:
+ *     summary: Получение маппингов интеграций для ЕДДС
+ *     tags: ["Integration"]
+ *     responses:
+ *       200:
+ *         description: Маппинги по типам
+ *       403:
+ *         description: Нет токена авторизации
+ */
+
 const URL_STRAPI = String(process.env.URL_STRAPI || "").replace(/\/$/, "");
 const STRAPI_API_TOKEN = String(
   process.env.STRAPI_API_TOKEN || process.env.STRAPI_INTEGRATION_MAPPINGS_TOKEN || ""

@@ -17,6 +17,77 @@ const {
 
 const router = express.Router();
 
+/**
+ * @swagger
+ * /services/pes/max/webhook/status:
+ *   get:
+ *     summary: Статус MAX-бота
+ *     tags: ["PES MAX"]
+ *     responses:
+ *       200:
+ *         description: Статус webhook
+ *
+ * /services/pes/max/webhook:
+ *   post:
+ *     summary: Приём update от MAX
+ *     tags: ["PES MAX"]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *     responses:
+ *       200:
+ *         description: Update принят
+ *       400:
+ *         description: Пустой update
+ *       403:
+ *         description: Неверный secret
+ *
+ * /services/pes/max/webhook/subscribe:
+ *   get:
+ *     summary: Список подписок webhook
+ *     tags: ["PES MAX"]
+ *     responses:
+ *       200:
+ *         description: Список подписок
+ *   post:
+ *     summary: Регистрация webhook
+ *     tags: ["PES MAX"]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               url:
+ *                 type: string
+ *               secret:
+ *                 type: string
+ *               update_types:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *     responses:
+ *       200:
+ *         description: Webhook зарегистрирован
+ *   delete:
+ *     summary: Удаление webhook
+ *     tags: ["PES MAX"]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               url:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Webhook удалён
+ */
+
 function roleFromReq(req) {
   return String(req.get("x-view-role") || "").trim().toLowerCase();
 }

@@ -25,6 +25,71 @@ logMesEndpoints();
 
 const router = express.Router();
 
+/**
+ * @swagger
+ * /services/mes/upload:
+ *   post:
+ *     summary: Загрузка реестра в МосЭнергоСбыт
+ *     tags: ["MES"]
+ *     parameters:
+ *       - in: query
+ *         name: dryRun
+ *         schema:
+ *           type: string
+ *         description: Тестовый прогон (dryRun=1)
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               tn:
+ *                 type: object
+ *                 description: Одно техническое нарушение
+ *               tns:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                 description: Массив технических нарушений
+ *     responses:
+ *       200:
+ *         description: Реестр загружен
+ *       400:
+ *         description: Неверный формат данных
+ *       502:
+ *         description: Ошибка MES
+ *
+ * /services/mes/status:
+ *   get:
+ *     summary: Проверка статуса загрузки в MES
+ *     tags: ["MES"]
+ *     parameters:
+ *       - in: query
+ *         name: session
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: id_registry
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Статус загрузки
+ *       400:
+ *         description: Не переданы session/id_registry
+ *
+ * /services/mes/ping:
+ *   get:
+ *     summary: Проверка доступности MES-сервиса
+ *     tags: ["MES"]
+ *     responses:
+ *       200:
+ *         description: Конфигурация MES
+ */
+
 router.post("/upload", express.json({ limit: "20mb" }), async (req, res) => {
   const startedAt = Date.now();
   let auditDetails = { result: "unknown" };

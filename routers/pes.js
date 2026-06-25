@@ -3,6 +3,19 @@ const axios = require("axios");
 
 const router = express.Router();
 
+/**
+ * @swagger
+ * /services/pes/vehicles:
+ *   get:
+ *     summary: Получение списка транспортных средств ПЭС (T3)
+ *     tags: ["PES"]
+ *     responses:
+ *       200:
+ *         description: Список транспортных средств
+ *       500:
+ *         description: Ошибка сервиса PES
+ */
+
 function env(name, fallback = null) {
   const v = process.env[name];
   return v === undefined || v === null || v === "" ? fallback : v;

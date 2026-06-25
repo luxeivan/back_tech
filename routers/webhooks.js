@@ -1,5 +1,28 @@
 const express = require("express");
 const router = express.Router();
+
+/**
+ * @swagger
+ * /services/webhooks:
+ *   get:
+ *     summary: Проверка доступности вебхука
+ *     tags: ["Webhooks"]
+ *     responses:
+ *       200:
+ *         description: Вебхук доступен
+ *   post:
+ *     summary: Приём вебхуков от Strapi
+ *     tags: ["Webhooks"]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *     responses:
+ *       200:
+ *         description: Вебхук принят
+ */
 const { broadcast } = require("../services/sse");
 
 router.all("/", (req, res) => {

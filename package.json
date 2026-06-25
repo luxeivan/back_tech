@@ -40,6 +40,8 @@
     "express": "^5.1.0",
     "form-data": "^4.0.4",
     "nodemon": "^3.1.10",
+    "swagger-jsdoc": "^6.3.0",
+    "swagger-ui-express": "^5.0.1",
     "xlsx": "^0.18.5"
   }
 }

@@ -7,6 +7,60 @@ const { resolveAccidentLocation } = require("../services/edds/resolveAccidentLoc
 
 const router = express.Router();
 
+/**
+ * @swagger
+ * /services/eddsnew:
+ *   post:
+ *     summary: Создание заявки в ЕДДС (новый API)
+ *     tags: ["EDDS New"]
+ *     parameters:
+ *       - in: query
+ *         name: debug
+ *         schema:
+ *           type: string
+ *         description: Включить отладочный режим
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *     responses:
+ *       200:
+ *         description: Заявка создана
+ *       422:
+ *         description: Не удалось определить координаты
+ *       502:
+ *         description: Ошибка ЕДДС
+ *
+ * /services/eddsnew/{requestId}:
+ *   put:
+ *     summary: Обновление заявки в ЕДДС (новый API)
+ *     tags: ["EDDS New"]
+ *     parameters:
+ *       - in: path
+ *         name: requestId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: ID заявки
+ *       - in: query
+ *         name: debug
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *     responses:
+ *       200:
+ *         description: Заявка обновлена
+ *       502:
+ *         description: Ошибка ЕДДС
+ */
+
 const EDDS_NEW_BASE_URL = process.env.EDDS_NEW_BASE_URL;
 const EDDS_TOKEN = process.env.EDDS_TOKEN;
 const URL_STRAPI = process.env.URL_STRAPI;

@@ -4,6 +4,19 @@ require("dotenv").config();
 
 const router = express.Router();
 
+/**
+ * @swagger
+ * /services/site/emergency-outages:
+ *   get:
+ *     summary: Получение аварийных отключений для сайта
+ *     tags: ["Site"]
+ *     responses:
+ *       200:
+ *         description: Список аварийных отключений
+ *       500:
+ *         description: Ошибка сервера
+ */
+
 const STRAPI_URL = process.env.URL_STRAPI;
 const STRAPI_LOGIN = process.env.LOGIN_STRAPI;
 const STRAPI_PASSWORD = process.env.PASSWORD_STRAPI;
