@@ -1,0 +1,12 @@
+services:
+  back_tech:
+    build: .
+    container_name: back_tech
+    restart: unless-stopped
+    ports:
+      - "3110:3110"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./import_data:/app/import_data
