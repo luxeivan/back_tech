@@ -68,7 +68,7 @@ app.post("/services/event", (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`Приложение запущено на ${port} порту и каким-то чудом работает`);
+  console.log(`Приложение запущено на ${port} порту и каким-то чудом работает в 2026 году`);
   console.log("[pes-max-bot] MAX работает через webhook");
 });
 
