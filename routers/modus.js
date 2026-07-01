@@ -1,8 +1,11 @@
+const { exec } = require("node:child_process");
 const express = require("express");
 const axios = require("axios");
 const { broadcast } = require("../services/sse");
 const { buildAutoDescription } = require("../services/autoDescription");
 const { buildEddsPayload } = require("../services/modus/eddsPayload");
+const { buildEddsNewPayload } = require("../services/modus/eddsNewPayload");
+const { resolveAccidentLocation } = require("../services/edds/resolveAccidentLocation");
 const {
   extractFiasList,
   upsertAddressesInStrapi,
@@ -158,6 +161,7 @@ router.put("/", async (req, res) => {
           parseBaseType(currentAttrs?.BASE_TYPE) ??
           parseBaseType(currentRaw?.BASE_TYPE);
         const needEdds = statusChanged && nextIsFinal && nextBaseType === 0;
+        const needEddsPlanned = statusChanged && nextIsFinal && nextBaseType === 1;
 
         if (!documentId) {
           acc.push({
@@ -383,6 +387,95 @@ router.put("/", async (req, res) => {
           }, 0);
         }
 
+        if (needEddsPlanned) {
+          console.log(`[PUT→EDDS] Плановая заявка, отправка в ЕДДС v2: guid=${mapped.guid}`);
+          setTimeout(async () => {
+            try {
+              const mergedForNew = { ...mapped };
+              if (mapped?.data) mergedForNew.data = mapped.data;
+
+              const { payload: v2Payload, errors: buildErrors } = buildEddsNewPayload({ data: mergedForNew });
+              if (!v2Payload) {
+                console.error(`[PUT→EDDS] Ошибка сборки v2 payload:`, buildErrors);
+                return;
+              }
+              if (buildErrors.length) {
+                console.warn(`[PUT→EDDS] Предупреждения при сборке v2 payload:`, buildErrors);
+              }
+
+              console.log(`\n${"═".repeat(60)}`);
+              console.log(`  ЕДДС v2 PUT → payload (${Object.keys(v2Payload).length} полей)`);
+              console.log(`${"═".repeat(60)}`);
+              console.log(JSON.stringify(v2Payload, null, 2));
+              console.log(`${"═".repeat(60)}\n`);
+
+              const locationResult = await resolveAccidentLocation(v2Payload);
+              if (locationResult.ok) {
+                v2Payload.accidentLocation = locationResult.accidentLocation;
+                console.log(`  📍 accidentLocation: ${JSON.stringify(locationResult.accidentLocation)} (${locationResult.resolvedCount}/${locationResult.totalFias} FIAS)`);
+              } else {
+                console.warn(`  ⚠ accidentLocation: ${locationResult.message} — координаты не определены`);
+              }
+
+              const eddsUrl = `${process.env.EDDS_NEW_BASE_URL}/edds/external/requests/electricity`;
+              const eddsToken = process.env.EDDS_TOKEN;
+              console.log(`  🔑 EDDS_TOKEN (ПОЛНЫЙ): ${eddsToken || 'ОТСУТСТВУЕТ'}`);
+              console.log(`  🌐 EDDS_URL:            ${eddsUrl}`);
+              const jsonEscaped = JSON.stringify(v2Payload).replace(/'/g, `'\\''`);
+
+              const command =
+                `curl -sS --http1.1 -X POST ` +
+                `-H "Content-Type: application/json" ` +
+                `-H "Authorization: Service ${eddsToken}" ` +
+                `-d '${jsonEscaped}' ` +
+                `-w "\\nHTTP_CODE:%{http_code}" ` +
+                `"${eddsUrl}" --insecure`;
+
+              console.log(`  📤 curl headers:`);
+              console.log(`     Content-Type: application/json`);
+              console.log(`     Authorization: Service ${eddsToken}`);
+
+              await new Promise((resolve) => {
+                exec(command, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+                  if (err) {
+                    console.error(`[PUT→EDDS] ✗ curl error code=${err.code}`);
+                    if (stderr) console.error(`    ${stderr}`);
+                    resolve();
+                    return;
+                  }
+
+                  let httpCode = null;
+                  let body = stdout;
+                  const codeMatch = stdout.match(/\nHTTP_CODE:(\d+)/);
+                  if (codeMatch) {
+                    httpCode = Number(codeMatch[1]);
+                    body = stdout.slice(0, codeMatch.index).trim();
+                  }
+
+                  let parsed = null;
+                  try { parsed = JSON.parse(body); } catch { /* raw */ }
+
+                  const icon = httpCode >= 200 && httpCode < 300 ? "✓" : "✗";
+                  console.log(`\n  ${icon} API ЕДДС ответил: HTTP ${httpCode}`);
+                  console.log(`${"─".repeat(60)}`);
+                  console.log(JSON.stringify(parsed || body, null, 2));
+                  console.log(`${"─".repeat(60)}`);
+
+                  if (httpCode >= 200 && httpCode < 300) {
+                    const requestId = parsed?.data?.id || null;
+                    console.log(`[PUT→EDDS] ✅ GUID=${mapped.guid} — ЕДДС v2 приняла` + (requestId ? ` (id: ${requestId})` : ""));
+                  } else {
+                    console.warn(`[PUT→EDDS] ❌ GUID=${mapped.guid} — ЕДДС v2 отклонила: ${parsed?.message || JSON.stringify(parsed || body)}`);
+                  }
+                  resolve();
+                });
+              });
+            } catch (e) {
+              console.error(`[PUT→EDDS] Ошибка отправки в ЕДДС v2 для GUID=${mapped.guid}:`, e?.code || e?.message);
+            }
+          }, 0);
+        }
+
         acc.push({
           success: true,
           index: index + 1,
@@ -524,6 +617,94 @@ router.post("/", async (req, res) => {
           } catch (e) {
             console.error("Ошибка SSE broadcast (create):", e?.message);
           }
+
+          // ── Auto-send planned outages to EDDS v2 ────────────────────────
+          if (item.BASE_TYPE === 1) {
+            console.log(`[POST→EDDS] Плановая заявка, автоматическая отправка в ЕДДС v2: guid=${item.guid}`);
+            setTimeout(async () => {
+              try {
+                const { payload: v2Payload, errors: buildErrors } = buildEddsNewPayload({ data: item });
+                if (!v2Payload) {
+                  console.error(`[POST→EDDS] Ошибка сборки v2 payload:`, buildErrors);
+                  return;
+                }
+                if (buildErrors.length) {
+                  console.warn(`[POST→EDDS] Предупреждения при сборке v2 payload:`, buildErrors);
+                }
+
+                console.log(`\n${"═".repeat(60)}`);
+                console.log(`  ЕДДС v2 → payload (${Object.keys(v2Payload).length} полей)`);
+                console.log(`${"═".repeat(60)}`);
+                console.log(JSON.stringify(v2Payload, null, 2));
+                console.log(`${"═".repeat(60)}\n`);
+
+                const locationResult = await resolveAccidentLocation(v2Payload);
+                if (locationResult.ok) {
+                  v2Payload.accidentLocation = locationResult.accidentLocation;
+                  console.log(`  📍 accidentLocation: ${JSON.stringify(locationResult.accidentLocation)} (${locationResult.resolvedCount}/${locationResult.totalFias} FIAS)`);
+                } else {
+                  console.warn(`  ⚠ accidentLocation: ${locationResult.message} — координаты не определены, отправка с placeholder`);
+                }
+
+                const eddsUrl = `${process.env.EDDS_NEW_BASE_URL}/edds/external/requests/electricity`;
+                const eddsToken = process.env.EDDS_TOKEN;
+                console.log(`  🔑 EDDS_TOKEN (ПОЛНЫЙ): ${eddsToken || 'ОТСУТСТВУЕТ'}`);
+                console.log(`  🌐 EDDS_URL:            ${eddsUrl}`);
+                const jsonEscaped = JSON.stringify(v2Payload).replace(/'/g, `'\\''`);
+
+                const command =
+                  `curl -sS --http1.1 -X POST ` +
+                  `-H "Content-Type: application/json" ` +
+                  `-H "Authorization: Service ${eddsToken}" ` +
+                  `-d '${jsonEscaped}' ` +
+                  `-w "\\nHTTP_CODE:%{http_code}" ` +
+                  `"${eddsUrl}" --insecure`;
+
+                  console.log(`  📤 curl headers:`);
+                  console.log(`     Content-Type: application/json`);
+                  console.log(`     Authorization: Service ${eddsToken}`);
+
+                await new Promise((resolve) => {
+                  exec(command, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+                    if (err) {
+                      console.error(`[POST→EDDS] ✗ curl error code=${err.code}`);
+                      if (stderr) console.error(`    ${stderr}`);
+                      resolve();
+                      return;
+                    }
+
+                    let httpCode = null;
+                    let body = stdout;
+                    const codeMatch = stdout.match(/\nHTTP_CODE:(\d+)/);
+                    if (codeMatch) {
+                      httpCode = Number(codeMatch[1]);
+                      body = stdout.slice(0, codeMatch.index).trim();
+                    }
+
+                    let parsed = null;
+                    try { parsed = JSON.parse(body); } catch { /* raw */ }
+
+                    const icon = httpCode >= 200 && httpCode < 300 ? "✓" : "✗";
+                    console.log(`\n  ${icon} API ЕДДС ответил: HTTP ${httpCode}`);
+                    console.log(`${"─".repeat(60)}`);
+                    console.log(JSON.stringify(parsed || body, null, 2));
+                    console.log(`${"─".repeat(60)}`);
+
+                    if (httpCode >= 200 && httpCode < 300) {
+                      const requestId = parsed?.data?.id || null;
+                      console.log(`[POST→EDDS] ✅ GUID=${item.guid} — ЕДДС v2 приняла` + (requestId ? ` (id: ${requestId})` : ""));
+                    } else {
+                      console.warn(`[POST→EDDS] ❌ GUID=${item.guid} — ЕДДС v2 отклонила: ${parsed?.message || JSON.stringify(parsed || body)}`);
+                    }
+                    resolve();
+                  });
+                });
+              } catch (e) {
+                console.error(`[POST→EDDS] Ошибка отправки в ЕДДС v2 для GUID=${item.guid}:`, e?.code || e?.message);
+              }
+            }, 0);
+          }
+          // ─────────────────────────────────────────────────────────────────
         } catch (error) {
           console.error(
             `[POST] Ошибка при отправке элемента ${index + 1}:`,

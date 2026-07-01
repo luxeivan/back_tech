@@ -17,52 +17,31 @@ function pretty(obj) {
   try { return JSON.stringify(obj, null, 2); } catch { return String(obj); }
 }
 
-function logPayload(payload, { debug = false } = {}) {
+function logPayload(payload) {
   const p = payload || {};
   const keys = Object.keys(p);
-  console.log(`\n${"─".repeat(60)}`);
+  console.log(`\n${"═".repeat(60)}`);
   console.log(`  ЕДДС-NEW → payload  (${keys.length} полей)`);
-  console.log(`${"─".repeat(60)}`);
-  if (debug) {
-    console.log(pretty(p));
-  } else {
-    const short = {};
-    if (p.districtFiasIds) short.districtFiasIds = p.districtFiasIds;
-    if (p.equipmentType) short.equipmentType = p.equipmentType;
-    if (p.equipmentName) short.equipmentName = p.equipmentName;
-    if (p.accidentLocation) short.accidentLocation = p.accidentLocation;
-    if (p.shutdownInfo) {
-      short.shutdownInfo = {
-        shutdownType: p.shutdownInfo.shutdownType,
-        deenergizedType: p.shutdownInfo.deenergizedType,
-        disabledAt: p.shutdownInfo.disabledAt,
-        plannedInclusionAt: p.shutdownInfo.plannedInclusionAt,
-        reasons: p.shutdownInfo.reasons,
-        fiasCount: p.shutdownInfo.fiasIds?.length,
-      };
-    }
-    if (p.affectedObjectsCount) short.affectedObjectsCount = p.affectedObjectsCount;
-    if (p.comment?.text) short.commentLength = p.comment.text.length;
-    console.log(pretty(short));
-  }
-  console.log(`${"─".repeat(60)}\n`);
+  console.log(`${"═".repeat(60)}`);
+  console.log(pretty(p));
+  console.log(`${"═".repeat(60)}\n`);
 }
 
 function logResponse(resp, { url = "" } = {}) {
   if (resp.httpCode) {
     const icon = resp.httpCode >= 200 && resp.httpCode < 300 ? "✓" : "✗";
-    console.log(`\n  ${icon} ЕДДС-NEW ← HTTP ${resp.httpCode}${url ? `  ${url}` : ""}`);
+    console.log(`\n  ${icon} API ЕДДС ответил: HTTP ${resp.httpCode}`);
+    console.log(`${"─".repeat(60)}`);
   } else if (resp.code) {
     console.log(`\n  ✗ ЕДДС-NEW ← curl error code=${resp.code}`);
     if (resp.stderr) console.log(`    ${resp.stderr}`);
   }
   if (resp.parsed) {
-    console.log(`  Ответ ЕДДС:`);
     console.log(pretty(resp.parsed));
   } else if (resp.stdout) {
     console.log(`  Raw: ${resp.stdout}`);
   }
-  console.log();
+  console.log(`${"─".repeat(60)}\n`);
 }
 
 function runCurl(url, payload, { method = "POST", debug = {} } = {}) {
@@ -122,7 +101,7 @@ router.post("/", async (req, res) => {
   if (!EDDS_TOKEN) return res.status(500).json({ ok: false, error: "EDDS_TOKEN не задан в .env" });
 
   const payload = req.body ?? {};
-  logPayload(payload, { debug });
+  logPayload(payload);
 
   try {
     const locationResult = await resolveAccidentLocation(payload);
@@ -177,7 +156,7 @@ router.put("/:requestId", async (req, res) => {
   if (!EDDS_TOKEN) return res.status(500).json({ ok: false, error: "EDDS_TOKEN не задан в .env" });
 
   const payload = req.body ?? {};
-  logPayload(payload, { debug });
+  logPayload(payload);
 
   const url = `${EDDS_NEW_BASE_URL}/edds/external/requests/electricity/${requestId}`;
   const resp = await runCurl(url, payload, { method: "PUT", debug });
