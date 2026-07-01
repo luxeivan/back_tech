@@ -21,7 +21,7 @@ function broadcast(payload) {
       safeRemove(id);
     }
   }
-  console.log(`📡 SSE: отправлено ${clients.size} клиентам`);
+  // console.log(`📡 SSE: отправлено ${clients.size} клиентам`);
   dumpClients(50);
 }
 

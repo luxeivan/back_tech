@@ -341,8 +341,8 @@ function buildEddsNewPayload(item) {
   if (!districtFiasId) {
     errors.push(`Не найден маппинг districtFiasIds для DISTRICT="${districtSource || "пусто"}".`);
   }
-  console.log(`  📋 districtFiasIds[0] = "${districtFiasId}" (из DISTRICT="${districtSource}")`);
-  console.log(`  📋 externalId = "${externalId}"`);
+  // console.log(`  📋 districtFiasIds[0] = "${districtFiasId}" (из DISTRICT="${districtSource}")`);
+  // console.log(`  📋 externalId = "${externalId}"`);
 
   const equipmentName = clean(raw?.F81_041_ENERGOOBJECTNAME);
   if (!equipmentName) {

@@ -538,15 +538,15 @@ router.put("/", async (req, res) => {
               const locationResult = await resolveAccidentLocation(v2Payload);
               if (locationResult.ok) {
                 v2Payload.accidentLocation = locationResult.accidentLocation;
-                console.log(`  📍 accidentLocation: ${JSON.stringify(locationResult.accidentLocation)} (${locationResult.resolvedCount}/${locationResult.totalFias} FIAS)`);
+                // console.log(`  📍 accidentLocation: ${JSON.stringify(locationResult.accidentLocation)} (${locationResult.resolvedCount}/${locationResult.totalFias} FIAS)`);
               } else {
                 console.warn(`  ⚠ accidentLocation: ${locationResult.message} — координаты не определены`);
               }
 
               const eddsUrl = `${process.env.EDDS_NEW_BASE_URL}/edds/external/requests/electricity${suffix}`;
               const eddsToken = process.env.EDDS_TOKEN;
-              console.log(`  🔑 EDDS_TOKEN (ПОЛНЫЙ): ${eddsToken || 'ОТСУТСТВУЕТ'}`);
-              console.log(`  🌐 EDDS_URL:            ${eddsUrl}`);
+              // console.log(`  🔑 EDDS_TOKEN (ПОЛНЫЙ): ${eddsToken || 'ОТСУТСТВУЕТ'}`);
+              // console.log(`  🌐 EDDS_URL:            ${eddsUrl}`);
               const jsonEscaped = JSON.stringify(v2Payload).replace(/'/g, `'\\''`);
 
               const command =
@@ -557,9 +557,9 @@ router.put("/", async (req, res) => {
                 `-w "\\nHTTP_CODE:%{http_code}" ` +
                 `"${eddsUrl}" --insecure`;
 
-              console.log(`  📤 curl headers:`);
-              console.log(`     Content-Type: application/json`);
-              console.log(`     Authorization: Service ${eddsToken}`);
+              // console.log(`  📤 curl headers:`);
+              // console.log(`     Content-Type: application/json`);
+              // console.log(`     Authorization: Service ${eddsToken}`);
 
               await new Promise((resolve) => {
                 exec(command, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
@@ -773,15 +773,15 @@ router.post("/", async (req, res) => {
                 const locationResult = await resolveAccidentLocation(v2Payload);
                 if (locationResult.ok) {
                   v2Payload.accidentLocation = locationResult.accidentLocation;
-                  console.log(`  📍 accidentLocation: ${JSON.stringify(locationResult.accidentLocation)} (${locationResult.resolvedCount}/${locationResult.totalFias} FIAS)`);
+              // console.log(`  📍 accidentLocation: ${JSON.stringify(locationResult.accidentLocation)} (${locationResult.resolvedCount}/${locationResult.totalFias} FIAS)`);
                 } else {
                   console.warn(`  ⚠ accidentLocation: ${locationResult.message} — координаты не определены, отправка с placeholder`);
                 }
 
                 const eddsUrl = `${process.env.EDDS_NEW_BASE_URL}/edds/external/requests/electricity`;
                 const eddsToken = process.env.EDDS_TOKEN;
-                console.log(`  🔑 EDDS_TOKEN (ПОЛНЫЙ): ${eddsToken || 'ОТСУТСТВУЕТ'}`);
-                console.log(`  🌐 EDDS_URL:            ${eddsUrl}`);
+                // console.log(`  🔑 EDDS_TOKEN (ПОЛНЫЙ): ${eddsToken || 'ОТСУТСТВУЕТ'}`);
+                // console.log(`  🌐 EDDS_URL:            ${eddsUrl}`);
                 const jsonEscaped = JSON.stringify(v2Payload).replace(/'/g, `'\\''`);
 
                 const command =
@@ -792,9 +792,9 @@ router.post("/", async (req, res) => {
                   `-w "\\nHTTP_CODE:%{http_code}" ` +
                   `"${eddsUrl}" --insecure`;
 
-                  console.log(`  📤 curl headers:`);
-                  console.log(`     Content-Type: application/json`);
-                  console.log(`     Authorization: Service ${eddsToken}`);
+                  // console.log(`  📤 curl headers:`);
+                  // console.log(`     Content-Type: application/json`);
+                  // console.log(`     Authorization: Service ${eddsToken}`);
 
                 await new Promise((resolve) => {
                   exec(command, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
