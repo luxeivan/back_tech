@@ -1,55 +1,67 @@
 const { DISTRICT_MAP } = require("./eddsPayload");
 
 const DISTRICT_FIAS_MAP = {
-  "Балашиха г.о.": "213a1aca-3270-4800-83b4-6572932f5b9b",
-  "Богородский г.о.": "a8d3e5c1-4b2e-4f6a-9c8d-1e2f3a4b5c6d",
-  "Бронницы г.о.": "b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e",
-  "Волоколамск г.о.": "c2d3e4f5-a6b7-4c8d-9e0f-1a2b3c4d5e6f",
-  "Воскресенск г.о.": "d3e4f5a6-b7c8-4d9e-0f1a-2b3c4d5e6f7a",
-  "Дзержинский г.о.": "e4f5a6b7-c8d9-4e0f-1a2b-3c4d5e6f7a8b",
-  "Дмитровский г.о.": "f5a6b7c8-d9e0-4f1a-2b3c-4d5e6f7a8b9c",
-  "Долгопрудный г.о.": "a6b7c8d9-e0f1-4a2b-3c4d-5e6f7a8b9c0d",
-  "Домодедово г.о.": "b7c8d9e0-f1a2-4b3c-4d5e-6f7a8b9c0d1e",
-  "Дубна г.о.": "c8d9e0f1-a2b3-4c4d-5e6f-7a8b9c0d1e2f",
-  "Егорьевск г.о.": "d9e0f1a2-b3c4-4d5e-6f7a-8b9c0d1e2f3a",
-  "Жуковский г.о.": "e0f1a2b3-c4d5-4e6f-7a8b-9c0d1e2f3a4b",
-  "Зарайск г.о.": "f1a2b3c4-d5e6-4f7a-8b9c-0d1e2f3a4b5c",
-  "Истра г.о.": "42d90380-e8a1-4c5b-b6d2-7f3e8a1b4c5d",
-  "Кашира г.о.": "a2b3c4d5-e6f7-4a8b-9c0d-1e2f3a4b5c6d",
-  "Клин г.о.": "b3c4d5e6-f7a8-4b9c-0d1e-2f3a4b5c6d7e",
-  "Коломна г.о.": "c4d5e6f7-a8b9-4c0d-1e2f-3a4b5c6d7e8f",
-  "Королев г.о.": "d5e6f7a8-b9c0-4d1e-2f3a-4b5c6d7e8f9a",
-  "Красногорск г.о.": "e6f7a8b9-c0d1-4e2f-3a4b-5c6d7e8f9a0b",
-  "Ленинский г.о.": "f7a8b9c0-d1e2-4f3a-4b5c-6d7e8f9a0b1c",
-  "Лобня г.о.": "a8b9c0d1-e2f3-4a4b-5c6d-7e8f9a0b1c2d",
-  "Луховицы г.о.": "b9c0d1e2-f3a4-4b5c-6d7e-8f9a0b1c2d3e",
-  "Лыткарино г.о.": "c0d1e2f3-a4b5-4c6d-7e8f-9a0b1c2d3e4f",
-  "Люберцы г.о.": "d1e2f3a4-b5c6-4d7e-8f9a-0b1c2d3e4f5a",
-  "Можайский г.о.": "e2f3a4b5-c6d7-4e8f-9a0b-1c2d3e4f5a6b",
-  "Мытищи г.о.": "f3a4b5c6-d7e8-4f9a-0b1c-2d3e4f5a6b7c",
-  "Наро-Фоминский г.о.": "a4b5c6d7-e8f9-4a0b-1c2d-3e4f5a6b7c8d",
-  "Одинцовский г.о.": "b5c6d7e8-f9a0-4b1c-2d3e-4f5a6b7c8d9e",
-  "Орехово-Зуевский г.о.": "c6d7e8f9-a0b1-4c2d-3e4f-5a6b7c8d9e0f",
-  "Павлово-Посадский г.о.": "d7e8f9a0-b1c2-4d3e-4f5a-6b7c8d9e0f1a",
-  "Подольск г.о.": "26149e92-3a1b-4c5d-a6e7-f8b9c0d1e2f3",
-  "Протвино г.о.": "e8f9a0b1-c2d3-4e4f-5a6b-7c8d9e0f1a2b",
-  "Пушкинский г.о.": "f9a0b1c2-d3e4-4f5a-6b7c-8d9e0f1a2b3c",
-  "Раменский г.о.": "a0b1c2d3-e4f5-4a6b-7c8d-9e0f1a2b3c4d",
-  "Реутов г.о.": "b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e",
-  "Рузский г.о.": "c2d3e4f5-a6b7-4c8d-9e0f-1a2b3c4d5e6f",
-  "Сергиево-Посадский г.о.": "d3e4f5a6-b7c8-4d9e-0f1a-2b3c4d5e6f7a",
-  "Серебряные Пруды г.о.": "e4f5a6b7-c8d9-4e0f-1a2b-3c4d5e6f7a8b",
-  "Серпухов г.о.": "f5a6b7c8-d9e0-4f1a-2b3c-4d5e6f7a8b9c",
-  "Солнечногорск г.о.": "a6b7c8d9-e0f1-4a2b-3c4d-5e6f7a8b9c0d",
-  "Ступино г.о.": "b7c8d9e0-f1a2-4b3c-4d5e-6f7a8b9c0d1e",
-  "Талдомский г.о.": "c8d9e0f1-a2b3-4c4d-5e6f-7a8b9c0d1e2f",
-  "Фрязино г.о.": "d9e0f1a2-b3c4-4d5e-6f7a-8b9c0d1e2f3a",
-  "Химки г.о.": "e0f1a2b3-c4d5-4e6f-7a8b-9c0d1e2f3a4b",
-  "Чехов г.о.": "f1a2b3c4-d5e6-4f7a-8b9c-0d1e2f3a4b5c",
-  "Шатура г.о.": "a2b3c4d5-e6f7-4a8b-9c0d-1e2f3a4b5c6d",
-  "Шаховская г.о.": "b3c4d5e6-f7a8-4b9c-0d1e-2f3a4b5c6d7e",
-  "Щелково г.о.": "c4d5e6f7-a8b9-4c0d-1e2f-3a4b5c6d7e8f",
-  "Электросталь г.о.": "d5e6f7a8-b9c0-4d1e-2f3a-4b5c6d7e8f9a",
+  "Балашиха г.о.": "213a1aca-5c9e-4b94-a4e0-c5333882cba0",
+  "Богородский г.о.": "d1954143-4569-4938-b06a-2c51d07b8fe3",
+  "Бронницы г.о.": "292ca80f-50ec-4160-b7c8-adeb53774645",
+  "Власиха г.о.": "bc6c3bd3-95b9-4258-9726-089a9d207f13",
+  "Волоколамский г.о.": "5a5f9a40-b6a3-4ad8-af28-aff545e17b84",
+  "Воскресенск г.о.": "28ae170a-f54c-4ec4-8fcc-920f20871ea3",
+  "Восход г.о.": "93c36278-3ece-468d-a74f-5a77f8a1b863",
+  "Дзержинский г.о.": "646f3a1d-1087-454a-a412-c7c9831d67d0",
+  "Дмитровский г.о.": "07044206-f77f-4bbf-83b9-ce4f0432eaea",
+  "Долгопрудный г.о.": "79ba1e00-2b3f-466d-88db-50deeb27c4c9",
+  "Домодедово г.о.": "af2085e0-ca38-4a98-9bec-e43b7057ba6c",
+  "Дубна г.о.": "819d73c8-9375-4e39-8853-ddf003b42217",
+  "Егорьевск г.о.": "d8737d58-293f-4d6b-9d37-b1d588c04eaa",
+  "Жуковский г.о.": "f205bd3d-c738-4743-be7e-4a21084cb22f",
+  "Зарайск г.о.": "2d5657bb-0069-492f-bf7e-f521b14cddb1",
+  "Звездный городок г.о.": "4613a114-016a-4b72-9a9c-57a6961e1971",
+  "Истра г.о.": "42d90380-b3b2-42d3-bae2-3d3652a2e50d",
+  "Кашира г.о.": "3e5c43e5-95ec-4faf-9b4d-8612e6003a52",
+  "Клин г.о.": "d3757aca-5857-47ed-9566-5adc2b57afac",
+  "Коломна г.о.": "6e68c7e7-10ab-4965-aada-478aeae821db",
+  "Королёв г.о.": "9d737e81-e677-43cb-83d2-4e11e5e5dc2c",
+  "Королев г.о.": "9d737e81-e677-43cb-83d2-4e11e5e5dc2c",
+  "Котельники г.о.": "5277759e-be05-4a2d-ba89-d8478add5a0c",
+  "Красногорск г.о.": "d55b49ba-475a-4141-b11f-9cb3f29e2205",
+  "Краснознаменск г.о.": "d34042a0-5440-40c5-8bc7-09383bd38cab",
+  "Ленинский г.о.": "c2c325fc-435f-4ab7-88fc-d632f6b33c87",
+  "Лобня г.о.": "36b29bf3-2a90-4c6c-9bc2-8dc59e890ef3",
+  "Лосино-Петровский г.о.": "9132b305-951c-423e-9bba-0b29d23fddd6",
+  "Лотошино г.о.": "b6515ab8-66eb-4f6d-8b9d-3667b287004d",
+  "Луховицы г.о.": "044de8a0-d790-49b3-a3e3-7ee7ea56e79c",
+  "Лыткарино г.о.": "462cc323-d81e-4564-9dc8-ee30f9a46b0a",
+  "Люберцы г.о.": "2e1b7a2a-55de-42be-aacf-6c625cad5ff5",
+  "Можайский г.о.": "d75a3e6e-3d43-4404-97d7-a0bb0ad01459",
+  "Молодёжный г.о.": "f602fcc3-8b8b-4a03-b215-4aab8ca4e390",
+  "Москва": "0c5b2444-70a0-4932-980c-b4dc0d3f02b5",
+  "Мытищи г.о.": "aa29f2e6-5d7d-4e7b-b062-56c4fe0f39fe",
+  "Наро-Фоминский г.о.": "0d5fdd1b-a7fa-452e-bde7-6f752016d67b",
+  "Одинцовский г.о.": "b4d06790-77eb-44d8-8cfd-035404fb2fb7",
+  "Орехово-Зуевский г.о.": "57e6e3c2-486a-4265-afc6-af1c2d6729dc",
+  "Павлово-Посадский г.о.": "560e4d42-b5a8-4b34-9462-e8d4f048c964",
+  "Подольск г.о.": "26149e92-3a76-4bba-b332-1facc35f9311",
+  "Пушкинский г.о.": "113003b5-dae9-46de-99cf-28eb47763625",
+  "Раменский г.о.": "d77fcba7-6fd9-4e15-a70f-dba0e96a116e",
+  "Реутов г.о.": "98b2ade5-8a1b-4a98-b569-6aeefcb2ab8e",
+  "Рузский г.о.": "26580099-b45e-4834-b085-527485d692b7",
+  "Сергиево-Посадский г.о.": "ed7da874-3df1-4f99-a1f4-302a27be0d95",
+  "Серебряные Пруды г.о.": "5f07f4b6-9b3b-45f2-937f-92a39ffd3128",
+  "Серпухов г.о.": "ef67af07-1d09-4924-a7e4-f2429428b581",
+  "Солнечногорск г.о.": "885695b8-1384-4c12-990e-1a2961a337b2",
+  "Ступино г.о.": "ec488b61-384c-48ff-a78d-117bc22c9674",
+  "Талдомский г.о.": "70ce2cc9-ded3-492a-9bda-a26dceb3bcd2",
+  "Фрязино г.о.": "a5845777-83fb-4cf0-bf14-6f24d900b389",
+  "Химки г.о.": "cd03d381-6681-4970-8d7a-f77b2bf108fa",
+  "Черноголовка г.о.": "d9b693fc-2211-424c-b570-d4a9f3c8d709",
+  "Чехов г.о.": "d000a228-e8ec-4e5f-8903-98a209c78d68",
+  "Шатура г.о.": "ef438532-11fe-459f-99b4-873b7f216125",
+  "Шаховская г.о.": "36087d43-b081-40fc-855c-8d65681d5cef",
+  "Щербинка г.о.": "89184dde-a93f-40ae-b6d5-8645833bddb3",
+  "Щёлково г.о.": "277e8ad7-99a4-498a-8385-6f94c1dcac28",
+  "Щелково г.о.": "277e8ad7-99a4-498a-8385-6f94c1dcac28",
+  "Электросталь г.о.": "b433362d-7f0c-48dd-91ae-2af6aed54879",
 };
 
 const SHUTDOWN_TYPE_MAP = {
@@ -190,8 +202,12 @@ function firstAddress(v) {
 function mapDistrictFias(districtSource) {
   const normalized = normalizeDistrict(districtSource);
   for (const [name, fias] of Object.entries(DISTRICT_FIAS_MAP)) {
-    if (normalizeDistrict(name) === normalized) return fias;
+    if (normalizeDistrict(name) === normalized) {
+      console.log(`  🗺️  DISTRICT маппинг: "${districtSource}" → "${name}" → ${fias}`);
+      return fias;
+    }
   }
+  console.log(`  🗺️  DISTRICT маппинг: "${districtSource}" → НЕ НАЙДЕН`);
   return "";
 }
 
@@ -315,11 +331,18 @@ function buildEddsNewPayload(item) {
     errors.push(`Неизвестный VIOLATION_TYPE="${violationType || "пусто"}". Допустимо: А, В, П.`);
   }
 
+  const externalId = clean(raw?.VIOLATION_GUID_STR);
+  if (!externalId) {
+    errors.push("Не заполнено обязательное поле externalId (VIOLATION_GUID_STR).");
+  }
+
   const districtSource = clean(raw?.DISTRICT || raw?.SCNAME || mapped?.district || mapped?.dispCenter);
   const districtFiasId = mapDistrictFias(districtSource);
   if (!districtFiasId) {
     errors.push(`Не найден маппинг districtFiasIds для DISTRICT="${districtSource || "пусто"}".`);
   }
+  console.log(`  📋 districtFiasIds[0] = "${districtFiasId}" (из DISTRICT="${districtSource}")`);
+  console.log(`  📋 externalId = "${externalId}"`);
 
   const equipmentName = clean(raw?.F81_041_ENERGOOBJECTNAME);
   if (!equipmentName) {
@@ -357,6 +380,7 @@ function buildEddsNewPayload(item) {
   }
 
   const payload = {
+    externalId,
     districtFiasIds: [districtFiasId],
     equipmentType,
     equipmentName,
@@ -372,6 +396,7 @@ function buildEddsNewPayload(item) {
       plannedInclusionAt,
       reasons,
       fiasIds,
+      deenergizedObjectsInfo: "заглушка",
     },
     affectedObjectsCount: {
       peopleCount,
