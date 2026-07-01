@@ -283,6 +283,7 @@ router.put("/", async (req, res) => {
           parseBaseType(currentRaw?.BASE_TYPE);
         const needEdds = statusChanged && nextIsFinal && nextBaseType === 0;
         const needEddsPlanned = statusChanged && nextIsFinal && nextBaseType === 1;
+        const existingEdsRequestId = current?.edds_electricityRequestId || currentAttrs?.edds_electricityRequestId || null;
 
         if (!documentId) {
           acc.push({
@@ -509,7 +510,11 @@ router.put("/", async (req, res) => {
         }
 
         if (needEddsPlanned) {
-          console.log(`[PUT→EDDS] Плановая заявка, отправка в ЕДДС v2: guid=${mapped.guid}`);
+          const usePut = !!existingEdsRequestId;
+          const method = usePut ? "PUT" : "POST";
+          const suffix = usePut ? `/${existingEdsRequestId}` : "";
+          console.log(`[PUT→EDDS] Плановая заявка, отправка в ЕДДС v2 (${method}): guid=${mapped.guid}` + (usePut ? ` edds_electricityRequestId=${existingEdsRequestId}` : ""));
+
           setTimeout(async () => {
             try {
               const mergedForNew = { ...mapped };
@@ -525,7 +530,7 @@ router.put("/", async (req, res) => {
               }
 
               console.log(`\n${"═".repeat(60)}`);
-              console.log(`  ЕДДС v2 PUT → payload (${Object.keys(v2Payload).length} полей)`);
+              console.log(`  ЕДДС v2 ${method} → payload (${Object.keys(v2Payload).length} полей)`);
               console.log(`${"═".repeat(60)}`);
               console.log(JSON.stringify(v2Payload, null, 2));
               console.log(`${"═".repeat(60)}\n`);
@@ -538,14 +543,14 @@ router.put("/", async (req, res) => {
                 console.warn(`  ⚠ accidentLocation: ${locationResult.message} — координаты не определены`);
               }
 
-              const eddsUrl = `${process.env.EDDS_NEW_BASE_URL}/edds/external/requests/electricity`;
+              const eddsUrl = `${process.env.EDDS_NEW_BASE_URL}/edds/external/requests/electricity${suffix}`;
               const eddsToken = process.env.EDDS_TOKEN;
               console.log(`  🔑 EDDS_TOKEN (ПОЛНЫЙ): ${eddsToken || 'ОТСУТСТВУЕТ'}`);
               console.log(`  🌐 EDDS_URL:            ${eddsUrl}`);
               const jsonEscaped = JSON.stringify(v2Payload).replace(/'/g, `'\\''`);
 
               const command =
-                `curl -sS --http1.1 -X POST ` +
+                `curl -sS --http1.1 -X ${method} ` +
                 `-H "Content-Type: application/json" ` +
                 `-H "Authorization: Service ${eddsToken}" ` +
                 `-d '${jsonEscaped}' ` +
@@ -584,15 +589,15 @@ router.put("/", async (req, res) => {
 
                   if (httpCode >= 200 && httpCode < 300) {
                     const requestId = parsed?.data?.id || null;
-                    console.log(`[PUT→EDDS] ✅ GUID=${mapped.guid} — ЕДДС v2 приняла` + (requestId ? ` (id: ${requestId})` : ""));
-                    if (requestId) {
+                    console.log(`[PUT→EDDS] ✅ GUID=${mapped.guid} — ЕДДС v2 ${method} прошёл` + (requestId ? ` (id: ${requestId})` : ""));
+                    if (requestId && !usePut) {
                       getJwt().then(jwt => saveEdsRequestId(mapped.guid, requestId, jwt)).catch(() => {});
                     }
                   } else {
                     console.warn(`[PUT→EDDS] ❌ GUID=${mapped.guid} — ЕДДС v2 отклонила: ${parsed?.message || JSON.stringify(parsed || body)}`);
                   }
 
-                  writeEdsJournal({ guid: mapped.guid, tnNumber: mapped.number, target: "ЕДДС v2", httpCode, parsed }).catch((e) => console.warn("[modus][journal] ошибка:", e?.message || e));
+                  writeEdsJournal({ guid: mapped.guid, tnNumber: mapped.number, target: `ЕДДС v2 ${method}`, httpCode, parsed }).catch((e) => console.warn("[modus][journal] ошибка:", e?.message || e));
 
                   resolve();
                 });
