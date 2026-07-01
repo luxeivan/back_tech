@@ -264,6 +264,7 @@ router.put("/", async (req, res) => {
           params: {
             "filters[guid][$eq]": mapped.guid,
             "pagination[pageSize]": 1,
+            "populate": "*",
           },
         });
 
@@ -285,6 +286,7 @@ router.put("/", async (req, res) => {
         const needEdds = statusChanged && nextIsFinal && nextBaseType === 0;
         const needEddsPlanned = statusChanged && nextIsFinal && nextBaseType === 1;
         const existingEdsRequestId = current?.edds_electricityRequestId || currentAttrs?.edds_electricityRequestId || null;
+        const needEddsDelete = statusChanged && nextStatus === "удалена" && !!existingEdsRequestId;
 
         if (!documentId) {
           acc.push({
@@ -510,7 +512,7 @@ router.put("/", async (req, res) => {
           }, 0);
         }
 
-        if (needEddsPlanned) {
+        if (needEddsPlanned && !needEddsDelete) {
           const usePut = !!existingEdsRequestId;
           const method = usePut ? "PUT" : "POST";
           const suffix = usePut ? `/${existingEdsRequestId}` : "";
@@ -609,6 +611,64 @@ router.put("/", async (req, res) => {
           }, 0);
         }
 
+        if (needEddsDelete) {
+          console.log(`[PUT→EDDS] ТН удалена, отправка DELETE в ЕДДС v2: guid=${mapped.guid} edds_electricityRequestId=${existingEdsRequestId}`);
+
+          setTimeout(async () => {
+            try {
+              const eddsUrl = `${process.env.EDDS_NEW_BASE_URL}/edds/external/requests/electricity/${existingEdsRequestId}`;
+              const eddsToken = process.env.EDDS_TOKEN;
+
+              const command =
+                `curl -sS --http1.1 -X DELETE ` +
+                `-H "Content-Type: application/json" ` +
+                `-H "Authorization: Service ${eddsToken}" ` +
+                `-w "\\nHTTP_CODE:%{http_code}" ` +
+                `"${eddsUrl}" --insecure`;
+
+              await new Promise((resolve) => {
+                exec(command, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+                  if (err) {
+                    console.error(`[PUT→EDDS] ✗ DELETE curl error code=${err.code}`);
+                    if (stderr) console.error(`    ${stderr}`);
+                    resolve();
+                    return;
+                  }
+
+                  let httpCode = null;
+                  let body = stdout;
+                  const codeMatch = stdout.match(/\nHTTP_CODE:(\d+)/);
+                  if (codeMatch) {
+                    httpCode = Number(codeMatch[1]);
+                    body = stdout.slice(0, codeMatch.index).trim();
+                  }
+
+                  let parsed = null;
+                  try { parsed = JSON.parse(body); } catch { /* raw */ }
+
+                  const icon = httpCode >= 200 && httpCode < 300 ? "✓" : "✗";
+                  console.log(`\n  ${icon} API ЕДДС ответил: HTTP ${httpCode}`);
+                  console.log(`${"─".repeat(60)}`);
+                  console.log(JSON.stringify(parsed || body, null, 2));
+                  console.log(`${"─".repeat(60)}`);
+
+                  if (httpCode >= 200 && httpCode < 300) {
+                    console.log(`[PUT→EDDS] ✅ GUID=${mapped.guid} — ЕДДС v2 DELETE прошёл`);
+                  } else {
+                    console.warn(`[PUT→EDDS] ❌ GUID=${mapped.guid} — ЕДДС v2 DELETE отклонила: ${parsed?.message || JSON.stringify(parsed || body)}`);
+                  }
+
+                  writeEdsJournal({ guid: mapped.guid, tnNumber: mapped.number, target: "ЕДДС v2 DELETE", httpCode, parsed }).catch((e) => console.warn("[journal] ошибка:", e?.message || e));
+
+                  resolve();
+                });
+              });
+            } catch (e) {
+              console.error(`[PUT→EDDS] Ошибка DELETE для GUID=${mapped.guid}:`, e?.code || e?.message);
+            }
+          }, 0);
+        }
+
         acc.push({
           success: true,
           index: index + 1,
@@ -630,7 +690,6 @@ router.put("/", async (req, res) => {
       if (!fiasSet.size) {
         return;
       }
-      console.log("[PUT] Запуск фоновой обработки адресов...");
       upsertAddressesInStrapi([...fiasSet], jwt).catch((e) =>
         console.warn("[modus] Ошибка фоновой обработки адресов:", e?.message)
       );
@@ -864,9 +923,8 @@ router.post("/", async (req, res) => {
       if (!fiasSet.size) {
         return;
       }
-      console.log("[POST] Запуск фоновой обработки адресов...");
       upsertAddressesInStrapi([...fiasSet], jwt).catch((e) =>
-        console.warn("[POST] Ошибка фоновой обработки адресов:", e?.message)
+        console.warn("[modus] Ошибка фоновой обработки адресов:", e?.message)
       );
     }, 0);
 

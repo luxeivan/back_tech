@@ -42,19 +42,13 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
         const search = await axios.get(`${urlStrapi}/api/adress`, {
           headers: { Authorization: `Bearer ${jwt}` },
           params: { "filters[fiasId][$eq]": fiasId, "pagination[pageSize]": 1 },
+          timeout: 10000,
         });
         const existing = Array.isArray(search?.data?.data)
           ? search.data.data[0]
           : null;
-        if (existing) {
-        } else {
-        }
 
         const info = await fetchByFias(fiasId);
-
-        if (info) {
-        } else {
-        }
 
         const payload = {
           fiasId,
@@ -84,14 +78,10 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
             patch.all = payload.all;
 
           if (Object.keys(patch).length) {
-            const updateResponse = await axios.put(
+            await axios.put(
               `${urlStrapi}/api/adress/${existingId}`,
               { data: patch },
-              { headers: { Authorization: `Bearer ${jwt}` } }
-            );
-          } else {
-            console.log(
-              `[upsertAddressesInStrapi] Изменений нет, обновление не требуется для FIAS: ${fiasId}`
+              { headers: { Authorization: `Bearer ${jwt}` }, timeout: 10000 }
             );
           }
           continue;
@@ -100,21 +90,13 @@ async function upsertAddressesInStrapi(fiasIds, jwt) {
         if (!info) {
           continue;
         }
-        const createResponse = await axios.post(
+        await axios.post(
           `${urlStrapi}/api/adress`,
           { data: payload },
-          { headers: { Authorization: `Bearer ${jwt}` } }
+          { headers: { Authorization: `Bearer ${jwt}` }, timeout: 10000 }
         );
       } catch (e) {
-        console.error(
-          `[upsertAddressesInStrapi] Ошибка при обработке FIAS ${fiasId}:`,
-          {
-            статус: e?.response?.status,
-            сообщение: e?.message,
-            данные: e?.response?.data,
-            url: e?.config?.url,
-          }
-        );
+        // тихо — фоновая задача, не спамим
       }
     }
   }
