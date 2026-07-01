@@ -13,6 +13,127 @@ const {
 const { getJwt, fetchTnDescriptionById } = require("../services/modus/strapi");
 require("dotenv").config();
 
+// ── Журнал отправок (zhurnal-otpravkis) ─────────────────────────────────────
+const URL_STRAPI = process.env.URL_STRAPI;
+const LOGIN_STRAPI = process.env.LOGIN_STRAPI;
+const PASSWORD_STRAPI = process.env.PASSWORD_STRAPI;
+
+async function getOrCreateJournalSingle(jwt) {
+  if (!URL_STRAPI || !jwt) return null;
+  try {
+    const r = await axios.get(
+      `${URL_STRAPI}/api/zhurnal-otpravkis?pagination[page]=1&pagination[pageSize]=1`,
+      { headers: { Authorization: `Bearer ${jwt}` }, timeout: 15000 }
+    );
+    const arr = r?.data?.data || [];
+    if (arr.length > 0) {
+      const item = arr[0];
+      const id = item.id;
+      const documentId = item.documentId || item.documentID || item.document_id || null;
+      const dataField = item.data ?? item.attributes?.data;
+      let list = [];
+      if (Array.isArray(dataField)) list = dataField.slice();
+      else if (typeof dataField === "string") list = [dataField];
+      else if (dataField && typeof dataField === "object" && Array.isArray(dataField.lines)) list = dataField.lines.slice();
+      return { id, documentId, list };
+    }
+    const c = await axios.post(
+      `${URL_STRAPI}/api/zhurnal-otpravkis`,
+      { data: { data: [] } },
+      { headers: { Authorization: `Bearer ${jwt}` }, timeout: 15000 }
+    );
+    const id = c?.data?.data?.id;
+    const documentId = c?.data?.data?.documentId || null;
+    return id ? { id, documentId, list: [] } : null;
+  } catch (e) {
+    console.warn("[modus][journal] Не удалось получить/создать запись журнала:", e?.response?.status || e?.message);
+    return null;
+  }
+}
+
+async function appendToJournalSingle(line, jwt) {
+  const rec = await getOrCreateJournalSingle(jwt);
+  if (!rec) return;
+  const MAX = 2000;
+  const list = rec.list || [];
+  list.push(line);
+  while (list.length > MAX) list.shift();
+  const targetId = rec.documentId || rec.id;
+  const urlBase = `${URL_STRAPI}/api/zhurnal-otpravkis`;
+  try {
+    await axios.put(
+      `${urlBase}/${targetId}`,
+      { data: { data: list } },
+      { headers: { Authorization: `Bearer ${jwt}` }, timeout: 20000 }
+    );
+  } catch (e) {
+    if (rec.documentId && rec.id && e?.response?.status === 404) {
+      await axios.put(
+        `${urlBase}/${rec.id}`,
+        { data: { data: list } },
+        { headers: { Authorization: `Bearer ${jwt}` }, timeout: 20000 }
+      );
+    } else {
+      throw e;
+    }
+  }
+}
+
+function fmtRu(dt) {
+  try {
+    const d = dt ? new Date(dt) : new Date();
+    return d.toLocaleString("ru-RU", {
+      timeZone: "Europe/Moscow",
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+    }).replace(",", "");
+  } catch { return ""; }
+}
+
+async function saveEdsRequestId(guid, requestId, jwt) {
+  if (!requestId || !jwt) return;
+  try {
+    const search = await axios.get(`${URL_STRAPI}/api/teh-narusheniyas`, {
+      headers: { Authorization: `Bearer ${jwt}` },
+      params: { "filters[guid][$eq]": guid, "pagination[pageSize]": 1 },
+    });
+    const found = search?.data?.data?.[0];
+    const documentId = found?.documentId || found?.id;
+    if (!documentId) {
+      console.warn(`[modus] ТН с GUID=${guid} не найдена в Strapi, edds_electricityRequestId не сохранён`);
+      return;
+    }
+    await axios.put(
+      `${URL_STRAPI}/api/teh-narusheniyas/${documentId}`,
+      { data: { edds_electricityRequestId: requestId } },
+      { headers: { Authorization: `Bearer ${jwt}` } }
+    );
+    console.log(`[modus] edds_electricityRequestId=${requestId} сохранён для GUID=${guid}`);
+  } catch (e) {
+    console.warn("[modus] Ошибка сохранения edds_electricityRequestId:", e?.response?.status || e?.message);
+  }
+}
+
+async function writeEdsJournal({ guid, tnNumber, target, httpCode, parsed }) {
+  try {
+    const jwt = await getJwt();
+    if (!jwt) return;
+    const human = fmtRu(new Date());
+    let msg = "";
+    if (httpCode >= 200 && httpCode < 300) {
+      msg = parsed?.data?.id ? `Данные приняты (id: ${parsed.data.id})` : "Данные приняты";
+    } else {
+      msg = parsed?.message || `HTTP ${httpCode}`;
+    }
+    const line = `№${tnNumber ?? "—"} - ${guid ?? "—"} - ${human} - ${target} - ${msg}`;
+    await appendToJournalSingle(line, jwt);
+    console.log(`[modus][journal] запись добавлена: ${line}`);
+  } catch (e) {
+    console.warn("[modus][journal] ошибка записи:", e?.response?.status || e?.message);
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 const router = express.Router();
 const secretModus = process.env.SECRET_FOR_MODUS;
 
@@ -464,9 +585,15 @@ router.put("/", async (req, res) => {
                   if (httpCode >= 200 && httpCode < 300) {
                     const requestId = parsed?.data?.id || null;
                     console.log(`[PUT→EDDS] ✅ GUID=${mapped.guid} — ЕДДС v2 приняла` + (requestId ? ` (id: ${requestId})` : ""));
+                    if (requestId) {
+                      getJwt().then(jwt => saveEdsRequestId(mapped.guid, requestId, jwt)).catch(() => {});
+                    }
                   } else {
                     console.warn(`[PUT→EDDS] ❌ GUID=${mapped.guid} — ЕДДС v2 отклонила: ${parsed?.message || JSON.stringify(parsed || body)}`);
                   }
+
+                  writeEdsJournal({ guid: mapped.guid, tnNumber: mapped.number, target: "ЕДДС v2", httpCode, parsed }).catch((e) => console.warn("[modus][journal] ошибка:", e?.message || e));
+
                   resolve();
                 });
               });
@@ -693,9 +820,15 @@ router.post("/", async (req, res) => {
                     if (httpCode >= 200 && httpCode < 300) {
                       const requestId = parsed?.data?.id || null;
                       console.log(`[POST→EDDS] ✅ GUID=${item.guid} — ЕДДС v2 приняла` + (requestId ? ` (id: ${requestId})` : ""));
+                      if (requestId) {
+                        getJwt().then(jwt => saveEdsRequestId(item.guid, requestId, jwt)).catch(() => {});
+                      }
                     } else {
                       console.warn(`[POST→EDDS] ❌ GUID=${item.guid} — ЕДДС v2 отклонила: ${parsed?.message || JSON.stringify(parsed || body)}`);
                     }
+
+                    writeEdsJournal({ guid: item.guid, tnNumber: item.number, target: "ЕДДС v2", httpCode, parsed }).catch((e) => console.warn("[modus][journal] ошибка:", e?.message || e));
+
                     resolve();
                   });
                 });
