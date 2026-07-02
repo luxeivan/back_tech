@@ -92,7 +92,7 @@ function fmtRu(dt) {
 }
 
 async function saveEdsRequestId(guid, requestId, jwt) {
-  if (!requestId || !jwt) return;
+  if (!jwt) return;
   try {
     const search = await axios.get(`${URL_STRAPI}/api/teh-narusheniyas`, {
       headers: { Authorization: `Bearer ${jwt}` },
@@ -109,7 +109,7 @@ async function saveEdsRequestId(guid, requestId, jwt) {
       { data: { edds_electricityRequestId: requestId } },
       { headers: { Authorization: `Bearer ${jwt}` } }
     );
-    console.log(`[modus] edds_electricityRequestId=${requestId} сохранён для GUID=${guid}`);
+    console.log(`[modus] edds_electricityRequestId=${requestId} для GUID=${guid}`);
   } catch (e) {
     console.warn("[modus] Ошибка сохранения edds_electricityRequestId:", e?.response?.status || e?.message);
   }
@@ -284,9 +284,10 @@ router.put("/", async (req, res) => {
           parseBaseType(currentAttrs?.BASE_TYPE) ??
           parseBaseType(currentRaw?.BASE_TYPE);
         const needEdds = statusChanged && nextIsFinal && nextBaseType === 0;
-        const needEddsPlanned = statusChanged && nextIsFinal && nextBaseType === 1;
+        const needEddsPlanned = statusChanged && nextIsFinal && nextBaseType === 1 && nextStatus !== "удалена";
         const existingEdsRequestId = current?.edds_electricityRequestId || currentAttrs?.edds_electricityRequestId || null;
         const needEddsDelete = statusChanged && nextStatus === "удалена" && !!existingEdsRequestId;
+        const needEddsRestore = statusChanged && !existingEdsRequestId && nextBaseType === 1 && prevStatus === "удалена";
 
         if (!documentId) {
           acc.push({
@@ -512,11 +513,12 @@ router.put("/", async (req, res) => {
           }, 0);
         }
 
-        if (needEddsPlanned && !needEddsDelete) {
+        if ((needEddsPlanned || needEddsRestore) && !needEddsDelete) {
           const usePut = !!existingEdsRequestId;
           const method = usePut ? "PUT" : "POST";
           const suffix = usePut ? `/${existingEdsRequestId}` : "";
-          console.log(`[PUT→EDDS] Плановая заявка, отправка в ЕДДС v2 (${method}): guid=${mapped.guid}` + (usePut ? ` edds_electricityRequestId=${existingEdsRequestId}` : ""));
+          const action = needEddsRestore ? "Восстановление" : "Плановая заявка";
+          console.log(`[PUT→EDDS] ${action}, отправка в ЕДДС v2 (${method}): guid=${mapped.guid}` + (usePut ? ` edds_electricityRequestId=${existingEdsRequestId}` : ""));
 
           setTimeout(async () => {
             try {
@@ -654,6 +656,7 @@ router.put("/", async (req, res) => {
 
                   if (httpCode >= 200 && httpCode < 300) {
                     console.log(`[PUT→EDDS] ✅ GUID=${mapped.guid} — ЕДДС v2 DELETE прошёл`);
+                    getJwt().then(j => saveEdsRequestId(mapped.guid, null, j)).catch(e => console.warn(`[PUT→EDDS] Ошибка обнуления edds_electricityRequestId для GUID=${mapped.guid}:`, e?.message || e));
                   } else {
                     console.warn(`[PUT→EDDS] ❌ GUID=${mapped.guid} — ЕДДС v2 DELETE отклонила: ${parsed?.message || JSON.stringify(parsed || body)}`);
                   }
