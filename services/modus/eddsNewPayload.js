@@ -386,6 +386,10 @@ function buildEddsNewPayload(item) {
   const reasons = mapReasons(raw?.BRIGADE_ACTION);
 
   const fiasIds = parseFiasList(raw?.FIAS_LIST);
+  if (!fiasIds.length && districtFiasId) {
+    console.log(`[EDDS] FIAS_LIST пустой, fallback на districtFiasId: ${districtFiasId}`);
+    fiasIds.push(districtFiasId);
+  }
   if (!fiasIds.length) {
     console.warn("[EDDS] shutdownInfo.fiasIds пустой — EDDS отклонит если обязательно");
   }
