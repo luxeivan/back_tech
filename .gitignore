@@ -4,3 +4,4 @@ data/pesBotSubscriptions.json
 data/pesBotState.json
 data/pesMaxBotState.json
 data/pesMaxSubscriptions.json
+.DS_Store
