@@ -19,24 +19,27 @@ const URL_STRAPI = process.env.URL_STRAPI;
 const LOGIN_STRAPI = process.env.LOGIN_STRAPI;
 const PASSWORD_STRAPI = process.env.PASSWORD_STRAPI;
 
-async function getOrCreateJournalSingle(jwt) {
+function parseJournalData(item) {
+  const id = item.id;
+  const documentId = item.documentId || item.documentID || item.document_id || null;
+  const dataField = item.data ?? item.attributes?.data;
+  let list = [];
+  if (Array.isArray(dataField)) list = dataField.slice();
+  else if (typeof dataField === "string") list = [dataField];
+  else if (dataField && typeof dataField === "object" && Array.isArray(dataField.lines)) list = dataField.lines.slice();
+  return { id, documentId, list };
+}
+
+async function getOrCreateJournalByIndex(jwt, index) {
   if (!URL_STRAPI || !jwt) return null;
   try {
     const r = await axios.get(
-      `${URL_STRAPI}/api/zhurnal-otpravkis?pagination[page]=1&pagination[pageSize]=1`,
+      `${URL_STRAPI}/api/zhurnal-otpravkis?pagination[page]=1&pagination[pageSize]=10&sort=createdAt:asc`,
       { headers: { Authorization: `Bearer ${jwt}` }, timeout: 15000 }
     );
     const arr = r?.data?.data || [];
-    if (arr.length > 0) {
-      const item = arr[0];
-      const id = item.id;
-      const documentId = item.documentId || item.documentID || item.document_id || null;
-      const dataField = item.data ?? item.attributes?.data;
-      let list = [];
-      if (Array.isArray(dataField)) list = dataField.slice();
-      else if (typeof dataField === "string") list = [dataField];
-      else if (dataField && typeof dataField === "object" && Array.isArray(dataField.lines)) list = dataField.lines.slice();
-      return { id, documentId, list };
+    if (arr.length > index) {
+      return parseJournalData(arr[index]);
     }
     const c = await axios.post(
       `${URL_STRAPI}/api/zhurnal-otpravkis`,
@@ -52,8 +55,18 @@ async function getOrCreateJournalSingle(jwt) {
   }
 }
 
-async function appendToJournalSingle(line, jwt) {
-  const rec = await getOrCreateJournalSingle(jwt);
+async function getOrCreateJournalSingle(jwt) {
+  return getOrCreateJournalByIndex(jwt, 0);
+}
+
+async function getOrCreatePlannedJournal(jwt) {
+  return getOrCreateJournalByIndex(jwt, 1);
+}
+
+async function appendToJournal(line, jwt, isPlanned) {
+  const rec = isPlanned
+    ? await getOrCreatePlannedJournal(jwt)
+    : await getOrCreateJournalSingle(jwt);
   if (!rec) return;
   const MAX = 2000;
   const list = rec.list || [];
@@ -159,7 +172,7 @@ function formatFieldErrors(parsed) {
   return parts.length ? parts.join('; ') : null;
 }
 
-async function writeEdsJournal({ guid, tnNumber, target, httpCode, parsed }) {
+async function writeEdsJournal({ guid, tnNumber, target, httpCode, parsed, isPlanned }) {
   try {
     const jwt = await getJwt();
     if (!jwt) return;
@@ -171,10 +184,12 @@ async function writeEdsJournal({ guid, tnNumber, target, httpCode, parsed }) {
       msg = parsed?.message || `HTTP ${httpCode}`;
       const fieldDetails = formatFieldErrors(parsed);
       if (fieldDetails) msg += ` [${fieldDetails}]`;
+      else if (parsed?.data && typeof parsed.data === 'string') msg += ` [${parsed.data}]`;
+      else if (parsed?.error) msg += ` [${parsed.error}]`;
     }
     const line = `№${tnNumber ?? "—"} - ${guid ?? "—"} - ${human} - ${target} - ${msg}`;
-    await appendToJournalSingle(line, jwt);
-    console.log(`[modus][journal] запись добавлена: ${line}`);
+    await appendToJournal(line, jwt, !!isPlanned);
+    console.log(`[modus][journal]${isPlanned ? " (плановая)" : ""} запись добавлена: ${line}`);
   } catch (e) {
     console.warn("[modus][journal] ошибка записи:", e?.response?.status || e?.message);
   }
@@ -335,6 +350,8 @@ router.put("/", async (req, res) => {
         const needEddsPlanned = isPlanned;
         const needEddsDelete = statusChanged && nextStatus === "удалена" && !!existingEdsRequestId;
         const needEddsRestore = statusChanged && !existingEdsRequestId && isPlanned && prevStatus === "удалена";
+
+        console.log(`[PUT] guid=${mapped.guid} baseType=${nextBaseType} isPlanned=${isPlanned} needEddsPlanned=${needEddsPlanned} needEddsDelete=${needEddsDelete} statusChanged=${statusChanged} prev=${prevStatus} next=${nextStatus}`);
 
         if (!documentId) {
           acc.push({
@@ -660,7 +677,7 @@ router.put("/", async (req, res) => {
                     }
                   }
 
-                  writeEdsJournal({ guid: mapped.guid, tnNumber: mapped.number, target: `ЕДДС v2 ${method}`, httpCode, parsed }).catch((e) => console.warn("[modus][journal] ошибка:", e?.message || e));
+                  writeEdsJournal({ guid: mapped.guid, tnNumber: mapped.number, target: `ЕДДС v2 ${method}`, httpCode, parsed, isPlanned: true }).catch((e) => console.warn("[modus][journal] ошибка:", e?.message || e));
 
                   resolve();
                 });
@@ -719,7 +736,7 @@ router.put("/", async (req, res) => {
                     console.warn(`[PUT→EDDS] ❌ GUID=${mapped.guid} — ЕДДС v2 DELETE отклонила: ${parsed?.message || JSON.stringify(parsed || body)}`);
                   }
 
-                  writeEdsJournal({ guid: mapped.guid, tnNumber: mapped.number, target: "ЕДДС v2 DELETE", httpCode, parsed }).catch((e) => console.warn("[journal] ошибка:", e?.message || e));
+                  writeEdsJournal({ guid: mapped.guid, tnNumber: mapped.number, target: "ЕДДС v2 DELETE", httpCode, parsed, isPlanned: true }).catch((e) => console.warn("[journal] ошибка:", e?.message || e));
 
                   resolve();
                 });
@@ -958,7 +975,7 @@ router.post("/", async (req, res) => {
                       }
                     }
 
-                    writeEdsJournal({ guid: item.guid, tnNumber: item.number, target: "ЕДДС v2", httpCode, parsed }).catch((e) => console.warn("[modus][journal] ошибка:", e?.message || e));
+                    writeEdsJournal({ guid: item.guid, tnNumber: item.number, target: "ЕДДС v2", httpCode, parsed, isPlanned: true }).catch((e) => console.warn("[modus][journal] ошибка:", e?.message || e));
 
                     resolve();
                   });
