@@ -212,7 +212,7 @@ function fmtRu(dt) {
 async function getOrCreateJournalSingle(jwt) {
   if (!URL_STRAPI || !jwt) return null;
   try {
-    const r = await axios.get(`${URL_STRAPI}/api/zhurnal-otpravkis?pagination[page]=1&pagination[pageSize]=1`, {
+    const r = await axios.get(`${URL_STRAPI}/api/zhurnal-otpravkis?pagination[page]=1&pagination[pageSize]=1&sort=createdAt:asc`, {
       headers: { Authorization: `Bearer ${jwt}` }, timeout: 15000,
     });
     const arr = r?.data?.data || [];

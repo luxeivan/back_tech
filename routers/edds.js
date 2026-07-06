@@ -63,7 +63,7 @@ async function getOrCreateJournalSingle(jwt) {
   try {
     // Take the first existing record (we'll reuse it every time)
     const r = await axios.get(
-      `${URL_STRAPI}/api/zhurnal-otpravkis?pagination[page]=1&pagination[pageSize]=1`,
+      `${URL_STRAPI}/api/zhurnal-otpravkis?pagination[page]=1&pagination[pageSize]=1&sort=createdAt:asc`,
       { headers: { Authorization: `Bearer ${jwt}` }, timeout: 15000 }
     );
     const arr = r?.data?.data || [];
