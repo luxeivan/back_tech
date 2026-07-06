@@ -1,4 +1,4 @@
-const { DISTRICT_MAP } = require("./eddsPayload");
+const { DISTRICT_MAP, toDateEDDS } = require("./eddsPayload");
 
 const DISTRICT_FIAS_MAP = {
   "Балашиха г.о.": "213a1aca-5c9e-4b94-a4e0-c5333882cba0",
@@ -118,6 +118,35 @@ const HARDCODED_REASON_RULES = [
   { source: "направлена бригада", target: "safety_outage" },
   { source: "бригада", target: "safety_outage" },
 ];
+
+const EDDS_TO_MODUS_FIELD_MAP = {
+  externalId: "VIOLATION_GUID_STR",
+  planDateClose: "F81_070_RESTOR_SUPPLAYDATETIME / recoveryPlanDateTime",
+  districtFiasIds: "DISTRICT / SCNAME",
+  equipmentType: "OBJECTTYPE81 / VOLTAGECLASS / SWITCHTYPE",
+  equipmentName: "F81_041_ENERGOOBJECTNAME",
+  "shutdownInfo.shutdownType": "VIOLATION_TYPE (А/В/П)",
+  "shutdownInfo.disabledAt": "F81_060_EVENTDATETIME / STARTDATETIME",
+  "shutdownInfo.plannedInclusionAt": "F81_070_RESTOR_SUPPLAYDATETIME",
+  "shutdownInfo.fiasIds": "FIAS_LIST",
+  "affectedObjectsCount.peopleCount": "POPULATION_COUNT",
+  "affectedObjectsCount.placesCount": "SETTLEMENT_COUNT",
+  "comment.text": "SCNAME + F81_042_DISPNAME + другие поля",
+  plan_date_close: "F81_070_RESTOR_SUPPLAYDATETIME / recoveryPlanDateTime",
+  time_create: "F81_060_EVENTDATETIME",
+  count_people: "POPULATION_COUNT",
+  district_id: "DISTRICT / SCNAME",
+};
+
+function mapEddsValidationErrors(eddsErrors, payload) {
+  if (!Array.isArray(eddsErrors) || !eddsErrors.length) return [];
+  return eddsErrors.map(err => {
+    const field = err?.field || err?.path || err?.message || String(err);
+    const modusSource = EDDS_TO_MODUS_FIELD_MAP[field] || "(источник не определён)";
+    const value = field.split('.').reduce((o, k) => o?.[k], payload);
+    return `${field} → Модус: ${modusSource} = ${JSON.stringify(value ?? null)}`;
+  });
+}
 
 function clean(v) {
   if (v === undefined || v === null) return "";
@@ -358,18 +387,20 @@ function buildEddsNewPayload(item) {
 
   const fiasIds = parseFiasList(raw?.FIAS_LIST);
   if (!fiasIds.length) {
-    errors.push("Не заполнено shutdownInfo.fiasIds (ожидается FIAS_LIST).");
+    console.warn("[EDDS] shutdownInfo.fiasIds пустой — EDDS отклонит если обязательно");
   }
 
   const disabledAt = toIso(raw?.F81_060_EVENTDATETIME || mapped?.createDateTime || raw?.STARTDATETIME);
   if (!disabledAt) {
-    errors.push("Не удалось определить shutdownInfo.disabledAt (F81_060_EVENTDATETIME).");
+    console.warn("[EDDS] shutdownInfo.disabledAt пустой — EDDS отклонит если обязательно");
   }
 
   const plannedInclusionAt = toIso(raw?.F81_070_RESTOR_SUPPLAYDATETIME || mapped?.recoveryPlanDateTime);
   if (!plannedInclusionAt) {
-    errors.push("Не удалось определить shutdownInfo.plannedInclusionAt (F81_070_RESTOR_SUPPLAYDATETIME).");
+    console.warn("[EDDS] shutdownInfo.plannedInclusionAt пустой — EDDS отклонит если обязательно");
   }
+
+  const planDateClose = toDateEDDS(raw?.F81_070_RESTOR_SUPPLAYDATETIME || mapped?.recoveryPlanDateTime, true);
 
   const peopleCount = toInt(raw?.POPULATION_COUNT);
   const placesCount = toInt(raw?.SETTLEMENT_COUNT);
@@ -381,6 +412,7 @@ function buildEddsNewPayload(item) {
 
   const payload = {
     externalId,
+    planDateClose,
     districtFiasIds: [districtFiasId],
     equipmentType,
     equipmentName,
@@ -410,4 +442,4 @@ function buildEddsNewPayload(item) {
   return { payload, errors: [] };
 }
 
-module.exports = { buildEddsNewPayload };
+module.exports = { buildEddsNewPayload, mapEddsValidationErrors, EDDS_TO_MODUS_FIELD_MAP };

@@ -5,7 +5,7 @@ const axios = require("axios");
 const { broadcast } = require("../services/sse");
 const { buildAutoDescription } = require("../services/autoDescription");
 const { buildEddsPayload } = require("../services/modus/eddsPayload");
-const { buildEddsNewPayload } = require("../services/modus/eddsNewPayload");
+const { buildEddsNewPayload, mapEddsValidationErrors } = require("../services/modus/eddsNewPayload");
 const { resolveAccidentLocation } = require("../services/edds/resolveAccidentLocation");
 const {
   extractFiasList,
@@ -115,6 +115,50 @@ async function saveEdsRequestId(guid, requestId, jwt) {
   }
 }
 
+const EDDS_FIELD_TO_MODUS = {
+  plan_date_close: "F81_070_RESTOR_SUPPLAYDATETIME",
+  externalId: "VIOLATION_GUID_STR",
+  equipmentType: "OBJECTTYPE81/VOLTAGECLASS",
+  equipmentName: "F81_041_ENERGOOBJECTNAME",
+  districtFiasIds: "DISTRICT/SCNAME",
+  "shutdownInfo.shutdownType": "VIOLATION_TYPE",
+  "shutdownInfo.disabledAt": "F81_060_EVENTDATETIME",
+  "shutdownInfo.plannedInclusionAt": "F81_070_RESTOR_SUPPLAYDATETIME",
+  "shutdownInfo.fiasIds": "FIAS_LIST",
+  "shutdownInfo.reasons": "BRIGADE_ACTION",
+  "affectedObjectsCount.peopleCount": "POPULATION_COUNT",
+  "affectedObjectsCount.placesCount": "SETTLEMENT_COUNT",
+  count_people: "POPULATION_COUNT",
+  district_id: "DISTRICT/SCNAME",
+  time_create: "F81_060_EVENTDATETIME",
+  accidentLocation: "FIAS_LIST (координаты через DaData/Dadata)",
+};
+
+function formatFieldErrors(parsed) {
+  const parts = [];
+
+  const data = parsed?.data;
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    const entries = Object.entries(data).filter(([, v]) => Array.isArray(v) && v.length);
+    for (const [field, msgs] of entries) {
+      const modusField = EDDS_FIELD_TO_MODUS[field] || "?";
+      parts.push(`${field}(${modusField})=${msgs[0]}`);
+    }
+  }
+
+  const errors = parsed?.errors;
+  if (Array.isArray(errors)) {
+    for (const err of errors) {
+      const path = err?.path || "?";
+      const msg = err?.error || err?.message || "ошибка";
+      const modusField = EDDS_FIELD_TO_MODUS[path] || "?";
+      parts.push(`${path}(${modusField})=${msg}`);
+    }
+  }
+
+  return parts.length ? parts.join('; ') : null;
+}
+
 async function writeEdsJournal({ guid, tnNumber, target, httpCode, parsed }) {
   try {
     const jwt = await getJwt();
@@ -125,6 +169,8 @@ async function writeEdsJournal({ guid, tnNumber, target, httpCode, parsed }) {
       msg = parsed?.data?.id ? `Данные приняты (id: ${parsed.data.id})` : "Данные приняты";
     } else {
       msg = parsed?.message || `HTTP ${httpCode}`;
+      const fieldDetails = formatFieldErrors(parsed);
+      if (fieldDetails) msg += ` [${fieldDetails}]`;
     }
     const line = `№${tnNumber ?? "—"} - ${guid ?? "—"} - ${human} - ${target} - ${msg}`;
     await appendToJournalSingle(line, jwt);
@@ -284,10 +330,11 @@ router.put("/", async (req, res) => {
           parseBaseType(currentAttrs?.BASE_TYPE) ??
           parseBaseType(currentRaw?.BASE_TYPE);
         const needEdds = statusChanged && nextIsFinal && nextBaseType === 0;
-        const needEddsPlanned = statusChanged && nextIsFinal && nextBaseType === 1 && nextStatus !== "удалена";
         const existingEdsRequestId = current?.edds_electricityRequestId || currentAttrs?.edds_electricityRequestId || null;
+        const isPlanned = nextBaseType === 1;
+        const needEddsPlanned = isPlanned;
         const needEddsDelete = statusChanged && nextStatus === "удалена" && !!existingEdsRequestId;
-        const needEddsRestore = statusChanged && !existingEdsRequestId && nextBaseType === 1 && prevStatus === "удалена";
+        const needEddsRestore = statusChanged && !existingEdsRequestId && isPlanned && prevStatus === "удалена";
 
         if (!documentId) {
           acc.push({
@@ -304,7 +351,12 @@ router.put("/", async (req, res) => {
 
         // Всегда объединяем сырые данные: то, что прилетело из MODUS (mapped.data),
         // накладываем поверх того, что уже хранится в Strapi (currentRaw)
-        const mergedRaw = { ...(currentRaw || {}), ...(mapped.data || {}) };
+        // null/пустые строки из incoming НЕ затирают существующие значения
+        const incomingRaw = mapped.data || {};
+        const cleanedIncoming = Object.fromEntries(
+          Object.entries(incomingRaw).filter(([, v]) => v !== null && v !== "")
+        );
+        const mergedRaw = { ...(currentRaw || {}), ...cleanedIncoming };
         const rawChanged = JSON.stringify(mergedRaw) !== JSON.stringify(currentRaw || {});
         if (rawChanged) {
           patch.data = mergedRaw;
@@ -522,8 +574,9 @@ router.put("/", async (req, res) => {
 
           setTimeout(async () => {
             try {
-              const mergedForNew = { ...mapped };
-              if (mapped?.data) mergedForNew.data = mapped.data;
+              const mergedForNew = { ...mapped, data: mergedRaw };
+              if (mapped?.STATUS_NAME) mergedForNew.STATUS_NAME = mapped.STATUS_NAME;
+              if (mapped?.recoveryFactDateTime) mergedForNew.recoveryFactDateTime = mapped.recoveryFactDateTime;
 
               const { payload: v2Payload, errors: buildErrors } = buildEddsNewPayload({ data: mergedForNew });
               if (!v2Payload) {
@@ -600,6 +653,11 @@ router.put("/", async (req, res) => {
                     }
                   } else {
                     console.warn(`[PUT→EDDS] ❌ GUID=${mapped.guid} — ЕДДС v2 отклонила: ${parsed?.message || JSON.stringify(parsed || body)}`);
+                    const eddsFieldErrors = parsed?.data;
+                    if (eddsFieldErrors && typeof eddsFieldErrors === 'object') {
+                      const mapped = mapEddsValidationErrors(Object.entries(eddsFieldErrors).map(([field, msgs]) => ({ field, message: Array.isArray(msgs) ? msgs[0] : msgs })), v2Payload);
+                      mapped.forEach(m => console.warn(`  → ${m}`));
+                    }
                   }
 
                   writeEdsJournal({ guid: mapped.guid, tnNumber: mapped.number, target: `ЕДДС v2 ${method}`, httpCode, parsed }).catch((e) => console.warn("[modus][journal] ошибка:", e?.message || e));
@@ -893,6 +951,11 @@ router.post("/", async (req, res) => {
                       }
                     } else {
                       console.warn(`[POST→EDDS] ❌ GUID=${item.guid} — ЕДДС v2 отклонила: ${parsed?.message || JSON.stringify(parsed || body)}`);
+                      const eddsFieldErrors = parsed?.data;
+                      if (eddsFieldErrors && typeof eddsFieldErrors === 'object') {
+                        const mapped = mapEddsValidationErrors(Object.entries(eddsFieldErrors).map(([field, msgs]) => ({ field, message: Array.isArray(msgs) ? msgs[0] : msgs })), v2Payload);
+                        mapped.forEach(m => console.warn(`  → ${m}`));
+                      }
                     }
 
                     writeEdsJournal({ guid: item.guid, tnNumber: item.number, target: "ЕДДС v2", httpCode, parsed }).catch((e) => console.warn("[modus][journal] ошибка:", e?.message || e));
