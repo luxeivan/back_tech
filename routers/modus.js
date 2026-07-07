@@ -212,6 +212,22 @@ function writeEddsV2AsyncErrorJournal({ guid, tnNumber, target, e }) {
     console.warn("[modus][journal] ошибка записи ошибки ЕДДС v2:", journalError?.message || journalError);
   });
 }
+
+function writeEddsV2CurlErrorJournal({ guid, tnNumber, target, err, stderr }) {
+  const code = err?.code != null ? err.code : "unknown";
+  const message = `curl error ${code}`;
+  const error = String(stderr || err?.message || "").trim();
+  return writeEdsJournal({
+    guid,
+    tnNumber,
+    target,
+    httpCode: 0,
+    parsed: error ? { message, error } : { message },
+    isPlanned: true,
+  }).catch((journalError) => {
+    console.warn("[modus][journal] ошибка записи curl-ошибки ЕДДС v2:", journalError?.message || journalError);
+  });
+}
 // ─────────────────────────────────────────────────────────────────────────────
 
 const router = express.Router();
@@ -659,6 +675,13 @@ router.put("/", async (req, res) => {
                   if (err) {
                     console.error(`[PUT→EDDS] ✗ curl error code=${err.code}`);
                     if (stderr) console.error(`    ${stderr}`);
+                    writeEddsV2CurlErrorJournal({
+                      guid: mapped.guid,
+                      tnNumber: mapped.number,
+                      target: `ЕДДС v2 ${method}`,
+                      err,
+                      stderr,
+                    });
                     resolve();
                     return;
                   }
@@ -732,6 +755,13 @@ router.put("/", async (req, res) => {
                   if (err) {
                     console.error(`[PUT→EDDS] ✗ DELETE curl error code=${err.code}`);
                     if (stderr) console.error(`    ${stderr}`);
+                    writeEddsV2CurlErrorJournal({
+                      guid: mapped.guid,
+                      tnNumber: mapped.number,
+                      target: "ЕДДС v2 DELETE",
+                      err,
+                      stderr,
+                    });
                     resolve();
                     return;
                   }
@@ -969,6 +999,13 @@ router.post("/", async (req, res) => {
                     if (err) {
                       console.error(`[POST→EDDS] ✗ curl error code=${err.code}`);
                       if (stderr) console.error(`    ${stderr}`);
+                      writeEddsV2CurlErrorJournal({
+                        guid: item.guid,
+                        tnNumber: item.number,
+                        target: "ЕДДС v2",
+                        err,
+                        stderr,
+                      });
                       resolve();
                       return;
                     }

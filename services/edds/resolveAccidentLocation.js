@@ -148,6 +148,22 @@ function computeCentroid(coordinates) {
   };
 }
 
+function resolveDistrictFallback(fiasIds) {
+  for (const fiasId of fiasIds) {
+    const fallback = DISTRICT_COORDS[fiasId];
+    if (fallback) {
+      console.log(`[resolveAccidentLocation] Fallback координаты района: ${fiasId} → ${fallback.lat}, ${fallback.lon}`);
+      return {
+        ok: true,
+        accidentLocation: { latitude: fallback.lat, longitude: fallback.lon },
+        resolvedCount: 1,
+        totalFias: fiasIds.length,
+      };
+    }
+  }
+  return null;
+}
+
 async function resolveAccidentLocation(payload) {
   if (isValidCoordinatePair(payload?.accidentLocation)) {
     return {
@@ -187,17 +203,15 @@ async function resolveAccidentLocation(payload) {
     return { ok: false, status: 422, message: "Нет ФИАС-идов для определения координат аварии" };
   }
 
+  const districtFallback = resolveDistrictFallback(fiasIds);
+  if (districtFallback) {
+    return districtFallback;
+  }
+
   const coordinates = await resolveFiasCoordinates(fiasIds);
   const centroid = computeCentroid(coordinates);
 
   if (!centroid) {
-    for (const fiasId of fiasIds) {
-      const fallback = DISTRICT_COORDS[fiasId];
-      if (fallback) {
-        console.log(`[resolveAccidentLocation] Fallback координаты района: ${fiasId} → ${fallback.lat}, ${fallback.lon}`);
-        return { ok: true, accidentLocation: { latitude: fallback.lat, longitude: fallback.lon }, resolvedCount: 1, totalFias: fiasIds.length };
-      }
-    }
     return { ok: false, status: 422, message: `Не удалось определить координаты для ${fiasIds.length} ФИАС-адресов` };
   }
 
