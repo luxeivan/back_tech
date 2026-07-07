@@ -59,8 +59,18 @@ jobs:
             nvm use default
             echo "[deploy] node: $(node -v)"
             echo "[deploy] npm: $(npm -v)"
+            echo "[deploy] git status перед pull:"
+            git status --short
+
+            if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+              echo "[deploy] Найдены локальные изменения на сервере, сохраняем в git stash"
+              git stash push -u -m "autodeploy backup $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            fi
+
             git pull --ff-only origin main
             npm ci
+            pm2 restart 2 --update-env
+            pm2 status
             echo "[deploy] Готово"
 
       - name: Проверяем бэк после деплоя
