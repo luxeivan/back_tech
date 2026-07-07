@@ -1,8 +1,6 @@
 const axios = require("axios");
 const { getJwt } = require("../modus/strapi");
 
-const STRAPI_URL = String(process.env.URL_STRAPI || "").replace(/\/$/, "");
-const ADDRESS_COLLECTION = process.env.STRAPI_ADDRESS_COLLECTION || "adress";
 const BATCH_SIZE = 50;
 
 const DISTRICT_COORDS = {
@@ -40,6 +38,7 @@ const DISTRICT_COORDS = {
   "98b2ade5-8a1b-4a98-b569-6aeefcb2ab8e": { lat: 55.7167, lon: 38.2667 },
   "26580099-b45e-4834-b085-527485d692b7": { lat: 55.9726, lon: 36.1957 },
   "ed7da874-3df1-4f99-a1f4-302a27be0d95": { lat: 56.3100, lon: 38.1300 },
+  "5f07f4b6-9b3b-45f2-937f-92a39ffd3128": { lat: 54.4694, lon: 38.7222 },
   "ef67af07-1d09-4924-a7e4-f2429428b581": { lat: 54.9000, lon: 37.4100 },
   "885695b8-1384-4c12-990e-1a2961a337b2": { lat: 56.1800, lon: 36.9800 },
   "ec488b61-384c-48ff-a78d-117bc22c9674": { lat: 54.8860, lon: 37.0700 },
@@ -66,6 +65,13 @@ const DISTRICT_COORDS = {
 };
 
 async function resolveFiasCoordinates(fiasIds) {
+  const strapiUrl = String(process.env.URL_STRAPI || "").replace(/\/$/, "");
+  const addressCollection = process.env.STRAPI_ADDRESS_COLLECTION || "adress";
+  if (!strapiUrl) {
+    console.warn("[resolveAccidentLocation] URL_STRAPI не задан, поиск координат адресов пропущен");
+    return [];
+  }
+
   const jwt = await getJwt();
   if (!jwt) throw new Error("Не удалось получить JWT для Strapi");
 
@@ -87,7 +93,7 @@ async function resolveFiasCoordinates(fiasIds) {
     params.append("fields[1]", "lat");
     params.append("fields[2]", "lon");
 
-    const url = `${STRAPI_URL}/api/${ADDRESS_COLLECTION}?${params.toString()}`;
+    const url = `${strapiUrl}/api/${addressCollection}?${params.toString()}`;
 
     try {
       const r = await axios.get(url, {
@@ -179,6 +185,9 @@ async function resolveAccidentLocation(payload) {
   }
 
   let fiasIds = [];
+  const districtFiasIds = Array.isArray(payload?.districtFiasIds)
+    ? payload.districtFiasIds.map((x) => String(x).trim()).filter(Boolean)
+    : [];
 
   const shutdownInfo = payload?.shutdownInfo;
   if (shutdownInfo && Array.isArray(shutdownInfo.fiasIds) && shutdownInfo.fiasIds.length) {
@@ -186,8 +195,7 @@ async function resolveAccidentLocation(payload) {
   }
 
   if (!fiasIds.length) {
-    const districtFiasIds = payload?.districtFiasIds;
-    if (Array.isArray(districtFiasIds) && districtFiasIds.length) {
+    if (districtFiasIds.length) {
       fiasIds = [districtFiasIds[0]];
     }
   }
@@ -212,6 +220,11 @@ async function resolveAccidentLocation(payload) {
   const centroid = computeCentroid(coordinates);
 
   if (!centroid) {
+    const districtFallback = resolveDistrictFallback(districtFiasIds);
+    if (districtFallback) {
+      return districtFallback;
+    }
+
     return { ok: false, status: 422, message: `Не удалось определить координаты для ${fiasIds.length} ФИАС-адресов` };
   }
 
