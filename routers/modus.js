@@ -194,6 +194,24 @@ async function writeEdsJournal({ guid, tnNumber, target, httpCode, parsed, isPla
     console.warn("[modus][journal] ошибка записи:", e?.response?.status || e?.message);
   }
 }
+
+function logEddsV2AsyncError(prefix, e) {
+  console.error(prefix, e?.stack || e?.code || e?.message || e);
+}
+
+function writeEddsV2AsyncErrorJournal({ guid, tnNumber, target, e }) {
+  const message = e?.message || e?.code || "Ошибка до ответа ЕДДС v2";
+  return writeEdsJournal({
+    guid,
+    tnNumber,
+    target,
+    httpCode: 0,
+    parsed: { message },
+    isPlanned: true,
+  }).catch((journalError) => {
+    console.warn("[modus][journal] ошибка записи ошибки ЕДДС v2:", journalError?.message || journalError);
+  });
+}
 // ─────────────────────────────────────────────────────────────────────────────
 
 const router = express.Router();
@@ -683,7 +701,13 @@ router.put("/", async (req, res) => {
                 });
               });
             } catch (e) {
-              console.error(`[PUT→EDDS] Ошибка отправки в ЕДДС v2 для GUID=${mapped.guid}:`, e?.code || e?.message);
+              logEddsV2AsyncError(`[PUT→EDDS] Ошибка отправки в ЕДДС v2 для GUID=${mapped.guid}:`, e);
+              writeEddsV2AsyncErrorJournal({
+                guid: mapped.guid,
+                tnNumber: mapped.number,
+                target: `ЕДДС v2 ${method}`,
+                e,
+              });
             }
           }, 0);
         }
@@ -742,7 +766,13 @@ router.put("/", async (req, res) => {
                 });
               });
             } catch (e) {
-              console.error(`[PUT→EDDS] Ошибка DELETE для GUID=${mapped.guid}:`, e?.code || e?.message);
+              logEddsV2AsyncError(`[PUT→EDDS] Ошибка DELETE для GUID=${mapped.guid}:`, e);
+              writeEddsV2AsyncErrorJournal({
+                guid: mapped.guid,
+                tnNumber: mapped.number,
+                target: "ЕДДС v2 DELETE",
+                e,
+              });
             }
           }, 0);
         }
@@ -981,7 +1011,13 @@ router.post("/", async (req, res) => {
                   });
                 });
               } catch (e) {
-                console.error(`[POST→EDDS] Ошибка отправки в ЕДДС v2 для GUID=${item.guid}:`, e?.code || e?.message);
+                logEddsV2AsyncError(`[POST→EDDS] Ошибка отправки в ЕДДС v2 для GUID=${item.guid}:`, e);
+                writeEddsV2AsyncErrorJournal({
+                  guid: item.guid,
+                  tnNumber: item.number,
+                  target: "ЕДДС v2",
+                  e,
+                });
               }
             }, 0);
           }
