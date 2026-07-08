@@ -638,16 +638,9 @@ router.put("/", async (req, res) => {
                 console.warn(`[PUT→EDDS] Предупреждения при сборке v2 payload:`, buildErrors);
               }
 
-              console.log(`\n${"═".repeat(60)}`);
-              console.log(`  ЕДДС v2 ${method} → payload (${Object.keys(v2Payload).length} полей)`);
-              console.log(`${"═".repeat(60)}`);
-              console.log(JSON.stringify(v2Payload, null, 2));
-              console.log(`${"═".repeat(60)}\n`);
-
               const locationResult = await resolveAccidentLocation(v2Payload);
               if (locationResult.ok) {
                 v2Payload.accidentLocation = locationResult.accidentLocation;
-                // console.log(`  📍 accidentLocation: ${JSON.stringify(locationResult.accidentLocation)} (${locationResult.resolvedCount}/${locationResult.totalFias} FIAS)`);
               } else {
                 console.warn(`  ⚠ accidentLocation: ${locationResult.message} — координаты не определены`);
               }
@@ -656,6 +649,13 @@ router.put("/", async (req, res) => {
               const eddsToken = process.env.EDDS_TOKEN;
               // console.log(`  🔑 EDDS_TOKEN (ПОЛНЫЙ): ${eddsToken || 'ОТСУТСТВУЕТ'}`);
               // console.log(`  🌐 EDDS_URL:            ${eddsUrl}`);
+
+              console.log(`\n${"═".repeat(60)}`);
+              console.log(`  ЕДДС v2 ${method} → финальный JSON (${Object.keys(v2Payload).length} полей)`);
+              console.log(`${"═".repeat(60)}`);
+              console.log(JSON.stringify(v2Payload, null, 2));
+              console.log(`${"═".repeat(60)}\n`);
+
               const jsonEscaped = JSON.stringify(v2Payload).replace(/'/g, `'\\''`);
 
               const command =
@@ -962,16 +962,9 @@ router.post("/", async (req, res) => {
                   console.warn(`[POST→EDDS] Предупреждения при сборке v2 payload:`, buildErrors);
                 }
 
-                console.log(`\n${"═".repeat(60)}`);
-                console.log(`  ЕДДС v2 → payload (${Object.keys(v2Payload).length} полей)`);
-                console.log(`${"═".repeat(60)}`);
-                console.log(JSON.stringify(v2Payload, null, 2));
-                console.log(`${"═".repeat(60)}\n`);
-
                 const locationResult = await resolveAccidentLocation(v2Payload);
                 if (locationResult.ok) {
                   v2Payload.accidentLocation = locationResult.accidentLocation;
-              // console.log(`  📍 accidentLocation: ${JSON.stringify(locationResult.accidentLocation)} (${locationResult.resolvedCount}/${locationResult.totalFias} FIAS)`);
                 } else {
                   console.warn(`  ⚠ accidentLocation: ${locationResult.message} — координаты не определены, отправка с placeholder`);
                 }
@@ -980,6 +973,13 @@ router.post("/", async (req, res) => {
                 const eddsToken = process.env.EDDS_TOKEN;
                 // console.log(`  🔑 EDDS_TOKEN (ПОЛНЫЙ): ${eddsToken || 'ОТСУТСТВУЕТ'}`);
                 // console.log(`  🌐 EDDS_URL:            ${eddsUrl}`);
+
+                console.log(`\n${"═".repeat(60)}`);
+                console.log(`  ЕДДС v2 → финальный JSON (${Object.keys(v2Payload).length} полей)`);
+                console.log(`${"═".repeat(60)}`);
+                console.log(JSON.stringify(v2Payload, null, 2));
+                console.log(`${"═".repeat(60)}\n`);
+
                 const jsonEscaped = JSON.stringify(v2Payload).replace(/'/g, `'\\''`);
 
                 const command =
