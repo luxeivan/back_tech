@@ -417,7 +417,7 @@ function buildEddsNewPayload(item) {
 
   const payload = {
     externalId,
-    planDateClose,
+    // planDateClose,
     districtFiasIds: [districtFiasId],
     equipmentType,
     equipmentName,
