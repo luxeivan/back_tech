@@ -13,6 +13,8 @@ const minEnergoRoutes = require("./routers/minenergo");
 const siteEmergencyOutagesRoutes = require("./routers/siteEmergencyOutages");
 const auditRoutes = require("./routers/audit");
 const integrationMappingsRoutes = require("./routers/integrationMappings");
+const weatherRoutes = require("./routers/weather");
+const operationalDashboardRoutes = require("./routers/operationalDashboard");
 
 const webhooks = require("./routers/webhooks");
 const { sseHandler, broadcast } = require("./services/sse");
@@ -54,6 +56,8 @@ app.use("/services/minenergo", minEnergoRoutes);
 app.use("/services/site/emergency-outages", siteEmergencyOutagesRoutes);
 app.use("/services/audit", auditRoutes);
 app.use("/services/integration-mappings", integrationMappingsRoutes);
+app.use("/services/weather", weatherRoutes);
+app.use("/services/operational-dashboard", operationalDashboardRoutes);
 
 app.use("/services/webhooks", webhooks);
 app.get("/services/event", sseHandler);

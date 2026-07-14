@@ -11,3 +11,4 @@ services:
       - ./data:/app/data
       - ./import_data:/app/import_data
       - ./scripts:/app/scripts
+      - ./diagnostic-scripts:/app/diagnostic-scripts
