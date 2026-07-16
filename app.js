@@ -15,6 +15,9 @@ const auditRoutes = require("./routers/audit");
 const integrationMappingsRoutes = require("./routers/integrationMappings");
 const weatherRoutes = require("./routers/weather");
 const operationalDashboardRoutes = require("./routers/operationalDashboard");
+const {
+  startOperationalDashboardStatsScheduler,
+} = require("./services/operationalDashboardStats");
 
 const webhooks = require("./routers/webhooks");
 const { sseHandler, broadcast } = require("./services/sse");
@@ -74,6 +77,7 @@ app.post("/services/event", (req, res) => {
 app.listen(port, () => {
   console.log(`Приложение запущено на ${port} порту и каким-то чудом работает в 2026 году`);
   console.log("[pes-max-bot] MAX работает через webhook");
+  startOperationalDashboardStatsScheduler();
 });
 
 //ПРОВЕРКА123
