@@ -5,9 +5,7 @@ const { getJwt } = require("./modus/strapi");
 const OPERATIONAL_CHART_YEAR = 2026;
 const STATS_COLLECTION = "dashbord-oo-statistikas";
 const STATS_CODE = `tech_violations_${OPERATIONAL_CHART_YEAR}`;
-const DEFAULT_REFRESH_MS = 10 * 60 * 1000;
-const REFRESH_MS =
-  Number(process.env.OPERATIONAL_DASHBOARD_STATS_REFRESH_MS) || DEFAULT_REFRESH_MS;
+const REFRESH_MS = 4 * 60 * 60 * 1000;
 const PAGE_SIZE = 100;
 const FETCH_CONCURRENCY = 4;
 const REQUEST_TIMEOUT_MS = 120000;
