@@ -21,6 +21,37 @@ const toNumber = (value, fallback) => {
   return Number.isFinite(number) ? number : fallback;
 };
 
+const WEATHER_PARTS = [
+  { key: "night", label: "Ночь", hour: 3 },
+  { key: "morning", label: "Утро", hour: 9 },
+  { key: "day", label: "День", hour: 15 },
+  { key: "evening", label: "Вечер", hour: 21 },
+];
+
+const getWeatherHour = (time) => {
+  const match = String(time || "").match(/T(\d{2})/);
+  return match ? Number(match[1]) : NaN;
+};
+
+const buildWeatherParts = (hourly = {}) => {
+  const times = Array.isArray(hourly.time) ? hourly.time : [];
+  const temperatures = Array.isArray(hourly.temperature_2m) ? hourly.temperature_2m : [];
+  const weatherCodes = Array.isArray(hourly.weather_code) ? hourly.weather_code : [];
+
+  return WEATHER_PARTS.map((part) => {
+    const index = times.findIndex((time) => getWeatherHour(time) === part.hour);
+
+    return {
+      key: part.key,
+      label: part.label,
+      hour: part.hour,
+      time: index >= 0 ? times[index] : null,
+      temperature: index >= 0 ? temperatures[index] : null,
+      weatherCode: index >= 0 ? weatherCodes[index] : null,
+    };
+  });
+};
+
 router.get("/current", async (req, res) => {
   const now = Date.now();
   if (cache.payload && now < cache.expiresAt) {
@@ -36,7 +67,9 @@ router.get("/current", async (req, res) => {
       params: {
         latitude,
         longitude,
-        current: "temperature_2m,relative_humidity_2m,apparent_temperature,wind_speed_10m,cloud_cover,precipitation,weather_code",
+        current: "temperature_2m,relative_humidity_2m,apparent_temperature,wind_speed_10m,cloud_cover,precipitation,weather_code,surface_pressure",
+        hourly: "temperature_2m,weather_code",
+        forecast_days: 1,
         wind_speed_unit: "ms",
         timezone: "Europe/Moscow",
       },
@@ -57,7 +90,9 @@ router.get("/current", async (req, res) => {
       windSpeed: current.wind_speed_10m,
       cloudCover: current.cloud_cover,
       precipitation: current.precipitation,
+      pressure: current.surface_pressure,
       weatherCode: current.weather_code,
+      parts: buildWeatherParts(response?.data?.hourly),
     };
 
     cache = {
