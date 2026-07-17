@@ -27,7 +27,9 @@
     "pes:branches:po:dry": "node scripts/importPesBranchesPo.js",
     "pes:branches:po": "node scripts/importPesBranchesPo.js --apply",
     "pes:units:po-prioritet:dry": "node scripts/updatePesUnitsPoPriority.js",
-    "pes:units:po-prioritet": "node scripts/updatePesUnitsPoPriority.js --apply"
+    "pes:units:po-prioritet": "node scripts/updatePesUnitsPoPriority.js --apply",
+    "tn:org-import:dry": "node scripts/importTnBranchesPoOkruga.js",
+    "tn:org-import": "node scripts/importTnBranchesPoOkruga.js --apply"
   },
   "author": "",
   "license": "ISC",
