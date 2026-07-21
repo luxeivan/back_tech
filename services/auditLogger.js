@@ -566,9 +566,11 @@ function rowMatchesTn(row, tnType, tnValue) {
 
 async function readAuditEvents({
   limit = 200,
+  page = 1,
+  pageSize = 0,
   action = "",
   username = "",
-  page = "",
+  page: pagePath = "",
   search = "",
   from = "",
   to = "",
@@ -576,13 +578,14 @@ async function readAuditEvents({
   tnType = "",
   tnValue = "",
 } = {}) {
-  const safeLimit = Math.min(1000, Math.max(1, Number(limit) || 200));
-  const defaultTo = new Date().toISOString();
-  const defaultFrom = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const fromIso = parseIsoDateSafe(from) || (!to ? defaultFrom : "");
-  const toIso = parseIsoDateSafe(to) || (!from ? defaultTo : "");
+  const safePage = Math.min(100000, Math.max(1, Number(page) || 1));
+  const safePageSize = Math.min(100, Math.max(1, Number(pageSize || limit) || 200));
+  const fromIso = parseIsoDateSafe(from);
+  const toIso = parseIsoDateSafe(to);
   const safeStatusEvent = normalizeStatusEvent(statusEvent);
   const safeTnType = normalizeTnType(tnType);
+  const searchNeedle = String(search || "").trim().toLowerCase();
+  const hasClientSideFilters = Boolean(searchNeedle || String(tnValue || "").trim());
 
   if (from && !fromIso) {
     throw new Error("Invalid 'from' date");
@@ -591,54 +594,100 @@ async function readAuditEvents({
     throw new Error("Invalid 'to' date");
   }
 
-  const params = {
-    "pagination[page]": 1,
-    "pagination[pageSize]": safeLimit,
+  const baseParams = {
     "sort[0]": "event_time:desc",
   };
 
-  if (action) params["filters[action][$containsi]"] = String(action).trim();
-  if (username) params["filters[username][$containsi]"] = String(username).trim();
-  if (page) params["filters[page][$containsi]"] = String(page).trim();
-  if (fromIso) params["filters[event_time][$gte]"] = fromIso;
-  if (toIso) params["filters[event_time][$lte]"] = toIso;
-  if (safeStatusEvent) params["filters[status_event][$eq]"] = safeStatusEvent;
+  if (action) baseParams["filters[action][$containsi]"] = String(action).trim();
+  if (username) baseParams["filters[username][$containsi]"] = String(username).trim();
+  if (pagePath) baseParams["filters[page][$containsi]"] = String(pagePath).trim();
+  if (fromIso) baseParams["filters[event_time][$gte]"] = fromIso;
+  if (toIso) baseParams["filters[event_time][$lte]"] = toIso;
+  if (safeStatusEvent) baseParams["filters[status_event][$eq]"] = safeStatusEvent;
 
-  const resp = await strapiRequest("get", { params, timeoutMs: cfg().queryTimeoutMs });
-  const rawRows = Array.isArray(resp?.data?.data) ? resp.data.data : [];
-  const mapped = rawRows.map(rowToUi);
-  let mappedWithEmail = mapped;
-  try {
-    const directory = await loadUsersDirectory();
-    mappedWithEmail = attachEmailByUsername(mapped, directory);
-  } catch {
-    mappedWithEmail = mapped;
-  }
-  const searchNeedle = String(search || "").trim().toLowerCase();
-  const filtered = mappedWithEmail.filter((row) => {
-    if (!isAllowedAction(row?.action)) return false;
-    if (isLoggingPagePath(row?.page)) return false;
+  const applyUiFilters = (row) => {
     const hasSearch =
       !searchNeedle ||
       containsCi(row.entity_id, searchNeedle) ||
       containsCi(detailsToString(row.details_json), searchNeedle);
     const hasTn = rowMatchesTn(row, safeTnType, tnValue);
     return hasSearch && hasTn;
-  });
+  };
 
-  const pagination = resp?.data?.meta?.pagination || {};
+  let data = [];
+  let meta = {};
+
+  if (!hasClientSideFilters) {
+    const resp = await strapiRequest("get", {
+      params: {
+        ...baseParams,
+        "pagination[page]": safePage,
+        "pagination[pageSize]": safePageSize,
+      },
+      timeoutMs: cfg().queryTimeoutMs,
+    });
+    const rawRows = Array.isArray(resp?.data?.data) ? resp.data.data : [];
+    data = rawRows.map(rowToUi).filter(applyUiFilters);
+    const pagination = resp?.data?.meta?.pagination || {};
+    meta = {
+      count: data.length,
+      limit: safePageSize,
+      total: pagination.total ?? data.length,
+      page: pagination.page ?? safePage,
+      pageSize: pagination.pageSize ?? safePageSize,
+      pageCount: pagination.pageCount ?? 1,
+    };
+  } else {
+    const scanPageSize = envInt("AUDIT_FILTER_SCAN_PAGE_SIZE", 100, { min: 10, max: 100 });
+    const maxScanPages = envInt("AUDIT_FILTER_SCAN_MAX_PAGES", 500, { min: 1, max: 1000 });
+    const matched = [];
+    let scanPage = 1;
+    let pageCount = 1;
+
+    while (scanPage <= pageCount && scanPage <= maxScanPages) {
+      const resp = await strapiRequest("get", {
+        params: {
+          ...baseParams,
+          "pagination[page]": scanPage,
+          "pagination[pageSize]": scanPageSize,
+        },
+        timeoutMs: cfg().queryTimeoutMs,
+      });
+      const rawRows = Array.isArray(resp?.data?.data) ? resp.data.data : [];
+      matched.push(...rawRows.map(rowToUi).filter(applyUiFilters));
+
+      const pagination = resp?.data?.meta?.pagination || {};
+      pageCount = Math.max(1, Number(pagination.pageCount || 1));
+      scanPage += 1;
+    }
+
+    const startIndex = (safePage - 1) * safePageSize;
+    data = matched.slice(startIndex, startIndex + safePageSize);
+    meta = {
+      count: data.length,
+      limit: safePageSize,
+      total: matched.length,
+      page: safePage,
+      pageSize: safePageSize,
+      pageCount: Math.max(1, Math.ceil(matched.length / safePageSize)),
+      partial: scanPage <= pageCount,
+    };
+  }
+
+  try {
+    const directory = await loadUsersDirectory();
+    data = attachEmailByUsername(data, directory);
+  } catch {
+    // Если справочник пользователей недоступен, журнал всё равно должен открыться.
+  }
+
   state.lastReadAt = new Date().toISOString();
 
   return {
     ok: true,
-    data: filtered,
+    data,
     meta: {
-      count: filtered.length,
-      limit: safeLimit,
-      total: pagination.total ?? filtered.length,
-      page: pagination.page ?? 1,
-      pageSize: pagination.pageSize ?? safeLimit,
-      pageCount: pagination.pageCount ?? 1,
+      ...meta,
       period: {
         from: fromIso || null,
         to: toIso || null,
@@ -674,8 +723,6 @@ async function readAuditUsers({ query = "", limit = 50, from = "", to = "" } = {
     const rawRows = Array.isArray(resp?.data?.data) ? resp.data.data : [];
     for (const row of rawRows) {
       const mapped = rowToUi(row);
-      if (!isAllowedAction(mapped?.action)) continue;
-      if (isLoggingPagePath(mapped?.page)) continue;
       const username = String(mapped?.username || "").trim();
       if (!username) continue;
       const key = username.toLowerCase();

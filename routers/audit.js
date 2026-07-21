@@ -192,10 +192,20 @@ router.get("/events", async (req, res) => {
       Number.isFinite(requestedLimit) && requestedLimit > 0
         ? Math.min(1000, Math.trunc(requestedLimit))
         : limit;
+    const requestedPage = Number(req.query.page);
+    const requestedPageSize = Number(req.query.pageSize);
+    const safePage =
+      Number.isFinite(requestedPage) && requestedPage > 0
+        ? Math.min(100000, Math.trunc(requestedPage))
+        : 1;
+    const safePageSize =
+      Number.isFinite(requestedPageSize) && requestedPageSize > 0
+        ? Math.min(100, Math.trunc(requestedPageSize))
+        : safeLimit;
 
     const action = String(req.query.action || "").trim();
     const username = String(req.query.username || "").trim();
-    const page = String(req.query.page || "").trim();
+    const pagePath = String(req.query.pagePath || "").trim();
     const search = String(req.query.search || "").trim();
     const from = String(req.query.from || "").trim();
     const to = String(req.query.to || "").trim();
@@ -207,9 +217,11 @@ router.get("/events", async (req, res) => {
     try {
       const parsed = await readAuditEvents({
         limit: safeLimit,
+        page: safePage,
+        pageSize: safePageSize,
         action,
         username,
-        page,
+        page: pagePath,
         search,
         from,
         to,
@@ -224,16 +236,19 @@ router.get("/events", async (req, res) => {
         data,
         meta: {
           count: data.length,
-          limit: safeLimit,
+          limit: safePageSize,
           total: parsed?.meta?.total ?? data.length,
-          page: parsed?.meta?.page ?? 1,
-          pageSize: parsed?.meta?.pageSize ?? safeLimit,
+          page: parsed?.meta?.page ?? safePage,
+          pageSize: parsed?.meta?.pageSize ?? safePageSize,
           pageCount: parsed?.meta?.pageCount ?? 1,
+          partial: Boolean(parsed?.meta?.partial),
           took_ms: Date.now() - startedAt,
           query: {
+            page: safePage,
+            pageSize: safePageSize,
             action: action || null,
             username: username || null,
-            page: page || null,
+            page: pagePath || null,
             search: search || null,
             from: from || null,
             to: to || null,
@@ -258,12 +273,18 @@ router.get("/events", async (req, res) => {
         error: raw.slice(0, 500),
         meta: {
           count: 0,
-          limit: safeLimit,
+          limit: safePageSize,
+          page: safePage,
+          pageSize: safePageSize,
+          total: 0,
+          pageCount: 1,
           took_ms: Date.now() - startedAt,
           query: {
+            page: safePage,
+            pageSize: safePageSize,
             action: action || null,
             username: username || null,
-            page: page || null,
+            page: pagePath || null,
             search: search || null,
             from: from || null,
             to: to || null,
