@@ -433,7 +433,8 @@ function buildEddsNewPayload(item) {
       plannedInclusionAt,
       reasons,
       fiasIds,
-      deenergizedObjectsInfo: "заглушка",
+      // deenergizedObjectsInfo больше не отправляем: поле стало необязательным в ЕДДС.
+      // deenergizedObjectsInfo: "заглушка",
     },
     affectedObjectsCount: {
       peopleCount,
