@@ -228,6 +228,29 @@ function writeEddsV2CurlErrorJournal({ guid, tnNumber, target, err, stderr }) {
     console.warn("[modus][journal] ошибка записи curl-ошибки ЕДДС v2:", journalError?.message || journalError);
   });
 }
+
+const PLANNED_EDDS_V2_SEND_PAUSED = true; // false вернет прямую отправку плановых в ЕДДС v2.
+const PLANNED_EDDS_V2_PAUSE_MESSAGE =
+  "Отправки временно приостановлены: не отправлено";
+
+function writeEddsV2PausedJournal({ guid, tnNumber, target }) {
+  console.warn(
+    `[${target}] GUID=${guid || "—"} №${tnNumber || "—"} — ${PLANNED_EDDS_V2_PAUSE_MESSAGE}`
+  );
+  return writeEdsJournal({
+    guid,
+    tnNumber,
+    target,
+    httpCode: 0,
+    parsed: { message: PLANNED_EDDS_V2_PAUSE_MESSAGE },
+    isPlanned: true,
+  }).catch((journalError) => {
+    console.warn(
+      "[modus][journal] ошибка записи паузы ЕДДС v2:",
+      journalError?.message || journalError
+    );
+  });
+}
 // ─────────────────────────────────────────────────────────────────────────────
 
 const router = express.Router();
@@ -623,7 +646,14 @@ router.put("/", async (req, res) => {
           const action = needEddsRestore ? "Восстановление" : "Плановая заявка";
           console.log(`[PUT→EDDS] ${action}, отправка в ЕДДС v2 (${method}): guid=${mapped.guid}` + (usePut ? ` edds_electricityRequestId=${existingEdsRequestId}` : ""));
 
-          setTimeout(async () => {
+          if (PLANNED_EDDS_V2_SEND_PAUSED) {
+            await writeEddsV2PausedJournal({
+              guid: mapped.guid,
+              tnNumber: mapped.number,
+              target: `ЕДДС v2 ${method}`,
+            });
+          } else {
+            setTimeout(async () => {
             try {
               const mergedForNew = { ...mapped, data: mergedRaw };
               if (mapped?.STATUS_NAME) mergedForNew.STATUS_NAME = mapped.STATUS_NAME;
@@ -732,13 +762,21 @@ router.put("/", async (req, res) => {
                 e,
               });
             }
-          }, 0);
+            }, 0);
+          }
         }
 
         if (needEddsDelete) {
           console.log(`[PUT→EDDS] ТН удалена, отправка DELETE в ЕДДС v2: guid=${mapped.guid} edds_electricityRequestId=${existingEdsRequestId}`);
 
-          setTimeout(async () => {
+          if (PLANNED_EDDS_V2_SEND_PAUSED) {
+            await writeEddsV2PausedJournal({
+              guid: mapped.guid,
+              tnNumber: mapped.number,
+              target: "ЕДДС v2 DELETE",
+            });
+          } else {
+            setTimeout(async () => {
             try {
               const eddsUrl = `${process.env.EDDS_NEW_BASE_URL}/edds/external/requests/electricity/${existingEdsRequestId}`;
               const eddsToken = process.env.EDDS_TOKEN;
@@ -804,7 +842,8 @@ router.put("/", async (req, res) => {
                 e,
               });
             }
-          }, 0);
+            }, 0);
+          }
         }
 
         acc.push({
@@ -951,7 +990,14 @@ router.post("/", async (req, res) => {
           // ── Auto-send planned outages to EDDS v2 ────────────────────────
           if (item.BASE_TYPE === 1) {
             console.log(`[POST→EDDS] Плановая заявка, автоматическая отправка в ЕДДС v2: guid=${item.guid}`);
-            setTimeout(async () => {
+            if (PLANNED_EDDS_V2_SEND_PAUSED) {
+              await writeEddsV2PausedJournal({
+                guid: item.guid,
+                tnNumber: item.number,
+                target: "ЕДДС v2",
+              });
+            } else {
+              setTimeout(async () => {
               try {
                 const { payload: v2Payload, errors: buildErrors } = buildEddsNewPayload({ data: item });
                 if (!v2Payload) {
@@ -1056,7 +1102,8 @@ router.post("/", async (req, res) => {
                   e,
                 });
               }
-            }, 0);
+              }, 0);
+            }
           }
           // ─────────────────────────────────────────────────────────────────
         } catch (error) {
