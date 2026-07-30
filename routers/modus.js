@@ -18,6 +18,9 @@ require("dotenv").config();
 const URL_STRAPI = process.env.URL_STRAPI;
 const LOGIN_STRAPI = process.env.LOGIN_STRAPI;
 const PASSWORD_STRAPI = process.env.PASSWORD_STRAPI;
+const EDDS_URL = process.env.EDDS_URL;
+const EDDS_URL_PUT = process.env.EDDS_URL_PUT;
+const EDDS_TOKEN = process.env.EDDS_TOKEN;
 
 function parseJournalData(item) {
   const id = item.id;
@@ -229,9 +232,170 @@ function writeEddsV2CurlErrorJournal({ guid, tnNumber, target, err, stderr }) {
   });
 }
 
-const PLANNED_EDDS_V2_SEND_PAUSED = true; // false вернет прямую отправку плановых в ЕДДС v2.
+const PLANNED_EDDS_TRANSPORT = "v1"; // "v2" вернет прямую отправку плановых в ЕДДС v2.
+const PLANNED_EDDS_V2_SEND_PAUSED = false;
 const PLANNED_EDDS_V2_PAUSE_MESSAGE =
   "Отправки временно приостановлены: не отправлено";
+
+function jsonForShell(data) {
+  return JSON.stringify(data).replace(/'/g, `'\\''`);
+}
+
+function isDuplicateEddsV1Error(resp) {
+  try {
+    const msg = String(
+      (resp?.parsed && (resp.parsed.message || resp.parsed.error)) || resp?.stdout || ""
+    );
+    return /существует|уже существует/i.test(msg);
+  } catch {
+    return false;
+  }
+}
+
+function buildPlannedEddsV1Payload(item) {
+  const payload = buildEddsPayload({ data: item });
+  if (!payload) return null;
+
+  const raw = item?.data || {};
+  const statusName = String(item?.STATUS_NAME || raw?.STATUS_NAME || "")
+    .trim()
+    .toLowerCase();
+
+  if (!payload.type) payload.type = "1";
+  if (!payload.status) {
+    payload.status = ["закрыта", "запитана", "удалена"].includes(statusName) ? "4" : "2";
+  }
+
+  return payload;
+}
+
+function runEddsV1Curl(url, payload, { target }) {
+  return new Promise((resolve) => {
+    try {
+      if (!url) {
+        return resolve({
+          ok: false,
+          code: "NO_URL",
+          stderr: "EDDS_URL не задан в .env",
+        });
+      }
+      if (!EDDS_TOKEN) {
+        return resolve({
+          ok: false,
+          code: "NO_TOKEN",
+          stderr: "EDDS_TOKEN не задан в .env",
+        });
+      }
+
+      const command =
+        `curl -sS -X POST ` +
+        `-H "Content-Type: application/json" ` +
+        `-H "HTTP-X-API-TOKEN: ${EDDS_TOKEN}" ` +
+        `-d '${jsonForShell(payload)}' ` +
+        `-w "\\nHTTP_CODE:%{http_code}" ` +
+        `"${url}" --insecure`;
+
+      exec(command, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+        if (err) {
+          const code = err.code != null ? err.code : "unknown";
+          console.error(`[${target}] ✗ curl error code=${code}`);
+          if (stderr) console.error(`    ${stderr}`);
+          return resolve({ ok: false, code, stdout: stdout || "", stderr: stderr || "" });
+        }
+
+        let httpCode = null;
+        let body = stdout;
+        const codeMatch = stdout.match(/\nHTTP_CODE:(\d+)/);
+        if (codeMatch) {
+          httpCode = Number(codeMatch[1]);
+          body = stdout.slice(0, codeMatch.index).trim();
+        }
+
+        let parsed = null;
+        try { parsed = JSON.parse(body); } catch { /* raw */ }
+
+        resolve({ ok: true, httpCode, parsed, stdout: body });
+      });
+    } catch (e) {
+      return resolve({ ok: false, code: "EXCEPTION", stderr: e.message });
+    }
+  });
+}
+
+async function sendPlannedEddsV1({ item, guid, tnNumber, mode = "create" }) {
+  const target = mode === "update" ? "ЕДДС v1 update" : "ЕДДС v1";
+  const payload = buildPlannedEddsV1Payload(item);
+  if (!payload) {
+    await writeEdsJournal({
+      guid,
+      tnNumber,
+      target,
+      httpCode: 0,
+      parsed: { message: "Не удалось сформировать JSON для ЕДДС v1" },
+      isPlanned: true,
+    });
+    return;
+  }
+
+  try {
+    const locationResult = await resolveAccidentLocation(payload);
+    if (locationResult.ok) {
+      payload.accidentLocation = locationResult.accidentLocation;
+      console.log(
+        `[planned→edds-v1] accidentLocation=${JSON.stringify(locationResult.accidentLocation)}`
+      );
+    } else {
+      console.warn(`[planned→edds-v1] accidentLocation: ${locationResult.message} — отправка продолжается`);
+    }
+  } catch (e) {
+    console.warn(`[planned→edds-v1] accidentLocation error: ${e?.message} — отправка продолжается`);
+  }
+
+  const primaryUrl = mode === "update" ? EDDS_URL_PUT || EDDS_URL : EDDS_URL;
+  const fallbackUrl = mode !== "update" && EDDS_URL_PUT ? EDDS_URL_PUT : null;
+
+  console.log(`\n${"═".repeat(60)}`);
+  console.log(`  Плановая ЕДДС v1 ${mode} → payload (${Object.keys(payload).length} полей)`);
+  console.log(`${"═".repeat(60)}`);
+  console.log(JSON.stringify(payload, null, 2));
+  console.log(`${"═".repeat(60)}\n`);
+
+  let resp = await runEddsV1Curl(primaryUrl, payload, { target });
+  let finalTarget = target;
+
+  if (resp.ok && resp.parsed?.success === false && fallbackUrl && isDuplicateEddsV1Error(resp)) {
+    console.log("[planned→edds-v1] Дубликат — пробуем update.php");
+    resp = await runEddsV1Curl(fallbackUrl, payload, { target: "ЕДДС v1 update" });
+    finalTarget = "ЕДДС v1 update";
+  }
+
+  const httpCode = resp.httpCode || 0;
+  const parsed = resp.parsed || {
+    message: resp.stderr || resp.stdout || resp.code || "Ошибка отправки ЕДДС v1",
+  };
+  const ok =
+    resp.ok &&
+    httpCode >= 200 &&
+    httpCode < 300 &&
+    (parsed?.success === true || parsed?.data?.claim_id || parsed?.claim_id);
+
+  console.log(
+    `[planned→edds-v1] GUID=${guid || "—"} HTTP=${httpCode || "—"} ok=${ok} target=${finalTarget}`
+  );
+  if (!ok) {
+    console.warn(`[planned→edds-v1] Ответ ЕДДС v1: ${JSON.stringify(parsed)}`);
+  }
+
+  const journalHttpCode = ok ? httpCode : httpCode >= 200 ? 400 : httpCode;
+  await writeEdsJournal({
+    guid,
+    tnNumber,
+    target: finalTarget,
+    httpCode: journalHttpCode,
+    parsed,
+    isPlanned: true,
+  });
+}
 
 function writeEddsV2PausedJournal({ guid, tnNumber, target }) {
   console.warn(
@@ -644,9 +808,22 @@ router.put("/", async (req, res) => {
           const method = usePut ? "PUT" : "POST";
           const suffix = usePut ? `/${existingEdsRequestId}` : "";
           const action = needEddsRestore ? "Восстановление" : "Плановая заявка";
-          console.log(`[PUT→EDDS] ${action}, отправка в ЕДДС v2 (${method}): guid=${mapped.guid}` + (usePut ? ` edds_electricityRequestId=${existingEdsRequestId}` : ""));
+          const mergedForNew = { ...mapped, data: mergedRaw };
+          if (mapped?.STATUS_NAME) mergedForNew.STATUS_NAME = mapped.STATUS_NAME;
+          if (mapped?.recoveryFactDateTime) mergedForNew.recoveryFactDateTime = mapped.recoveryFactDateTime;
+          console.log(
+            `[PUT→EDDS] ${action}, отправка плановой в ЕДДС ${PLANNED_EDDS_TRANSPORT}: guid=${mapped.guid}` +
+              (usePut ? ` edds_electricityRequestId=${existingEdsRequestId}` : "")
+          );
 
-          if (PLANNED_EDDS_V2_SEND_PAUSED) {
+          if (PLANNED_EDDS_TRANSPORT === "v1") {
+            await sendPlannedEddsV1({
+              item: mergedForNew,
+              guid: mapped.guid,
+              tnNumber: mapped.number,
+              mode: usePut ? "update" : "create",
+            });
+          } else if (PLANNED_EDDS_V2_SEND_PAUSED) {
             await writeEddsV2PausedJournal({
               guid: mapped.guid,
               tnNumber: mapped.number,
@@ -655,10 +832,6 @@ router.put("/", async (req, res) => {
           } else {
             setTimeout(async () => {
             try {
-              const mergedForNew = { ...mapped, data: mergedRaw };
-              if (mapped?.STATUS_NAME) mergedForNew.STATUS_NAME = mapped.STATUS_NAME;
-              if (mapped?.recoveryFactDateTime) mergedForNew.recoveryFactDateTime = mapped.recoveryFactDateTime;
-
               const { payload: v2Payload, errors: buildErrors } = buildEddsNewPayload({ data: mergedForNew });
               if (!v2Payload) {
                 console.error(`[PUT→EDDS] Ошибка сборки v2 payload:`, buildErrors);
@@ -767,9 +940,20 @@ router.put("/", async (req, res) => {
         }
 
         if (needEddsDelete) {
-          console.log(`[PUT→EDDS] ТН удалена, отправка DELETE в ЕДДС v2: guid=${mapped.guid} edds_electricityRequestId=${existingEdsRequestId}`);
+          const mergedForDelete = { ...mapped, data: mergedRaw };
+          if (mapped?.STATUS_NAME) mergedForDelete.STATUS_NAME = mapped.STATUS_NAME;
+          console.log(
+            `[PUT→EDDS] ТН удалена, отправка плановой в ЕДДС ${PLANNED_EDDS_TRANSPORT}: guid=${mapped.guid} edds_electricityRequestId=${existingEdsRequestId}`
+          );
 
-          if (PLANNED_EDDS_V2_SEND_PAUSED) {
+          if (PLANNED_EDDS_TRANSPORT === "v1") {
+            await sendPlannedEddsV1({
+              item: mergedForDelete,
+              guid: mapped.guid,
+              tnNumber: mapped.number,
+              mode: "update",
+            });
+          } else if (PLANNED_EDDS_V2_SEND_PAUSED) {
             await writeEddsV2PausedJournal({
               guid: mapped.guid,
               tnNumber: mapped.number,
@@ -989,8 +1173,17 @@ router.post("/", async (req, res) => {
 
           // ── Auto-send planned outages to EDDS v2 ────────────────────────
           if (item.BASE_TYPE === 1) {
-            console.log(`[POST→EDDS] Плановая заявка, автоматическая отправка в ЕДДС v2: guid=${item.guid}`);
-            if (PLANNED_EDDS_V2_SEND_PAUSED) {
+            console.log(
+              `[POST→EDDS] Плановая заявка, автоматическая отправка в ЕДДС ${PLANNED_EDDS_TRANSPORT}: guid=${item.guid}`
+            );
+            if (PLANNED_EDDS_TRANSPORT === "v1") {
+              await sendPlannedEddsV1({
+                item: payload,
+                guid: item.guid,
+                tnNumber: item.number,
+                mode: "create",
+              });
+            } else if (PLANNED_EDDS_V2_SEND_PAUSED) {
               await writeEddsV2PausedJournal({
                 guid: item.guid,
                 tnNumber: item.number,
