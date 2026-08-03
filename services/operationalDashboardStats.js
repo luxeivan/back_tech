@@ -51,6 +51,8 @@ const DISPCENTER_TO_BRANCH = {
   Рошаль: "Павлово-Посадский",
   Шатура: "Павлово-Посадский",
   Электросталь: "Павлово-Посадский",
+  ОреховоЗуево: "Орехово-Зуевский",
+  ПавловскийПосад: "Павлово-Посадский",
   Голицыно: "Одинцовский",
   Звенигород: "Одинцовский",
   Краснознаменск: "Одинцовский",
@@ -66,6 +68,7 @@ const DISPCENTER_TO_BRANCH = {
   Щелково: "Щелковский",
   Дубна: "Сергиево-Посадский",
   "Сергиев-Посад": "Сергиево-Посадский",
+  СергиевПосад: "Сергиево-Посадский",
 };
 
 const normalizeLookupName = (value) =>
@@ -125,16 +128,12 @@ const normalizeBranchName = (value) => {
 };
 
 const getBranchByRow = (row) => {
-  const branch = normalizeBranchName(pick(row, "SC_FILIAL"));
-  if (branch) return branch;
-
-  // Старый источник филиала до перехода на SC_FILIAL:
-  // return (
-  //   DISPCENTER_BRANCH_BY_NORMALIZED_NAME.get(normalizeLookupName(pick(row, "DISPCENTER_NAME_"))) ||
-  //   null
-  // );
-
-  return null;
+  // Для исторического графика 2026 оставляем старую логику:
+  // SC_FILIAL появился недавно, поэтому старые ТН иначе выпадают из статистики.
+  return (
+    DISPCENTER_BRANCH_BY_NORMALIZED_NAME.get(normalizeLookupName(pick(row, "DISPCENTER_NAME_"))) ||
+    null
+  );
 };
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -252,7 +251,7 @@ const buildStatsPayload = ({ rows, fetchMeta, startedAt }) => {
 
     const branch = getBranchByRow(row);
     if (!branch) {
-      const filial = String(pick(row, "SC_FILIAL") || "Без SC_FILIAL").trim();
+      const filial = String(pick(row, "DISPCENTER_NAME_") || "Без DISPCENTER_NAME_").trim();
       unmatched.set(filial, (unmatched.get(filial) || 0) + 1);
       return;
     }
