@@ -292,7 +292,9 @@ function mapReasons(brigadeAction) {
 }
 
 function buildCommentText(raw) {
-  const scName = clean(raw?.SCNAME) || "Не указано";
+  const scName = clean(raw?.SC_PO) || "Не указано";
+  // Старый источник ПО до перехода на SC_PO:
+  // const scName = clean(raw?.SCNAME) || "Не указано";
   const startAt =
     formatMskDateTime(raw?.STARTDATETIME || raw?.F81_060_EVENTDATETIME) ||
     "дата не указана";

@@ -114,9 +114,28 @@ const getBaseType = (row) => {
 
 const getStatusName = (row) => String(pick(row, "STATUS_NAME") || "").trim().toLowerCase();
 
-const getBranchByRow = (row) =>
-  DISPCENTER_BRANCH_BY_NORMALIZED_NAME.get(normalizeLookupName(pick(row, "DISPCENTER_NAME_"))) ||
-  null;
+const normalizeBranchName = (value) => {
+  const normalized = String(value || "")
+    .replace(/\s*(?:филиал|фил\.?)\s*$/giu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return null;
+
+  return BRANCHES.find((branch) => normalizeLookupName(branch) === normalizeLookupName(normalized)) || normalized;
+};
+
+const getBranchByRow = (row) => {
+  const branch = normalizeBranchName(pick(row, "SC_FILIAL"));
+  if (branch) return branch;
+
+  // Старый источник филиала до перехода на SC_FILIAL:
+  // return (
+  //   DISPCENTER_BRANCH_BY_NORMALIZED_NAME.get(normalizeLookupName(pick(row, "DISPCENTER_NAME_"))) ||
+  //   null
+  // );
+
+  return null;
+};
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -233,8 +252,8 @@ const buildStatsPayload = ({ rows, fetchMeta, startedAt }) => {
 
     const branch = getBranchByRow(row);
     if (!branch) {
-      const dispcenter = String(pick(row, "DISPCENTER_NAME_") || "Без DISPCENTER_NAME_").trim();
-      unmatched.set(dispcenter, (unmatched.get(dispcenter) || 0) + 1);
+      const filial = String(pick(row, "SC_FILIAL") || "Без SC_FILIAL").trim();
+      unmatched.set(filial, (unmatched.get(filial) || 0) + 1);
       return;
     }
 
@@ -244,6 +263,7 @@ const buildStatsPayload = ({ rows, fetchMeta, startedAt }) => {
   const calculatedAt = new Date().toISOString();
   const nextCalculatedAt = new Date(Date.now() + REFRESH_MS).toISOString();
   const chartRows = BRANCHES.map((branch) => ({
+    SC_FILIAL: branch,
     OWN_SCNAME: branch,
     BASE_TYPE: 0,
     __count: counts.get(branch) || 0,

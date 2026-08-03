@@ -123,12 +123,16 @@ function formatVoltage(raw) {
 // ===== Core =====
 function buildAutoDescription(raw = {}) {
   // 1) Поля по ТЗ заказчика
-  const sc = s(raw.SCNAME);
+  const sc = s(raw.SC_PO);
+  // Старый источник ПО до перехода на SC_PO:
+  // const sc = s(raw.SCNAME);
   const when = formatRusDateTime(raw.F81_060_EVENTDATETIME); // "03:54 20.10.2025"
   const enobj = s(raw.F81_041_ENERGOOBJECTNAME);
   const voltText = formatVoltage(s(raw.VOLTAGECLASS)); // пример: "6кВ"
   const switchName = s(raw.SWITCHDISPNAME || raw.SWITCHNAMEKEY || "");
-  const ownSc = s(raw.OWN_SCNAME);
+  const ownSc = s(raw.SC_FILIAL);
+  // Старый источник филиала до перехода на SC_FILIAL:
+  // const ownSc = s(raw.OWN_SCNAME);
   const protect = s(raw.PROTECT_TYPE);
 
   const tpAll = num(raw.TP_ALL);
