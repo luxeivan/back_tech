@@ -233,8 +233,8 @@ function writeEddsV2CurlErrorJournal({ guid, tnNumber, target, err, stderr }) {
 }
 
 const PLANNED_EDDS_TRANSPORT = "v1"; // "v2" вернет прямую отправку плановых в ЕДДС v2.
-const PLANNED_EDDS_V2_SEND_PAUSED = false;
-const PLANNED_EDDS_V2_PAUSE_MESSAGE =
+const PLANNED_EDDS_SEND_PAUSED = true; // false вернет отправку плановых через PLANNED_EDDS_TRANSPORT.
+const PLANNED_EDDS_PAUSE_MESSAGE =
   "Отправки временно приостановлены: не отправлено";
 
 function jsonForShell(data) {
@@ -397,20 +397,20 @@ async function sendPlannedEddsV1({ item, guid, tnNumber, mode = "create" }) {
   });
 }
 
-function writeEddsV2PausedJournal({ guid, tnNumber, target }) {
+function writePlannedEddsPausedJournal({ guid, tnNumber, target }) {
   console.warn(
-    `[${target}] GUID=${guid || "—"} №${tnNumber || "—"} — ${PLANNED_EDDS_V2_PAUSE_MESSAGE}`
+    `[${target}] GUID=${guid || "—"} №${tnNumber || "—"} — ${PLANNED_EDDS_PAUSE_MESSAGE}`
   );
   return writeEdsJournal({
     guid,
     tnNumber,
     target,
     httpCode: 0,
-    parsed: { message: PLANNED_EDDS_V2_PAUSE_MESSAGE },
+    parsed: { message: PLANNED_EDDS_PAUSE_MESSAGE },
     isPlanned: true,
   }).catch((journalError) => {
     console.warn(
-      "[modus][journal] ошибка записи паузы ЕДДС v2:",
+      "[modus][journal] ошибка записи паузы плановой отправки ЕДДС:",
       journalError?.message || journalError
     );
   });
@@ -816,18 +816,18 @@ router.put("/", async (req, res) => {
               (usePut ? ` edds_electricityRequestId=${existingEdsRequestId}` : "")
           );
 
-          if (PLANNED_EDDS_TRANSPORT === "v1") {
+          if (PLANNED_EDDS_SEND_PAUSED) {
+            await writePlannedEddsPausedJournal({
+              guid: mapped.guid,
+              tnNumber: mapped.number,
+              target: `ЕДДС ${PLANNED_EDDS_TRANSPORT} ${method}`,
+            });
+          } else if (PLANNED_EDDS_TRANSPORT === "v1") {
             await sendPlannedEddsV1({
               item: mergedForNew,
               guid: mapped.guid,
               tnNumber: mapped.number,
               mode: usePut ? "update" : "create",
-            });
-          } else if (PLANNED_EDDS_V2_SEND_PAUSED) {
-            await writeEddsV2PausedJournal({
-              guid: mapped.guid,
-              tnNumber: mapped.number,
-              target: `ЕДДС v2 ${method}`,
             });
           } else {
             setTimeout(async () => {
@@ -946,18 +946,18 @@ router.put("/", async (req, res) => {
             `[PUT→EDDS] ТН удалена, отправка плановой в ЕДДС ${PLANNED_EDDS_TRANSPORT}: guid=${mapped.guid} edds_electricityRequestId=${existingEdsRequestId}`
           );
 
-          if (PLANNED_EDDS_TRANSPORT === "v1") {
+          if (PLANNED_EDDS_SEND_PAUSED) {
+            await writePlannedEddsPausedJournal({
+              guid: mapped.guid,
+              tnNumber: mapped.number,
+              target: `ЕДДС ${PLANNED_EDDS_TRANSPORT} DELETE`,
+            });
+          } else if (PLANNED_EDDS_TRANSPORT === "v1") {
             await sendPlannedEddsV1({
               item: mergedForDelete,
               guid: mapped.guid,
               tnNumber: mapped.number,
               mode: "update",
-            });
-          } else if (PLANNED_EDDS_V2_SEND_PAUSED) {
-            await writeEddsV2PausedJournal({
-              guid: mapped.guid,
-              tnNumber: mapped.number,
-              target: "ЕДДС v2 DELETE",
             });
           } else {
             setTimeout(async () => {
@@ -1176,18 +1176,18 @@ router.post("/", async (req, res) => {
             console.log(
               `[POST→EDDS] Плановая заявка, автоматическая отправка в ЕДДС ${PLANNED_EDDS_TRANSPORT}: guid=${item.guid}`
             );
-            if (PLANNED_EDDS_TRANSPORT === "v1") {
+            if (PLANNED_EDDS_SEND_PAUSED) {
+              await writePlannedEddsPausedJournal({
+                guid: item.guid,
+                tnNumber: item.number,
+                target: `ЕДДС ${PLANNED_EDDS_TRANSPORT}`,
+              });
+            } else if (PLANNED_EDDS_TRANSPORT === "v1") {
               await sendPlannedEddsV1({
                 item: payload,
                 guid: item.guid,
                 tnNumber: item.number,
                 mode: "create",
-              });
-            } else if (PLANNED_EDDS_V2_SEND_PAUSED) {
-              await writeEddsV2PausedJournal({
-                guid: item.guid,
-                tnNumber: item.number,
-                target: "ЕДДС v2",
               });
             } else {
               setTimeout(async () => {
