@@ -348,6 +348,13 @@ function buildCommentText(raw) {
   );
 }
 
+function buildEddsNewDescription(item) {
+  const mapped = item?.data || item;
+  const raw = mapped?.data || mapped;
+  if (!raw) return "";
+  return buildCommentText(raw);
+}
+
 function buildEddsNewPayload(item) {
   // item = { data: mappedItem } from modus.js
   // mappedItem = { guid, number, ..., data: rawModusData }
@@ -411,7 +418,7 @@ function buildEddsNewPayload(item) {
 
   const peopleCount = toInt(raw?.POPULATION_COUNT);
   const placesCount = toInt(raw?.SETTLEMENT_COUNT);
-  const commentText = buildCommentText(raw);
+  const commentText = buildEddsNewDescription(item);
 
   if (errors.length > 0) {
     return { payload: null, errors };
@@ -450,4 +457,9 @@ function buildEddsNewPayload(item) {
   return { payload, errors: [] };
 }
 
-module.exports = { buildEddsNewPayload, mapEddsValidationErrors, EDDS_TO_MODUS_FIELD_MAP };
+module.exports = {
+  buildEddsNewPayload,
+  buildEddsNewDescription,
+  mapEddsValidationErrors,
+  EDDS_TO_MODUS_FIELD_MAP,
+};

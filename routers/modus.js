@@ -5,7 +5,11 @@ const axios = require("axios");
 const { broadcast } = require("../services/sse");
 const { buildAutoDescription } = require("../services/autoDescription");
 const { buildEddsPayload } = require("../services/modus/eddsPayload");
-const { buildEddsNewPayload, mapEddsValidationErrors } = require("../services/modus/eddsNewPayload");
+const {
+  buildEddsNewPayload,
+  buildEddsNewDescription,
+  mapEddsValidationErrors,
+} = require("../services/modus/eddsNewPayload");
 const { resolveAccidentLocation } = require("../services/edds/resolveAccidentLocation");
 const {
   extractFiasList,
@@ -233,7 +237,7 @@ function writeEddsV2CurlErrorJournal({ guid, tnNumber, target, err, stderr }) {
 }
 
 const PLANNED_EDDS_TRANSPORT = "v1"; // "v2" вернет прямую отправку плановых в ЕДДС v2.
-const PLANNED_EDDS_SEND_PAUSED = true; // false вернет отправку плановых через PLANNED_EDDS_TRANSPORT.
+const PLANNED_EDDS_SEND_PAUSED = false; // true временно поставит отправку плановых на паузу.
 const PLANNED_EDDS_PAUSE_MESSAGE =
   "Отправки временно приостановлены: не отправлено";
 
@@ -252,6 +256,23 @@ function isDuplicateEddsV1Error(resp) {
   }
 }
 
+function normStatus(s) {
+  return String(s || "")
+    .trim()
+    .toLowerCase();
+}
+
+function plannedStatusToEddsV1Status(statusName) {
+  const status = normStatus(statusName);
+  if (status === "начата") return "2";
+  if (["закрыта", "удалена"].includes(status)) return "4";
+  return null;
+}
+
+function isPlannedEddsV1CreateOrUpdateStatus(statusName) {
+  return ["начата", "закрыта"].includes(normStatus(statusName));
+}
+
 function buildPlannedEddsV1Payload(item) {
   const payload = buildEddsPayload({ data: item });
   if (!payload) return null;
@@ -260,10 +281,15 @@ function buildPlannedEddsV1Payload(item) {
   const statusName = String(item?.STATUS_NAME || raw?.STATUS_NAME || "")
     .trim()
     .toLowerCase();
+  const statusCode = plannedStatusToEddsV1Status(statusName);
+  if (!statusCode) return null;
 
-  if (!payload.type) payload.type = "1";
-  if (!payload.status) {
-    payload.status = ["закрыта", "запитана", "удалена"].includes(statusName) ? "4" : "2";
+  payload.type = "3";
+  payload.status = statusCode;
+
+  const description = buildEddsNewDescription({ data: item });
+  if (description) {
+    payload.description = description;
   }
 
   return payload;
@@ -568,9 +594,24 @@ router.put("/", async (req, res) => {
         const needEdds = statusChanged && nextIsFinal && nextBaseType === 0;
         const existingEdsRequestId = current?.edds_electricityRequestId || currentAttrs?.edds_electricityRequestId || null;
         const isPlanned = nextBaseType === 1;
-        const needEddsPlanned = isPlanned;
-        const needEddsDelete = statusChanged && nextStatus === "удалена" && !!existingEdsRequestId;
-        const needEddsRestore = statusChanged && !existingEdsRequestId && isPlanned && prevStatus === "удалена";
+        const nextIsPlannedCreateOrUpdateStatus =
+          isPlannedEddsV1CreateOrUpdateStatus(nextStatus);
+        const needEddsDelete =
+          isPlanned &&
+          statusChanged &&
+          nextStatus === "удалена" &&
+          !!existingEdsRequestId;
+        const needEddsPlanned =
+          isPlanned &&
+          statusChanged &&
+          nextIsPlannedCreateOrUpdateStatus &&
+          !needEddsDelete;
+        const needEddsRestore =
+          statusChanged &&
+          !existingEdsRequestId &&
+          isPlanned &&
+          prevStatus === "удалена" &&
+          nextIsPlannedCreateOrUpdateStatus;
 
         console.log(`[PUT] guid=${mapped.guid} baseType=${nextBaseType} isPlanned=${isPlanned} needEddsPlanned=${needEddsPlanned} needEddsDelete=${needEddsDelete} statusChanged=${statusChanged} prev=${prevStatus} next=${nextStatus}`);
 
@@ -1171,8 +1212,18 @@ router.post("/", async (req, res) => {
             console.error("Ошибка SSE broadcast (create):", e?.message);
           }
 
-          // ── Auto-send planned outages to EDDS v2 ────────────────────────
+          // ── Auto-send planned outages to EDDS ───────────────────────────
           if (item.BASE_TYPE === 1) {
+            const plannedStatus = item.STATUS_NAME || payload.STATUS_NAME || payload?.data?.STATUS_NAME;
+            const canSendPlanned =
+              isPlannedEddsV1CreateOrUpdateStatus(plannedStatus);
+            if (!canSendPlanned) {
+              console.log(
+                `[POST→EDDS] Плановая заявка не отправляется в ЕДДС: status="${plannedStatus || "пусто"}", guid=${item.guid}`
+              );
+              return accumulatedResults;
+            }
+
             console.log(
               `[POST→EDDS] Плановая заявка, автоматическая отправка в ЕДДС ${PLANNED_EDDS_TRANSPORT}: guid=${item.guid}`
             );
