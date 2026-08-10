@@ -127,6 +127,14 @@ const normalizeBranchName = (value) => {
   return BRANCHES.find((branch) => normalizeLookupName(branch) === normalizeLookupName(normalized)) || normalized;
 };
 
+const normalizePoName = (value) => {
+  const normalized = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized || normalized === "-" || normalized === "—") return null;
+  return normalized;
+};
+
 const getBranchByRow = (row) => {
   // Для исторического графика 2026 оставляем старую логику:
   // SC_FILIAL появился недавно, поэтому старые ТН иначе выпадают из статистики.
@@ -135,6 +143,8 @@ const getBranchByRow = (row) => {
     null
   );
 };
+
+const getPoByRow = (row) => normalizePoName(pick(row, "SC_PO") || pick(row, "SCNAME"));
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -244,6 +254,7 @@ const fetchAllCurrentYearRows = async (client) => {
 
 const buildStatsPayload = ({ rows, fetchMeta, startedAt }) => {
   const counts = new Map(BRANCHES.map((branch) => [branch, 0]));
+  const poCounts = new Map();
   const unmatched = new Map();
 
   rows.forEach((row) => {
@@ -257,6 +268,21 @@ const buildStatsPayload = ({ rows, fetchMeta, startedAt }) => {
     }
 
     counts.set(branch, counts.get(branch) + 1);
+
+    const poName = getPoByRow(row);
+    if (poName) {
+      const poKey = `${normalizeLookupName(branch)}::${normalizeLookupName(poName)}`;
+      const current = poCounts.get(poKey) || {
+        SC_FILIAL: branch,
+        OWN_SCNAME: branch,
+        SC_PO: poName,
+        SCNAME: poName,
+        BASE_TYPE: 0,
+        __count: 0,
+      };
+      current.__count += 1;
+      poCounts.set(poKey, current);
+    }
   });
 
   const calculatedAt = new Date().toISOString();
@@ -267,15 +293,23 @@ const buildStatsPayload = ({ rows, fetchMeta, startedAt }) => {
     BASE_TYPE: 0,
     __count: counts.get(branch) || 0,
   }));
+  const poRows = Array.from(poCounts.values()).sort((left, right) => {
+    const branchCompare = String(left.SC_FILIAL || "").localeCompare(String(right.SC_FILIAL || ""), "ru");
+    if (branchCompare) return branchCompare;
+    return String(left.SC_PO || "").localeCompare(String(right.SC_PO || ""), "ru");
+  });
 
   return {
     ok: true,
     year: OPERATIONAL_CHART_YEAR,
     rows: chartRows,
+    poRows,
     meta: {
       ...fetchMeta,
       code: STATS_CODE,
       matched: chartRows.reduce((sum, row) => sum + Number(row.__count || 0), 0),
+      poMatched: poRows.reduce((sum, row) => sum + Number(row.__count || 0), 0),
+      hasPoRows: true,
       unmatched: Array.from(unmatched.entries())
         .sort((a, b) => b[1] - a[1])
         .map(([name, count]) => ({ name, count })),
