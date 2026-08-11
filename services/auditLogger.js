@@ -220,6 +220,8 @@ const usersDirectoryCache = {
   inFlight: null,
 };
 
+const auditUsersCache = new Map();
+
 async function getServiceJwt() {
   const options = cfg();
   if (!options.strapiUrl) {
@@ -318,13 +320,21 @@ async function loadUsersDirectory() {
 
       const rows = normalizeUserRows(resp?.data);
       for (const row of rows) {
-        const username = toStr(row?.username || row?.fullName || row?.name, "");
+        const username = toStr(row?.fullName || row?.name || row?.username, "");
         if (!username) continue;
-        const key = username.toLowerCase();
+        const keys = [
+          username,
+          toStr(row?.username, ""),
+          toStr(row?.email, ""),
+        ]
+          .map((value) => value.toLowerCase())
+          .filter(Boolean);
         const email = toStr(row?.email, "");
-        const existing = map.get(key);
-        if (!existing || (!existing.email && email)) {
-          map.set(key, { username, email });
+        for (const key of keys) {
+          const existing = map.get(key);
+          if (!existing || (!existing.email && email)) {
+            map.set(key, { username, email });
+          }
         }
       }
 
@@ -358,6 +368,42 @@ function attachEmailByUsername(rows, directory) {
       email: row?.email || match?.email || "",
     };
   });
+}
+
+function userMatchesQuery(user, query) {
+  const needle = String(query || "").trim().toLowerCase();
+  if (!needle) return true;
+  return (
+    String(user?.username || "").toLowerCase().includes(needle) ||
+    String(user?.displayName || "").toLowerCase().includes(needle) ||
+    String(user?.email || "").toLowerCase().includes(needle)
+  );
+}
+
+function pushUniqueUser(target, seen, user, limit) {
+  if (!Array.isArray(target) || target.length >= limit) return;
+  const username = toStr(user?.username, "");
+  if (!username) return;
+  const key = username.toLowerCase();
+  if (seen.has(key)) return;
+  seen.add(key);
+  target.push({
+    username,
+    displayName: toStr(user?.displayName, ""),
+    email: toStr(user?.email, ""),
+  });
+}
+
+function isAutoSendAuditRow(row) {
+  const username = String(row?.username || "").trim().toLowerCase();
+  const role = String(row?.role || row?.view_role || "").trim().toLowerCase();
+  const page = String(row?.page || "").trim().toLowerCase();
+  const action = String(row?.action || "").trim().toLowerCase();
+  return (
+    username === "unknown" &&
+    role === "system" &&
+    (page === "/services/edds" || action === "edds_send")
+  );
 }
 
 function extractActor(req, body = {}) {
@@ -542,6 +588,20 @@ function normalizeTnType(value) {
   return v === "number" ? "number" : v === "guid" ? "guid" : "";
 }
 
+function buildPageFilterParams(pagePath) {
+  const page = String(pagePath || "").trim();
+  if (!page) return {};
+  if (page === "/") return { "filters[page][$eq]": "/" };
+  if (page === "/dashboard") return { "filters[page][$eq]": "/dashboard" };
+  if (page === "/pes") {
+    return {
+      "filters[$or][0][page][$containsi]": "/pes",
+      "filters[$or][1][page][$containsi]": "/services/pes",
+    };
+  }
+  return { "filters[page][$containsi]": page };
+}
+
 function rowMatchesTn(row, tnType, tnValue) {
   const needle = String(tnValue || "").trim().toLowerCase();
   if (!needle) return true;
@@ -600,7 +660,7 @@ async function readAuditEvents({
 
   if (action) baseParams["filters[action][$containsi]"] = String(action).trim();
   if (username) baseParams["filters[username][$containsi]"] = String(username).trim();
-  if (pagePath) baseParams["filters[page][$containsi]"] = String(pagePath).trim();
+  Object.assign(baseParams, buildPageFilterParams(pagePath));
   if (fromIso) baseParams["filters[event_time][$gte]"] = fromIso;
   if (toIso) baseParams["filters[event_time][$lte]"] = toIso;
   if (safeStatusEvent) baseParams["filters[status_event][$eq]"] = safeStatusEvent;
@@ -701,65 +761,105 @@ async function readAuditUsers({ query = "", limit = 50, from = "", to = "" } = {
   const fromIso = parseIsoDateSafe(from);
   const toIso = parseIsoDateSafe(to);
   const queryNeedle = String(query || "").trim();
-  const pageSize = 100;
-  const maxPages = 30;
+  const cacheKey = JSON.stringify({
+    query: queryNeedle.toLowerCase(),
+    limit: safeLimit,
+    from: fromIso,
+    to: toIso,
+  });
+  const cached = auditUsersCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.value;
+  }
 
-  const set = new Set();
+  const seen = new Set();
   const users = [];
+  const shouldSearchAuto =
+    queryNeedle &&
+    /^(а|ав|авт|авто|автоотправка|auto|unknown)$/i.test(queryNeedle);
+
+  const pushFromAuditRows = (rows) => {
+    for (const row of rows) {
+      const mapped = rowToUi(row);
+      const username = toStr(mapped?.username, "");
+      if (!username) continue;
+      const user = {
+        username,
+        displayName: isAutoSendAuditRow(mapped) ? "Автоотправка" : username,
+        email: "",
+      };
+      if (!userMatchesQuery(user, queryNeedle)) continue;
+      pushUniqueUser(users, seen, user, safeLimit);
+      if (users.length >= safeLimit) break;
+    }
+  };
+
+  const fetchAuditPage = async (page, extraParams = {}) => {
+    const params = {
+      ...extraParams,
+      "pagination[page]": page,
+      "pagination[pageSize]": envInt("AUDIT_USERS_PAGE_SIZE", 100, { min: 20, max: 100 }),
+      "sort[0]": "event_time:desc",
+    };
+    if (fromIso) params["filters[event_time][$gte]"] = fromIso;
+    if (toIso) params["filters[event_time][$lte]"] = toIso;
+    const resp = await strapiRequest("get", { params, timeoutMs: cfg().queryTimeoutMs });
+    const rawRows = Array.isArray(resp?.data?.data) ? resp.data.data : [];
+    const pagination = resp?.data?.meta?.pagination || {};
+    return {
+      rows: rawRows,
+      pageCount: Math.max(1, Number(pagination.pageCount || 1)),
+    };
+  };
+
   let page = 1;
   let pageCount = 1;
 
-  while (page <= pageCount && page <= maxPages && users.length < safeLimit) {
-    const params = {
-      "pagination[page]": page,
-      "pagination[pageSize]": pageSize,
-      "sort[0]": "event_time:desc",
-    };
-    if (queryNeedle) params["filters[username][$containsi]"] = queryNeedle;
-    if (fromIso) params["filters[event_time][$gte]"] = fromIso;
-    if (toIso) params["filters[event_time][$lte]"] = toIso;
-
-    const resp = await strapiRequest("get", { params, timeoutMs: cfg().queryTimeoutMs });
-    const rawRows = Array.isArray(resp?.data?.data) ? resp.data.data : [];
-    for (const row of rawRows) {
-      const mapped = rowToUi(row);
-      const username = String(mapped?.username || "").trim();
-      if (!username) continue;
-      const key = username.toLowerCase();
-      if (set.has(key)) continue;
-      set.add(key);
-      users.push(username);
-      if (users.length >= safeLimit) break;
+  if (queryNeedle) {
+    const filteredPages = envInt("AUDIT_USERS_FILTERED_PAGES", 10, { min: 1, max: 50 });
+    const usernameNeedle = shouldSearchAuto ? "unknown" : queryNeedle;
+    while (page <= pageCount && page <= filteredPages && users.length < safeLimit) {
+      const result = await fetchAuditPage(page, {
+        "filters[username][$containsi]": usernameNeedle,
+      });
+      pushFromAuditRows(result.rows);
+      pageCount = result.pageCount;
+      page += 1;
     }
-
-    const pagination = resp?.data?.meta?.pagination || {};
-    pageCount = Number(pagination.pageCount || 1);
-    page += 1;
   }
 
-  let data = users.map((username) => ({ username, email: "" }));
-  try {
-    const directory = await loadUsersDirectory();
-    data = users.map((username) => {
-      const key = String(username).toLowerCase();
-      const match = directory.get(key);
-      return {
-        username,
-        email: match?.email || "",
-      };
-    });
-  } catch {
-    data = users.map((username) => ({ username, email: "" }));
+  if (!queryNeedle) {
+    const recentPages = envInt("AUDIT_USERS_RECENT_PAGES", 5, { min: 1, max: 20 });
+    page = 1;
+    pageCount = 1;
+    while (page <= pageCount && page <= recentPages && users.length < safeLimit) {
+      const result = await fetchAuditPage(page);
+      pushFromAuditRows(result.rows);
+      pageCount = result.pageCount;
+      page += 1;
+    }
   }
 
-  return {
+  const result = {
     ok: true,
-    data,
+    data: users,
     meta: {
-      count: data.length,
+      count: users.length,
       limit: safeLimit,
     },
   };
+
+  auditUsersCache.set(cacheKey, {
+    value: result,
+    expiresAt: Date.now() + envInt("AUDIT_USERS_CACHE_MS", 30000, { min: 1000, max: 300000 }),
+  });
+
+  if (auditUsersCache.size > 50) {
+    const oldestKey = auditUsersCache.keys().next().value;
+    if (oldestKey) auditUsersCache.delete(oldestKey);
+  }
+
+  return result;
 }
 
 async function checkAuditStore() {
