@@ -5,6 +5,9 @@ const { getJwt } = require("./modus/strapi");
 const OPERATIONAL_CHART_YEAR = 2026;
 const STATS_COLLECTION = "dashbord-oo-statistikas";
 const STATS_CODE = `tech_violations_${OPERATIONAL_CHART_YEAR}`;
+// Локальная лазейка для проверки периода: null = живой месяц.
+// Например, 8 имитирует август и считает январь-июль.
+const DEBUG_CURRENT_MONTH_FOR_PERIOD = null;
 const REFRESH_MS = 4 * 60 * 60 * 1000;
 const PAGE_SIZE = 100;
 const FETCH_CONCURRENCY = 4;
@@ -82,12 +85,45 @@ const DISPCENTER_BRANCH_BY_NORMALIZED_NAME = new Map(
   Object.entries(DISPCENTER_TO_BRANCH).map(([dispcenter, branch]) => [
     normalizeLookupName(dispcenter),
     branch,
-  ])
+  ]),
 );
+
+const createEmptyMonths = () => Array.from({ length: 12 }, () => 0);
 
 let refreshTimer = null;
 let refreshInFlight = null;
 let memoryPayload = null;
+
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+const pad2 = (value) => String(value).padStart(2, "0");
+
+const getEffectiveCurrentMonth = () => {
+  const debugMonth = Number(DEBUG_CURRENT_MONTH_FOR_PERIOD);
+  if (Number.isInteger(debugMonth) && debugMonth >= 1 && debugMonth <= 12) {
+    return debugMonth;
+  }
+
+  return new Date().getMonth() + 1;
+};
+
+const getOperationalStatsPeriod = () => {
+  const currentMonth = getEffectiveCurrentMonth();
+  const periodMonth = clamp(currentMonth - 1, 1, 12);
+  const endYear =
+    periodMonth >= 12 ? OPERATIONAL_CHART_YEAR + 1 : OPERATIONAL_CHART_YEAR;
+  const endMonth = periodMonth >= 12 ? 1 : periodMonth + 1;
+
+  return {
+    currentMonth,
+    periodMonth,
+    monthCount: periodMonth,
+    periodStart: `${OPERATIONAL_CHART_YEAR}-01-01T00:00:00.000+03:00`,
+    periodEndExclusive: `${endYear}-${pad2(endMonth)}-01T00:00:00.000+03:00`,
+    periodLabel: `за ${periodMonth} ${periodMonth === 1 ? "месяц" : periodMonth >= 2 && periodMonth <= 4 ? "месяца" : "месяцев"}`,
+    debugCurrentMonth: DEBUG_CURRENT_MONTH_FOR_PERIOD,
+  };
+};
 
 const log = (message, details) => {
   if (details === undefined) {
@@ -115,7 +151,10 @@ const getBaseType = (row) => {
   return Number.isFinite(value) ? value : null;
 };
 
-const getStatusName = (row) => String(pick(row, "STATUS_NAME") || "").trim().toLowerCase();
+const getStatusName = (row) =>
+  String(pick(row, "STATUS_NAME") || "")
+    .trim()
+    .toLowerCase();
 
 const normalizeBranchName = (value) => {
   const normalized = String(value || "")
@@ -124,7 +163,12 @@ const normalizeBranchName = (value) => {
     .trim();
   if (!normalized) return null;
 
-  return BRANCHES.find((branch) => normalizeLookupName(branch) === normalizeLookupName(normalized)) || normalized;
+  return (
+    BRANCHES.find(
+      (branch) =>
+        normalizeLookupName(branch) === normalizeLookupName(normalized),
+    ) || normalized
+  );
 };
 
 const normalizePoName = (value) => {
@@ -139,12 +183,24 @@ const getBranchByRow = (row) => {
   // Для исторического графика 2026 оставляем старую логику:
   // SC_FILIAL появился недавно, поэтому старые ТН иначе выпадают из статистики.
   return (
-    DISPCENTER_BRANCH_BY_NORMALIZED_NAME.get(normalizeLookupName(pick(row, "DISPCENTER_NAME_"))) ||
-    null
+    DISPCENTER_BRANCH_BY_NORMALIZED_NAME.get(
+      normalizeLookupName(pick(row, "DISPCENTER_NAME_")),
+    ) || null
   );
 };
 
-const getPoByRow = (row) => normalizePoName(pick(row, "SC_PO") || pick(row, "SCNAME"));
+const getPoByRow = (row) =>
+  normalizePoName(pick(row, "SC_PO") || pick(row, "SCNAME"));
+
+const getRowMonthIndex = (row) => {
+  const match = String(pick(row, "createDateTime") || "").match(
+    /^\d{4}-(\d{2})/,
+  );
+  const month = match ? Number(match[1]) : NaN;
+  return Number.isInteger(month) && month >= 1 && month <= 12
+    ? month - 1
+    : null;
+};
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -152,13 +208,16 @@ const runLimited = async (tasks, limit = FETCH_CONCURRENCY) => {
   const results = new Array(tasks.length);
   let nextIndex = 0;
 
-  const workers = Array.from({ length: Math.min(limit, tasks.length) }, async () => {
-    while (nextIndex < tasks.length) {
-      const currentIndex = nextIndex;
-      nextIndex += 1;
-      results[currentIndex] = await tasks[currentIndex]();
-    }
-  });
+  const workers = Array.from(
+    { length: Math.min(limit, tasks.length) },
+    async () => {
+      while (nextIndex < tasks.length) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        results[currentIndex] = await tasks[currentIndex]();
+      }
+    },
+  );
 
   await Promise.all(workers);
   return results;
@@ -185,8 +244,9 @@ const buildTnQuery = (page) => ({
   "pagination[page]": page,
   "pagination[pageSize]": PAGE_SIZE,
   "sort[0]": "createDateTime:DESC",
-  "filters[createDateTime][$gte]": `${OPERATIONAL_CHART_YEAR}-01-01T00:00:00.000+03:00`,
-  "filters[createDateTime][$lt]": `${OPERATIONAL_CHART_YEAR + 1}-01-01T00:00:00.000+03:00`,
+  "filters[createDateTime][$gte]": getOperationalStatsPeriod().periodStart,
+  "filters[createDateTime][$lt]":
+    getOperationalStatsPeriod().periodEndExclusive,
   "filters[BASE_TYPE][$eq]": 0,
 });
 
@@ -200,9 +260,12 @@ const requestWithRetry = async (fn, label) => {
       lastError = error;
       if (attempt >= REQUEST_RETRIES) break;
 
-      const status = error?.response?.status || error?.code || error?.message || "unknown";
+      const status =
+        error?.response?.status || error?.code || error?.message || "unknown";
       const delay = RETRY_DELAY_MS * attempt;
-      log(`${label}: попытка ${attempt}/${REQUEST_RETRIES} упала (${status}), повтор через ${delay} мс`);
+      log(
+        `${label}: попытка ${attempt}/${REQUEST_RETRIES} упала (${status}), повтор через ${delay} мс`,
+      );
       await wait(delay);
     }
   }
@@ -213,7 +276,7 @@ const requestWithRetry = async (fn, label) => {
 const fetchTnPage = async ({ client, page }) =>
   requestWithRetry(
     () => client.get("/api/teh-narusheniyas", { params: buildTnQuery(page) }),
-    `страница ТН ${page}`
+    `страница ТН ${page}`,
   );
 
 const fetchAllCurrentYearRows = async (client) => {
@@ -228,17 +291,24 @@ const fetchAllCurrentYearRows = async (client) => {
 
   log(`Страница 1/${pageCount}: загружено ${firstRows.length}/${total || "?"}`);
 
-  const restTasks = Array.from({ length: Math.max(0, pageCount - 1) }, (_, index) => {
-    const page = index + 2;
-    return async () => {
-      const response = await fetchTnPage({ client, page });
-      const rows = Array.isArray(response?.data?.data) ? response.data.data.map(mapItem) : [];
-      if (page === pageCount || page % 10 === 0) {
-        log(`Страница ${page}/${pageCount}: загружено ${(page - 1) * effectivePageSize + rows.length}/${total || "?"}`);
-      }
-      return rows;
-    };
-  });
+  const restTasks = Array.from(
+    { length: Math.max(0, pageCount - 1) },
+    (_, index) => {
+      const page = index + 2;
+      return async () => {
+        const response = await fetchTnPage({ client, page });
+        const rows = Array.isArray(response?.data?.data)
+          ? response.data.data.map(mapItem)
+          : [];
+        if (page === pageCount || page % 10 === 0) {
+          log(
+            `Страница ${page}/${pageCount}: загружено ${(page - 1) * effectivePageSize + rows.length}/${total || "?"}`,
+          );
+        }
+        return rows;
+      };
+    },
+  );
 
   const restRows = (await runLimited(restTasks)).flat();
   return {
@@ -253,7 +323,11 @@ const fetchAllCurrentYearRows = async (client) => {
 };
 
 const buildStatsPayload = ({ rows, fetchMeta, startedAt }) => {
+  const period = getOperationalStatsPeriod();
   const counts = new Map(BRANCHES.map((branch) => [branch, 0]));
+  const monthlyCounts = new Map(
+    BRANCHES.map((branch) => [branch, createEmptyMonths()]),
+  );
   const poCounts = new Map();
   const unmatched = new Map();
 
@@ -262,12 +336,20 @@ const buildStatsPayload = ({ rows, fetchMeta, startedAt }) => {
 
     const branch = getBranchByRow(row);
     if (!branch) {
-      const filial = String(pick(row, "DISPCENTER_NAME_") || "Без DISPCENTER_NAME_").trim();
+      const filial = String(
+        pick(row, "DISPCENTER_NAME_") || "Без DISPCENTER_NAME_",
+      ).trim();
       unmatched.set(filial, (unmatched.get(filial) || 0) + 1);
       return;
     }
 
     counts.set(branch, counts.get(branch) + 1);
+    const monthIndex = getRowMonthIndex(row);
+    if (monthIndex !== null) {
+      const branchMonths = monthlyCounts.get(branch) || createEmptyMonths();
+      branchMonths[monthIndex] += 1;
+      monthlyCounts.set(branch, branchMonths);
+    }
 
     const poName = getPoByRow(row);
     if (poName) {
@@ -279,8 +361,10 @@ const buildStatsPayload = ({ rows, fetchMeta, startedAt }) => {
         SCNAME: poName,
         BASE_TYPE: 0,
         __count: 0,
+        __months: createEmptyMonths(),
       };
       current.__count += 1;
+      if (monthIndex !== null) current.__months[monthIndex] += 1;
       poCounts.set(poKey, current);
     }
   });
@@ -292,22 +376,39 @@ const buildStatsPayload = ({ rows, fetchMeta, startedAt }) => {
     OWN_SCNAME: branch,
     BASE_TYPE: 0,
     __count: counts.get(branch) || 0,
+    __months: monthlyCounts.get(branch) || createEmptyMonths(),
   }));
   const poRows = Array.from(poCounts.values()).sort((left, right) => {
-    const branchCompare = String(left.SC_FILIAL || "").localeCompare(String(right.SC_FILIAL || ""), "ru");
+    const branchCompare = String(left.SC_FILIAL || "").localeCompare(
+      String(right.SC_FILIAL || ""),
+      "ru",
+    );
     if (branchCompare) return branchCompare;
-    return String(left.SC_PO || "").localeCompare(String(right.SC_PO || ""), "ru");
+    return String(left.SC_PO || "").localeCompare(
+      String(right.SC_PO || ""),
+      "ru",
+    );
   });
 
   return {
     ok: true,
     year: OPERATIONAL_CHART_YEAR,
+    period,
     rows: chartRows,
     poRows,
     meta: {
       ...fetchMeta,
       code: STATS_CODE,
-      matched: chartRows.reduce((sum, row) => sum + Number(row.__count || 0), 0),
+      periodStart: period.periodStart,
+      periodEndExclusive: period.periodEndExclusive,
+      periodMonth: period.periodMonth,
+      monthCount: period.monthCount,
+      periodLabel: period.periodLabel,
+      debugCurrentMonth: period.debugCurrentMonth,
+      matched: chartRows.reduce(
+        (sum, row) => sum + Number(row.__count || 0),
+        0,
+      ),
       poMatched: poRows.reduce((sum, row) => sum + Number(row.__count || 0), 0),
       hasPoRows: true,
       unmatched: Array.from(unmatched.entries())
@@ -332,10 +433,12 @@ const findStatsRecord = async (client) => {
           "pagination[pageSize]": 1,
         },
       }),
-    "поиск записи статистики"
+    "поиск записи статистики",
   );
 
-  const item = Array.isArray(response?.data?.data) ? response.data.data[0] : null;
+  const item = Array.isArray(response?.data?.data)
+    ? response.data.data[0]
+    : null;
   return item ? mapItem(item) : null;
 };
 
@@ -361,7 +464,7 @@ const saveStatsPayload = async ({ client, payload }) => {
     log(`Обновляю запись Strapi: ${STATS_COLLECTION}/${writeId}`);
     await requestWithRetry(
       () => client.put(`/api/${STATS_COLLECTION}/${writeId}`, body),
-      "обновление записи статистики"
+      "обновление записи статистики",
     );
     return { action: "updated", writeId };
   }
@@ -369,10 +472,13 @@ const saveStatsPayload = async ({ client, payload }) => {
   log(`Создаю запись Strapi: ${STATS_COLLECTION}`);
   const response = await requestWithRetry(
     () => client.post(`/api/${STATS_COLLECTION}`, body),
-    "создание записи статистики"
+    "создание записи статистики",
   );
   const created = mapItem(response?.data?.data);
-  return { action: "created", writeId: created?.documentId || created?.id || null };
+  return {
+    action: "created",
+    writeId: created?.documentId || created?.id || null,
+  };
 };
 
 const refreshOperationalDashboardStats = async ({ reason = "manual" } = {}) => {
@@ -394,7 +500,10 @@ const refreshOperationalDashboardStats = async ({ reason = "manual" } = {}) => {
     const payload = buildStatsPayload({ rows, fetchMeta: meta, startedAt });
     log("Расчет завершен", {
       matched: payload.meta.matched,
-      unmatchedCount: payload.meta.unmatched.reduce((sum, item) => sum + item.count, 0),
+      unmatchedCount: payload.meta.unmatched.reduce(
+        (sum, item) => sum + item.count,
+        0,
+      ),
       ms: payload.meta.ms,
     });
 
@@ -439,7 +548,10 @@ const startOperationalDashboardStatsScheduler = () => {
 
   refreshTimer = setInterval(() => {
     refreshOperationalDashboardStats({ reason: "interval" }).catch((error) => {
-      log("Ошибка интервального пересчета", error?.response?.data || error?.message);
+      log(
+        "Ошибка интервального пересчета",
+        error?.response?.data || error?.message,
+      );
     });
   }, REFRESH_MS);
 };
