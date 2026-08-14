@@ -88,6 +88,73 @@ const DISPCENTER_BRANCH_BY_NORMALIZED_NAME = new Map(
   ]),
 );
 
+const OREKHOVO_DIRECT_BRANCH = "Орехово-Зуевский";
+const OREKHOVO_DIRECT_PO = "Орехово-Зуево";
+const OREKHOVO_PAVLOVO_BRANCH = "Павлово-Посадский";
+const OREKHOVO_PAVLOVO_PO = "Орехово-Зуевское ПО";
+
+const OREKHOVO_LOOKUP_FIELDS = [
+  "OWN_SCNAME",
+  "SCNAME",
+  "DISPCENTER_NAME_",
+  "SC_PO",
+  "SC_FILIAL",
+  "DISTRICT",
+];
+
+const OREKHOVO_VARIANTS = [
+  "орехово-зуево",
+  "орехово зуево",
+  "ореховозуево",
+  "орехово-зуев",
+  "орехово зуев",
+  "ореховозуев",
+  "орехово-зуевский",
+  "орехово зуевский",
+  "ореховозуевский",
+  "орехово-зуевское",
+  "орехово зуевское",
+  "ореховозуевское",
+];
+
+const PAVLOVO_VARIANTS = [
+  "павлово-посадский",
+  "павлово посадский",
+  "павловопосадский",
+  "павлово-посадское",
+  "павлово посадское",
+  "павловопосадское",
+  "павловский посад",
+  "павловский-посад",
+  "павловскийпосад",
+  "павлово-посад",
+  "павлово посад",
+  "павловопосад",
+];
+
+const compactLookupName = (value) =>
+  normalizeLookupName(value)
+    .replace(/\bг\s*\.\s*о\s*\./g, "го")
+    .replace(/\bг\s*\.\s*/g, "г ")
+    .replace(/[.\s-]+/g, "");
+
+const includesAnyLookupVariant = (value, variants) => {
+  const normalized = normalizeLookupName(value);
+  const compact = compactLookupName(value);
+
+  return variants.some((variant) => {
+    const normalizedVariant = normalizeLookupName(variant);
+    const compactVariant = compactLookupName(variant);
+    return (
+      (normalized && normalized.includes(normalizedVariant)) ||
+      (compact && compact.includes(compactVariant))
+    );
+  });
+};
+
+const rowHasAnyLookupVariant = (row, fields, variants) =>
+  fields.some((field) => includesAnyLookupVariant(pick(row, field), variants));
+
 const createEmptyMonths = () => Array.from({ length: 12 }, () => 0);
 
 let refreshTimer = null;
@@ -180,17 +247,70 @@ const normalizePoName = (value) => {
 };
 
 const getBranchByRow = (row) => {
+  const dispcenter = pick(row, "DISPCENTER_NAME_");
+  const poName = pick(row, "SC_PO") || pick(row, "SCNAME");
+  const hasOrekhovo = rowHasAnyLookupVariant(
+    row,
+    OREKHOVO_LOOKUP_FIELDS,
+    OREKHOVO_VARIANTS,
+  );
+  const hasPavlovo = rowHasAnyLookupVariant(
+    row,
+    OREKHOVO_LOOKUP_FIELDS,
+    PAVLOVO_VARIANTS,
+  );
+
+  if (
+    hasOrekhovo &&
+    (hasPavlovo ||
+      includesAnyLookupVariant(poName, [OREKHOVO_PAVLOVO_PO]) ||
+      includesAnyLookupVariant(dispcenter, ["Орехово-Зуево район"]))
+  ) {
+    return OREKHOVO_PAVLOVO_BRANCH;
+  }
+
+  if (
+    hasOrekhovo &&
+    (includesAnyLookupVariant(dispcenter, [
+      "ОреховоЗуево",
+      "Орехово-Зуево город",
+    ]) ||
+      includesAnyLookupVariant(poName, ["Орехово-Зуевский филиал"]) ||
+      includesAnyLookupVariant(pick(row, "SC_FILIAL"), ["Орехово-Зуевский филиал"]))
+  ) {
+    return OREKHOVO_DIRECT_BRANCH;
+  }
+
   // Для исторического графика 2026 оставляем старую логику:
   // SC_FILIAL появился недавно, поэтому старые ТН иначе выпадают из статистики.
   return (
     DISPCENTER_BRANCH_BY_NORMALIZED_NAME.get(
-      normalizeLookupName(pick(row, "DISPCENTER_NAME_")),
+      normalizeLookupName(dispcenter),
     ) || null
   );
 };
 
-const getPoByRow = (row) =>
-  normalizePoName(pick(row, "SC_PO") || pick(row, "SCNAME"));
+const getPoByRow = (row, branch) => {
+  const poName = pick(row, "SC_PO") || pick(row, "SCNAME");
+  const hasOrekhovo = rowHasAnyLookupVariant(
+    row,
+    OREKHOVO_LOOKUP_FIELDS,
+    OREKHOVO_VARIANTS,
+  );
+
+  if (branch === OREKHOVO_DIRECT_BRANCH && hasOrekhovo) {
+    return OREKHOVO_DIRECT_PO;
+  }
+
+  if (
+    branch === OREKHOVO_PAVLOVO_BRANCH &&
+    (hasOrekhovo || includesAnyLookupVariant(poName, [OREKHOVO_PAVLOVO_PO]))
+  ) {
+    return OREKHOVO_PAVLOVO_PO;
+  }
+
+  return normalizePoName(poName);
+};
 
 const getRowMonthIndex = (row) => {
   const match = String(pick(row, "createDateTime") || "").match(
@@ -351,7 +471,7 @@ const buildStatsPayload = ({ rows, fetchMeta, startedAt }) => {
       monthlyCounts.set(branch, branchMonths);
     }
 
-    const poName = getPoByRow(row);
+    const poName = getPoByRow(row, branch);
     if (poName) {
       const poKey = `${normalizeLookupName(branch)}::${normalizeLookupName(poName)}`;
       const current = poCounts.get(poKey) || {
