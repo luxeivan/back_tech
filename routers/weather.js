@@ -4,6 +4,7 @@ const axios = require("axios");
 const router = express.Router();
 
 const OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast";
+const OPEN_METEO_GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search";
 const DEFAULT_LOCATION = {
   latitude: 55.7558,
   longitude: 37.6173,
@@ -51,6 +52,35 @@ const buildWeatherParts = (hourly = {}) => {
     };
   });
 };
+
+const normalizeGeoText = (value) =>
+  String(value || "")
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/[—–-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const formatGeoLocation = (location = {}) => ({
+  name: location.name,
+  country: location.country,
+  admin1: location.admin1,
+  admin2: location.admin2,
+  latitude: location.latitude,
+  longitude: location.longitude,
+});
+
+const isRussiaGeoLocation = (location = {}) =>
+  normalizeGeoText(location.country) === "россия" ||
+  normalizeGeoText(location.country_code) === "ru";
+
+const isMoscowRegionGeoLocation = (location = {}) => {
+  const admin1 = normalizeGeoText(location.admin1);
+  return isRussiaGeoLocation(location) && admin1.includes("московская") && admin1.includes("область");
+};
+
+const pickRussianWeatherLocation = (locations = []) =>
+  locations.find(isMoscowRegionGeoLocation) || locations.find(isRussiaGeoLocation) || locations[0] || null;
 
 router.get("/current", async (req, res) => {
   const now = Date.now();
@@ -111,6 +141,88 @@ router.get("/current", async (req, res) => {
     return res.status(502).json({
       ok: false,
       source: "open-meteo",
+      message,
+    });
+  }
+});
+
+router.get("/test-by-place", async (req, res) => {
+  const place = String(req.query.place || "").trim();
+  if (!place) {
+    return res.status(400).json({
+      ok: false,
+      message: "Передай название в query-параметре place, например ?place=Клин",
+    });
+  }
+
+  try {
+    const geoResponse = await axios.get(OPEN_METEO_GEOCODING_URL, {
+      params: {
+        name: place,
+        count: 10,
+        language: "ru",
+        format: "json",
+      },
+      timeout: 10000,
+    });
+
+    const locations = Array.isArray(geoResponse?.data?.results) ? geoResponse.data.results : [];
+    const location = pickRussianWeatherLocation(locations);
+
+    if (!location) {
+      return res.status(404).json({
+        ok: false,
+        source: "open-meteo-geocoding",
+        place,
+        message: "Локация не найдена",
+      });
+    }
+
+    const weatherResponse = await axios.get(OPEN_METEO_URL, {
+      params: {
+        latitude: location.latitude,
+        longitude: location.longitude,
+        current: "temperature_2m,relative_humidity_2m,apparent_temperature,wind_speed_10m,cloud_cover,precipitation,weather_code,surface_pressure",
+        hourly: "temperature_2m,weather_code",
+        forecast_days: 1,
+        wind_speed_unit: "ms",
+        timezone: "Europe/Moscow",
+      },
+      timeout: 10000,
+    });
+
+    const current = weatherResponse?.data?.current || {};
+    return res.json({
+      ok: true,
+      test: true,
+      source: "open-meteo-geocoding + open-meteo-forecast",
+      query: place,
+      location: formatGeoLocation(location),
+      candidates: locations.slice(0, 5).map(formatGeoLocation),
+      weather: {
+        updatedAt: current.time || null,
+        temperature: current.temperature_2m,
+        apparentTemperature: current.apparent_temperature,
+        humidity: current.relative_humidity_2m,
+        windSpeed: current.wind_speed_10m,
+        cloudCover: current.cloud_cover,
+        precipitation: current.precipitation,
+        pressure: current.surface_pressure,
+        weatherCode: current.weather_code,
+        parts: buildWeatherParts(weatherResponse?.data?.hourly),
+      },
+    });
+  } catch (error) {
+    const message =
+      error?.response?.data?.reason ||
+      error?.response?.data?.error ||
+      error?.message ||
+      "Не удалось проверить погоду по названию";
+
+    return res.status(502).json({
+      ok: false,
+      source: "open-meteo-geocoding + open-meteo-forecast",
+      place,
       message,
     });
   }
