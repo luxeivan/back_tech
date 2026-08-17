@@ -198,7 +198,6 @@ router.get("/test-by-place", async (req, res) => {
       source: "open-meteo-geocoding + open-meteo-forecast",
       query: place,
       location: formatGeoLocation(location),
-      candidates: locations.slice(0, 5).map(formatGeoLocation),
       weather: {
         updatedAt: current.time || null,
         temperature: current.temperature_2m,
