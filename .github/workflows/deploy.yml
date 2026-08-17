@@ -69,7 +69,7 @@ jobs:
 
             git pull --ff-only origin main
             npm ci
-            pm2 restart 2 --update-env
+            pm2 restart back_tech --update-env
             pm2 status
             echo "[deploy] Готово"
 
