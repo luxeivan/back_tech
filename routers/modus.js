@@ -1071,6 +1071,30 @@ router.put("/", async (req, res) => {
           }
         }
 
+        // ── Auto-delete planned ТН with status "удалена" from Strapi ──
+        if (isPlanned && nextStatus === "удалена") {
+          try {
+            await axios.delete(
+              `${urlStrapi}/api/teh-narusheniyas/${documentId}`,
+              { headers: { Authorization: `Bearer ${jwt}` } }
+            );
+            console.log(`[PUT] ✅ Плановая ТН удалена из Strapi: guid=${mapped.guid} documentId=${documentId}`);
+            broadcast({
+              type: "tn-delete",
+              source: "modus",
+              action: "delete",
+              id: documentId,
+              guid: mapped.guid,
+              timestamp: Date.now(),
+            });
+          } catch (e) {
+            console.error(
+              `[PUT] ❌ Не удалось удалить плановую ТН из Strapi: guid=${mapped.guid} documentId=${documentId}:`,
+              e?.response?.data || e?.message
+            );
+          }
+        }
+
         acc.push({
           success: true,
           index: index + 1,
@@ -1347,6 +1371,33 @@ router.post("/", async (req, res) => {
                 });
               }
               }, 0);
+            }
+          }
+
+          // ── Auto-delete planned ТН with status "удалена" from Strapi ──
+          if (item.BASE_TYPE === 1) {
+            const delStatus = (item.STATUS_NAME || "").toString().trim().toLowerCase();
+            if (delStatus === "удалена") {
+              try {
+                await axios.delete(
+                  `${urlStrapi}/api/teh-narusheniyas/${createdId}`,
+                  { headers: { Authorization: `Bearer ${jwt}` } }
+                );
+                console.log(`[POST] ✅ Плановая ТН удалена из Strapi: guid=${item.guid} documentId=${createdId}`);
+                broadcast({
+                  type: "tn-delete",
+                  source: "modus",
+                  action: "delete",
+                  id: createdId,
+                  guid: item.guid,
+                  timestamp: Date.now(),
+                });
+              } catch (e) {
+                console.error(
+                  `[POST] ❌ Не удалось удалить плановую ТН из Strapi: guid=${item.guid} documentId=${createdId}:`,
+                  e?.response?.data || e?.message
+                );
+              }
             }
           }
           // ─────────────────────────────────────────────────────────────────
