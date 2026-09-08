@@ -121,130 +121,171 @@ function formatVoltage(raw) {
 }
 
 // ===== Core =====
+function formatDateTimeNew(v) {
+  if (!v) return "";
+  const d = new Date(v);
+  if (isNaN(d.getTime())) return s(v);
+  try {
+    const fmt = new Intl.DateTimeFormat("ru-RU", {
+      timeZone: "Europe/Moscow",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    const parts = Object.fromEntries(fmt.formatToParts(d).map(p => [p.type, p.value]));
+    return `${parts.day}.${parts.month}.${parts.year} ${parts.hour}:${parts.minute}`;
+  } catch (_) {
+    const msk = new Date(d.getTime() + 3 * 60 * 60 * 1000);
+    return `${pad2(msk.getUTCDate())}.${pad2(msk.getUTCMonth() + 1)}.${msk.getUTCFullYear()} ${pad2(msk.getUTCHours())}:${pad2(msk.getUTCMinutes())}`;
+  }
+}
+
+const SZO_SHORT = {
+  polyclinic: "поликл.",
+  hospital: "больниц.",
+  school: "школа",
+  kindergarten: "дет.сад",
+  boiler: "котельная",
+  ctp: "ЦТП",
+  kns: "КНС",
+  wells: "ВЗУ",
+  vns: "ВНС",
+};
+
+function buildSzoSummaryNew(raw) {
+  const full = [];
+  const sect = [];
+  const pushType = (arr, key, countRaw) => {
+    const c = num(countRaw);
+    if (!c) return;
+    const short = SZO_SHORT[key];
+    arr.push(c === 1 ? short : `${short} (${c})`);
+  };
+  pushType(full, "polyclinic", raw.CLINICS_ALL);
+  pushType(full, "hospital", raw.HOSPITALS_ALL);
+  pushType(full, "school", raw.SCHOOLS_ALL);
+  pushType(full, "kindergarten", raw.KINDERGARTENS_ALL);
+  pushType(full, "boiler", raw.BOILER_ALL);
+  pushType(full, "ctp", raw.CTP_ALL);
+  pushType(full, "kns", raw.KNS_ALL);
+  pushType(full, "wells", raw.WELLS_ALL);
+  pushType(full, "vns", raw.VNS_ALL);
+  pushType(sect, "polyclinic", raw.CLINICS_SECTION);
+  pushType(sect, "hospital", raw.HOSPITALS_SECTION);
+  pushType(sect, "school", raw.SCHOOLS_SECTION);
+  pushType(sect, "kindergarten", raw.KINDERGARTENS_SECTION);
+  pushType(sect, "boiler", raw.BOILER_SECTION);
+  pushType(sect, "ctp", raw.CTP_SECTION);
+  pushType(sect, "kns", raw.KNS_SECTION);
+  pushType(sect, "wells", raw.WELLS_SECTION);
+  pushType(sect, "vns", raw.VNS_SECTION);
+  const fullStr = full.length ? `${full.length} (${full.join(", ")})` : "0";
+  const sectStr = sect.length ? `${sect.length} (${sect.join(", ")})` : "0";
+  return { fullStr, sectStr };
+}
+
+function tpRpTotalNew(raw) {
+  return num(raw.TP_ALL) + num(raw.RPSN_ALL);
+}
+
+function tpRpSectionTotalNew(raw) {
+  return num(raw.TP_SECTION) + num(raw.RPSN_SECTION);
+}
+
+function stripHousesAndSzo(addressList) {
+  return addressList
+    .split(";")
+    .map((item) => {
+      let t = item.trim();
+      if (!t) return "";
+      t = t.replace(/,?\s*д\.?\s*[\d].*$/i, "");
+      t = t.replace(/,?\s*дом\.?\s*[\d].*$/i, "");
+      t = t.replace(/,\s*$/, "").trim();
+      return t;
+    })
+    .filter((t) => {
+      if (!t) return false;
+      const hasStreet = /(ул\.|улица|пер\.|переулок|ш\.|шоссе|б-р|бульвар|пр\.|проспект|км|мкр|г\.|город)/i.test(t);
+      if (!hasStreet) {
+        const looksLikeOrg = /("|«|»|МУП|ООО|ОАО|АО|ПАО|УП|ФГБУ|ГБУ|МБУ|МКУ|ФКР)/i.test(t);
+        if (looksLikeOrg) return false;
+      }
+      return true;
+    })
+    .join("; ");
+}
+
 function buildAutoDescription(raw = {}) {
-  // 1) Поля по ТЗ заказчика
   const sc = s(raw.SC_PO);
-  // Старый источник ПО до перехода на SC_PO:
-  // const sc = s(raw.SCNAME);
-  const when = formatRusDateTime(raw.F81_060_EVENTDATETIME); // "03:54 20.10.2025"
-  const enobj = s(raw.F81_041_ENERGOOBJECTNAME);
-  const voltText = formatVoltage(s(raw.VOLTAGECLASS)); // пример: "6кВ"
-  const switchName = s(raw.SWITCHDISPNAME || raw.SWITCHNAMEKEY || "");
+  const when = formatDateTimeNew(raw.F81_060_EVENTDATETIME);
   const ownSc = s(raw.SC_FILIAL);
-  // Старый источник филиала до перехода на SC_FILIAL:
-  // const ownSc = s(raw.OWN_SCNAME);
+  const enobj = s(raw.F81_041_ENERGOOBJECTNAME);
+  const voltRaw = s(raw.VOLTAGECLASS);
+  const voltText = formatVoltage(voltRaw);
+  const switchName = s(raw.SWITCHDISPNAME || raw.SWITCHNAMEKEY || "");
   const protect = s(raw.PROTECT_TYPE);
 
-  const tpAll = num(raw.TP_ALL);
-  const rpsnAll = num(raw.RPSN_ALL);
-  const tpSection = num(raw.TP_SECTION);
-  const rpsnSection = num(raw.RPSN_SECTION);
-
-  const mkdAll = num(raw.MKD_ALL);
-  const population = num(raw.POPULATION_COUNT);
-  const abonents = num(raw.POINTALL || raw.ENOBJ_COUNT); // POINTALL по ТЗ, fallback на ENOBJ_COUNT
-
-  // Соц. объекты: имена из SocialObjects (если есть)
-  const names = collectSocialNames(raw.SocialObjects);
-
-  // ПЭС – ожидается, что вызывающий код уже пробросил верхнеуровневые значения
-  const pesCount = num(raw.PES_COUNT);
-  const pesPower = s(raw.PES_POWER);
-
-  const parts = [];
   const q = (x) => {
     const t = s(x);
     return t ? `${t}` : "";
   };
 
-  parts.push(
-    `АО «Мособлэнерго». ${when} ${q(ownSc)} ${q(sc)}. ${q(enobj)} ${q(
-      protect
-    )} КЛ ${voltText} в направлении ${q(switchName)}.`
-      .replace(/\s+/g, " ")
-      .replace(/\s\./g, ".")
-  );
+  const header = [
+    `АО «Мособлэнерго»`,
+    `${when} ${q(ownSc)} ${q(sc)}.`,
+    `${q(enobj)} ${q(protect)} КЛ ${voltText} в направлении ${q(switchName)}.`,
+  ]
+    .join("\n")
+    .replace(/\s+/g, " ")
+    .replace(/\s\./g, ".");
 
-  parts.push(
-    `Без напряжения полностью ${tpAll} ТП, ${rpsnAll} РП, без напряжения по одной секции ${tpSection} ТП, ${rpsnSection} РП (${mkdAll} МКД, ${population} чел., ${abonents} абонентов).`
-  );
+  const tpRpFull = tpRpTotalNew(raw);
+  const tpRpSect = tpRpSectionTotalNew(raw);
+  const mkdAll = num(raw.MKD_ALL);
+  const population = num(raw.POPULATION_COUNT);
+  const abonents = num(raw.POINTALL || raw.ENOBJ_COUNT);
 
-  const fullCounts = [
-    fmtCountDeclOnly(raw.CLINICS_ALL, SZO_FORMS.polyclinic),
-    fmtCountDeclOnly(raw.HOSPITALS_ALL, SZO_FORMS.hospital),
-    fmtCountDeclOnly(raw.SCHOOLS_ALL, SZO_FORMS.school),
-    fmtCountDeclOnly(raw.KINDERGARTENS_ALL, SZO_FORMS.kindergarten),
-    fmtCountDeclOnly(raw.BOILER_ALL, SZO_FORMS.boiler),
-    fmtCountDeclOnly(raw.CTP_ALL, SZO_FORMS.ctp),
-    fmtCountDeclOnly(raw.KNS_ALL, SZO_FORMS.kns),
-    fmtCountDeclOnly(raw.WELLS_ALL, SZO_FORMS.wells),
-    fmtCountDeclOnly(raw.VNS_ALL, SZO_FORMS.vns),
-  ].filter(Boolean);
-  const sectCounts = [
-    fmtCountDeclOnly(raw.CLINICS_SECTION, SZO_FORMS.polyclinic),
-    fmtCountDeclOnly(raw.HOSPITALS_SECTION, SZO_FORMS.hospital),
-    fmtCountDeclOnly(raw.SCHOOLS_SECTION, SZO_FORMS.school),
-    fmtCountDeclOnly(raw.KINDERGARTENS_SECTION, SZO_FORMS.kindergarten),
-    fmtCountDeclOnly(raw.BOILER_SECTION, SZO_FORMS.boiler),
-    fmtCountDeclOnly(raw.CTP_SECTION, SZO_FORMS.ctp),
-    fmtCountDeclOnly(raw.KNS_SECTION, SZO_FORMS.kns),
-    fmtCountDeclOnly(raw.WELLS_SECTION, SZO_FORMS.wells),
-    fmtCountDeclOnly(raw.VNS_SECTION, SZO_FORMS.vns),
+  const { fullStr, sectStr } = buildSzoSummaryNew(raw);
+
+  const outageLines = [
+    "Без напряжения:",
+    `ТП, РП полностью: ${tpRpFull}`,
+    `ТП, РП по одной секции: ${tpRpSect}`,
+    `МКД: ${mkdAll}`,
+    `Чел: ${population}`,
+    `Абонентов: ${abonents}`,
+    `СЗО полностью: ${fullStr}`,
+    sectStr !== "0" ? `СЗО по одной секции: ${sectStr}` : null,
   ].filter(Boolean);
 
-  if (fullCounts.length) {
-    parts.push(`СЗО: полностью без напряжения ${fullCounts.join(", ")}.`);
-  }
-  if (sectCounts.length) {
-    parts.push(`Отключены по одной секции ${sectCounts.join(", ")}.`);
-  }
-
-  // --- Списки СЗО по именам, построчно ---
-  const sections = [];
-  const addSection = (title, arr) => {
-    const list = Array.isArray(arr) ? arr.filter(Boolean) : [];
-    if (list.length) {
-      sections.push(`${title}:\n${list.map((n) => `«${s(n)}»`).join("\n")}`);
+  const addressList = s(raw.ADDRESS_LIST);
+  if (addressList) {
+    const streetsOnly = stripHousesAndSzo(addressList);
+    if (streetsOnly) {
+      outageLines.push(`Адреса отключенных объектов: ${streetsOnly}`);
     }
-  };
-  addSection("Поликлиники", names.polyclinic);
-  addSection("Больницы", names.hospital);
-  addSection("Школы", names.school);
-  addSection("Детские сады", names.kindergarten);
-  addSection("Котельные", names.boiler);
-  addSection("ЦТП", names.ctp);
-  addSection("КНС", names.kns);
-  addSection("ВЗУ", names.wells);
-  addSection("ВНС", names.vns);
+  }
 
+  const pesCount = num(raw.PES_COUNT);
+  const pesPower = s(raw.PES_POWER);
   const brigadeCount = num(raw.BRIGADECOUNT);
   const employeeCount = num(raw.EMPLOYEECOUNT);
-  const tail = [];
-  tail.push(
-    `Направлена ${pesCount} ПЭС${pesPower ? ` ${pesPower} кВт` : ""} филиала.`
-  );
-  if (brigadeCount || employeeCount) {
-    tail.push(
-      `Задействована ${brigadeCount} ${dec(brigadeCount, [
-        "бригада",
-        "бригады",
-        "бригад",
-      ])}, ${employeeCount} ${dec(employeeCount, [
-        "человек",
-        "человека",
-        "человек",
-      ])}.`
-    );
-  }
-  tail.push("Прогнозируемое время включения 2 часа.");
 
-  return [
-    parts.filter(Boolean).join(" "),
-    sections.join("\n\n"),
-    tail.join(" "),
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  const pesLine = pesCount
+    ? `Направлено ПЭС: да (${pesCount} шт., ${pesPower ? `${pesPower} кВт` : "мощность не указана"})`
+    : "Направлено ПЭС: нет";
+
+  const brigadeLine =
+    brigadeCount || employeeCount
+      ? `Задействовано: ${brigadeCount} ${dec(brigadeCount, ["бригада", "бригады", "бригад"])}, ${employeeCount} ${dec(employeeCount, ["человек", "человека", "человек"])}.`
+      : "Задействовано: —";
+
+  const tail = [pesLine, brigadeLine].join("\n");
+
+  return [header, outageLines.join("\n"), tail].filter(Boolean).join("\n\n");
 }
 
 module.exports = { buildAutoDescription };

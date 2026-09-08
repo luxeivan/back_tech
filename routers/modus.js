@@ -665,6 +665,14 @@ router.put("/", async (req, res) => {
 
           const currentDesc = currentAttrs?.description ?? "";
 
+          // Сохраняем оригинальное описание MODUS для "Исходник"
+          const rawModusDesc = String(mergedRaw?.description ?? "").trim();
+          const currentRawDesc = currentAttrs?.raw_description ?? "";
+          if (rawModusDesc && isEmptyDesc(currentRawDesc)) {
+            patch = patch || {};
+            patch.raw_description = rawModusDesc;
+          }
+
           // Если описание пустое — генерим автоописание. Если дежурный редактировал — не трогаем.
           if (isEmptyDesc(currentDesc)) {
             const nextAuto = buildAutoDescription({
@@ -1175,6 +1183,11 @@ router.post("/", async (req, res) => {
 
           // Build payload with auto-description on create
           const payload = { ...item };
+          // Сохраняем оригинальное описание MODUS для кнопки "Исходник"
+          const originalModusDesc = String(item.description ?? "").trim();
+          if (originalModusDesc) {
+            payload.raw_description = originalModusDesc;
+          }
           try {
             const autoDesc = buildAutoDescription({
               ...(item?.data || {}),
