@@ -322,6 +322,76 @@ const getRowMonthIndex = (row) => {
     : null;
 };
 
+const normalizeDistrictKey = (value) =>
+  normalizeLookupName(value)
+    .replace(/\bг\s*\.\s*о\s*\./g, "го")
+    .replace(/\bгородской\s+округ\s*/g, "")
+    .replace(/\bмуниципальный\s+округ\s*/g, "")
+    .replace(/\bгород\s*/g, "")
+    .replace(/\bокруг\s*/g, "")
+    .replace(/\bрайон\s*/g, "")
+    .replace(/[.\s-]+/g, " ")
+    .trim();
+
+const fetchTopologyDistrictToPoMap = async (client) => {
+  const map = new Map();
+
+  try {
+    const response = await requestWithRetry(
+      () =>
+        client.get("/api/tn-pos", {
+          params: {
+            "pagination[pageSize]": 200,
+            "filters[is_active][$eq]": true,
+            "populate[tn_okruga]": "*",
+          },
+        }),
+      "загрузка топологии ПО→округа",
+    );
+
+    const poRows = Array.isArray(response?.data?.data)
+      ? response.data.data.map(mapItem)
+      : [];
+
+    poRows.forEach((poRow) => {
+      const poName = poRow?.name;
+      if (!poName) return;
+      const okruga = Array.isArray(poRow?.tn_okruga) ? poRow.tn_okruga : [];
+      okruga.forEach((okrugRow) => {
+        const okrugName = okrugRow?.name || okrugRow?.source_name || "";
+        if (!okrugName) return;
+        const key = normalizeDistrictKey(okrugName);
+        if (key && !map.has(key)) {
+          map.set(key, poName);
+        }
+      });
+    });
+
+    log(`Топология загружена: ${map.size} округ→ПО связей`);
+  } catch (error) {
+    log("Ошибка загрузки топологии, работаем без override SC_PO", error?.message);
+  }
+
+  return map;
+};
+
+const resolvePoFromTopology = (row, branch, districtToPoMap) => {
+  if (!districtToPoMap?.size) return null;
+
+  const districtName = pick(row, "DISTRICT");
+  const districtKey = normalizeDistrictKey(districtName);
+  if (!districtKey) return null;
+
+  const topologyPoName = districtToPoMap.get(districtKey);
+  if (!topologyPoName) return null;
+
+  const rawPoName = pick(row, "SC_PO") || pick(row, "SCNAME");
+  if (normalizeLookupName(rawPoName) === normalizeLookupName(topologyPoName)) return null;
+
+  log(`Override SC_PO: "${rawPoName}" → "${topologyPoName}" (округ: "${districtName}")`);
+  return topologyPoName;
+};
+
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const runLimited = async (tasks, limit = FETCH_CONCURRENCY) => {
@@ -442,7 +512,7 @@ const fetchAllCurrentYearRows = async (client) => {
   };
 };
 
-const buildStatsPayload = ({ rows, fetchMeta, startedAt }) => {
+const buildStatsPayload = ({ rows, fetchMeta, startedAt, districtToPoMap = null }) => {
   const period = getOperationalStatsPeriod();
   const counts = new Map(BRANCHES.map((branch) => [branch, 0]));
   const monthlyCounts = new Map(
@@ -471,7 +541,9 @@ const buildStatsPayload = ({ rows, fetchMeta, startedAt }) => {
       monthlyCounts.set(branch, branchMonths);
     }
 
-    const poName = getPoByRow(row, branch);
+    let poName = getPoByRow(row, branch);
+    const topologyOverride = resolvePoFromTopology(row, branch, districtToPoMap);
+    if (topologyOverride) poName = topologyOverride;
     if (poName) {
       const poKey = `${normalizeLookupName(branch)}::${normalizeLookupName(poName)}`;
       const current = poCounts.get(poKey) || {
@@ -617,7 +689,8 @@ const refreshOperationalDashboardStats = async ({ reason = "manual" } = {}) => {
     const { rows, meta } = await fetchAllCurrentYearRows(client);
     log(`Загрузка завершена: строк ${rows.length}, meta.total=${meta.total}`);
 
-    const payload = buildStatsPayload({ rows, fetchMeta: meta, startedAt });
+    const districtToPoMap = await fetchTopologyDistrictToPoMap(client);
+    const payload = buildStatsPayload({ rows, fetchMeta: meta, startedAt, districtToPoMap });
     log("Расчет завершен", {
       matched: payload.meta.matched,
       unmatchedCount: payload.meta.unmatched.reduce(
