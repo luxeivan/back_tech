@@ -178,6 +178,51 @@ function toDateEDDS(v, withTime = false) {
   }
 }
 
+function toDateEDDSPlus2h(v, withTime = false) {
+  if (!v) return null;
+  const d = parseDateInput(v);
+  if (!d) return null;
+  d.setHours(d.getHours() + 2);
+
+  try {
+    if (withTime) {
+      const s = d
+        .toLocaleString("ru-RU", {
+          timeZone: "Europe/Moscow",
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false,
+        })
+        .replace(",", "");
+      const [datePart, timePart] = s.split(" ");
+      const [dd, mm, yyyy] = datePart.split(".");
+      return `${yyyy}-${mm}-${dd} ${timePart}`;
+    } else {
+      const s = d.toLocaleDateString("ru-RU", {
+        timeZone: "Europe/Moscow",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      });
+      const [dd, mm, yyyy] = s.split(".");
+      return `${yyyy}-${mm}-${dd}`;
+    }
+  } catch {
+    const yyyy = d.getFullYear();
+    const mm = pad2(d.getMonth() + 1);
+    const dd = pad2(d.getDate());
+    if (!withTime) return `${yyyy}-${mm}-${dd}`;
+    const HH = pad2(d.getHours());
+    const MM = pad2(d.getMinutes());
+    const SS = pad2(d.getSeconds());
+    return `${yyyy}-${mm}-${dd} ${HH}:${MM}:${SS}`;
+  }
+}
+
 function clean(v) {
   if (v === "—" || v === undefined || v === null || v === "") return null;
   return String(v);
@@ -222,7 +267,7 @@ function buildEddsPayload(tnLike) {
   const timeCreate = toDateEDDS(raw.F81_060_EVENTDATETIME || obj.createDateTime, true) || null;
 
   const planDateClose =
-    toDateEDDS(raw.F81_070_RESTOR_SUPPLAYDATETIME || obj.recoveryPlanDateTime, true) || null;
+    toDateEDDSPlus2h(raw.REPAIRDATETIME || raw.F81_070_RESTOR_SUPPLAYDATETIME || obj.recoveryPlanDateTime, true) || null;
 
   const districtName = raw.DISTRICT || raw.SCNAME || obj.district || obj.dispCenter || null;
   const districtId = DISTRICT_MAP[districtName] || null;

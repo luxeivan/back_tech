@@ -97,7 +97,7 @@ function buildRegistryItem(tn, idx = 1) {
 
   const dateOff = toIsoT(raw.F81_060_EVENTDATETIME || obj.createDateTime);
   const datePlan = toIsoT(
-    raw.F81_070_RESTOR_SUPPLAYDATETIME || obj.recoveryPlanDateTime
+    raw.REPAIRDATETIME || raw.F81_070_RESTOR_SUPPLAYDATETIME || obj.recoveryPlanDateTime
   );
   const dateFact = toIsoT(
     raw.F81_290_RECOVERYDATETIME || obj.recoveryFactDateTime || obj.recoveryDateTime

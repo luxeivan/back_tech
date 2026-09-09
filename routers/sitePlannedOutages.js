@@ -219,7 +219,7 @@ function mapPlannedItem(item) {
   const districtName = firstNonEmpty(raw?.DISTRICT, item?.dispCenter, raw?.DISPCENTER_NAME_);
   const districtCenter = getDistrictCenter(districtName);
   const begin = firstNonEmpty(raw?.F81_060_EVENTDATETIME, item?.createDateTime);
-  const end = firstNonEmpty(raw?.F81_070_RESTOR_SUPPLAYDATETIME, item?.recoveryPlanDateTime);
+  const end = firstNonEmpty(raw?.REPAIRDATETIME, raw?.F81_070_RESTOR_SUPPLAYDATETIME, item?.recoveryPlanDateTime);
   const address = firstNonEmpty(raw?.ADDRESS_LIST, item?.addressList, raw?.HOUSE_LIST, districtName);
   const comment = firstNonEmpty(raw?.BRIGADE_ACTION, raw?.DESCRIPTION, item?.description);
   const objectName = firstNonEmpty(raw?.F81_041_ENERGOOBJECTNAME, item?.energoObject);
@@ -281,7 +281,7 @@ function getPlannedItemDateRange(item) {
   const raw = pickRaw(item);
   return {
     begin: firstNonEmpty(raw?.F81_060_EVENTDATETIME, item?.createDateTime),
-    end: firstNonEmpty(raw?.F81_070_RESTOR_SUPPLAYDATETIME, item?.recoveryPlanDateTime),
+    end: firstNonEmpty(raw?.REPAIRDATETIME, raw?.F81_070_RESTOR_SUPPLAYDATETIME, item?.recoveryPlanDateTime),
   };
 }
 
