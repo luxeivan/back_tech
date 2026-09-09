@@ -343,7 +343,8 @@ const fetchTopologyDistrictToPoMap = async (client) => {
           params: {
             "pagination[pageSize]": 200,
             "filters[is_active][$eq]": true,
-            "populate[tn_okruga]": "*",
+            "populate[tn_okruga][fields][0]": "name",
+            "populate[tn_okruga][fields][1]": "id",
           },
         }),
       "загрузка топологии ПО→округа",
