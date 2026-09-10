@@ -8,7 +8,7 @@ const STRAPI_URL = process.env.URL_STRAPI;
 const STRAPI_LOGIN = process.env.LOGIN_STRAPI;
 const STRAPI_PASSWORD = process.env.PASSWORD_STRAPI;
 const PLANNED_STATUSES = ["запланировано", "начата"];
-const HISTORY_STATUSES = ["запланировано", "начата", "завершено", "отменено"];
+const HISTORY_STATUSES = ["запланировано", "начата", "закрыта", "отменена", "удалена"];
 const MOSCOW_TZ_OFFSET = "+03:00";
 const JWT_CACHE_MS = 10 * 60 * 1000;
 const RESPONSE_CACHE_MS = 5 * 60 * 1000;
@@ -316,16 +316,18 @@ async function fetchPlannedRowsForRange(startIso, endIso, includeHistory = false
 
   const statuses = includeHistory ? HISTORY_STATUSES : PLANNED_STATUSES;
 
+  const statusFilters = {};
+  statuses.forEach((status, i) => {
+    statusFilters[`filters[$and][3][$or][${i}][STATUS_NAME][$eqi]`] = status;
+  });
+
   return fetchAllStrapi(client, "/api/teh-narusheniyas", {
     "pagination[pageSize]": 100,
     "sort[0]": "createDateTime:ASC",
     "filters[$and][0][BASE_TYPE][$eq]": 1,
     "filters[$and][1][createDateTime][$lte]": endIso,
     "filters[$and][2][recoveryPlanDateTime][$gte]": startIso,
-    "filters[$and][3][$or][0][STATUS_NAME][$eqi]": statuses[0],
-    "filters[$and][3][$or][1][STATUS_NAME][$eqi]": statuses[1],
-    ...(statuses[2] ? { "filters[$and][3][$or][2][STATUS_NAME][$eqi]": statuses[2] } : {}),
-    ...(statuses[3] ? { "filters[$and][3][$or][3][STATUS_NAME][$eqi]": statuses[3] } : {}),
+    ...statusFilters,
   });
 }
 
