@@ -8,6 +8,7 @@ const STRAPI_URL = process.env.URL_STRAPI;
 const STRAPI_LOGIN = process.env.LOGIN_STRAPI;
 const STRAPI_PASSWORD = process.env.PASSWORD_STRAPI;
 const PLANNED_STATUSES = ["запланировано", "начата"];
+const HISTORY_STATUSES = ["запланировано", "начата", "завершено", "отменено"];
 const MOSCOW_TZ_OFFSET = "+03:00";
 const JWT_CACHE_MS = 10 * 60 * 1000;
 const RESPONSE_CACHE_MS = 5 * 60 * 1000;
@@ -305,7 +306,7 @@ function getPlannedDays(rows, monthInfo) {
   return days;
 }
 
-async function fetchPlannedRowsForRange(startIso, endIso) {
+async function fetchPlannedRowsForRange(startIso, endIso, includeHistory = false) {
   const jwt = await getJwt();
   const client = axios.create({
     baseURL: STRAPI_URL,
@@ -313,21 +314,27 @@ async function fetchPlannedRowsForRange(startIso, endIso) {
     headers: { Authorization: `Bearer ${jwt}` },
   });
 
+  const statuses = includeHistory ? HISTORY_STATUSES : PLANNED_STATUSES;
+
   return fetchAllStrapi(client, "/api/teh-narusheniyas", {
     "pagination[pageSize]": 100,
     "sort[0]": "createDateTime:ASC",
     "filters[$and][0][BASE_TYPE][$eq]": 1,
     "filters[$and][1][createDateTime][$lte]": endIso,
     "filters[$and][2][recoveryPlanDateTime][$gte]": startIso,
-    "filters[$and][3][$or][0][STATUS_NAME][$eqi]": PLANNED_STATUSES[0],
-    "filters[$and][3][$or][1][STATUS_NAME][$eqi]": PLANNED_STATUSES[1],
+    "filters[$and][3][$or][0][STATUS_NAME][$eqi]": statuses[0],
+    "filters[$and][3][$or][1][STATUS_NAME][$eqi]": statuses[1],
+    ...(statuses[2] ? { "filters[$and][3][$or][2][STATUS_NAME][$eqi]": statuses[2] } : {}),
+    ...(statuses[3] ? { "filters[$and][3][$or][3][STATUS_NAME][$eqi]": statuses[3] } : {}),
   });
 }
 
 router.get("/days", async (req, res) => {
   try {
     const monthInfo = parseMonthParam(req.query.month);
-    const cached = daysResponseCache.get(monthInfo.month);
+    const includeHistory = req.query.includeHistory === "true";
+    const cacheKey = includeHistory ? `${monthInfo.month}:history` : monthInfo.month;
+    const cached = daysResponseCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
       return res.json({
         ...cached.payload,
@@ -338,7 +345,7 @@ router.get("/days", async (req, res) => {
       });
     }
 
-    const rows = await fetchPlannedRowsForRange(monthInfo.startIso, monthInfo.endIso);
+    const rows = await fetchPlannedRowsForRange(monthInfo.startIso, monthInfo.endIso, includeHistory);
     const days = getPlannedDays(rows, monthInfo);
     const payload = {
       data: days,
@@ -350,7 +357,7 @@ router.get("/days", async (req, res) => {
       },
     };
 
-    daysResponseCache.set(monthInfo.month, {
+    daysResponseCache.set(cacheKey, {
       expiresAt: Date.now() + RESPONSE_CACHE_MS,
       payload,
     });
@@ -372,7 +379,9 @@ router.get("/days", async (req, res) => {
 router.get("/", async (req, res) => {
   try {
     const { day, startIso, endIso } = parseDateParam(req.query.date);
-    const cached = responseCache.get(day);
+    const includeHistory = req.query.includeHistory === "true";
+    const cacheKey = includeHistory ? `${day}:history` : day;
+    const cached = responseCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
       return res.json({
         ...cached.payload,
@@ -383,7 +392,7 @@ router.get("/", async (req, res) => {
       });
     }
 
-    const rows = await fetchPlannedRowsForRange(startIso, endIso);
+    const rows = await fetchPlannedRowsForRange(startIso, endIso, includeHistory);
     const data = rows.map(mapPlannedItem);
 
     const payload = {
@@ -395,7 +404,7 @@ router.get("/", async (req, res) => {
         cached: false,
       },
     };
-    responseCache.set(day, {
+    responseCache.set(cacheKey, {
       expiresAt: Date.now() + RESPONSE_CACHE_MS,
       payload,
     });
