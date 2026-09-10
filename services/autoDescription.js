@@ -158,32 +158,35 @@ const SZO_SHORT = {
 function buildSzoSummaryNew(raw) {
   const full = [];
   const sect = [];
-  const pushType = (arr, key, countRaw) => {
+  let fullTotal = 0;
+  let sectTotal = 0;
+  const pushType = (arr, key, countRaw, addCount) => {
     const c = num(countRaw);
     if (!c) return;
     const short = SZO_SHORT[key];
     arr.push(c === 1 ? short : `${short} (${c})`);
+    addCount(c);
   };
-  pushType(full, "polyclinic", raw.CLINICS_ALL);
-  pushType(full, "hospital", raw.HOSPITALS_ALL);
-  pushType(full, "school", raw.SCHOOLS_ALL);
-  pushType(full, "kindergarten", raw.KINDERGARTENS_ALL);
-  pushType(full, "boiler", raw.BOILER_ALL);
-  pushType(full, "ctp", raw.CTP_ALL);
-  pushType(full, "kns", raw.KNS_ALL);
-  pushType(full, "wells", raw.WELLS_ALL);
-  pushType(full, "vns", raw.VNS_ALL);
-  pushType(sect, "polyclinic", raw.CLINICS_SECTION);
-  pushType(sect, "hospital", raw.HOSPITALS_SECTION);
-  pushType(sect, "school", raw.SCHOOLS_SECTION);
-  pushType(sect, "kindergarten", raw.KINDERGARTENS_SECTION);
-  pushType(sect, "boiler", raw.BOILER_SECTION);
-  pushType(sect, "ctp", raw.CTP_SECTION);
-  pushType(sect, "kns", raw.KNS_SECTION);
-  pushType(sect, "wells", raw.WELLS_SECTION);
-  pushType(sect, "vns", raw.VNS_SECTION);
-  const fullStr = full.length ? `${full.length} (${full.join(", ")})` : "0";
-  const sectStr = sect.length ? `${sect.length} (${sect.join(", ")})` : "0";
+  pushType(full, "polyclinic", raw.CLINICS_ALL, (c) => { fullTotal += c; });
+  pushType(full, "hospital", raw.HOSPITALS_ALL, (c) => { fullTotal += c; });
+  pushType(full, "school", raw.SCHOOLS_ALL, (c) => { fullTotal += c; });
+  pushType(full, "kindergarten", raw.KINDERGARTENS_ALL, (c) => { fullTotal += c; });
+  pushType(full, "boiler", raw.BOILER_ALL, (c) => { fullTotal += c; });
+  pushType(full, "ctp", raw.CTP_ALL, (c) => { fullTotal += c; });
+  pushType(full, "kns", raw.KNS_ALL, (c) => { fullTotal += c; });
+  pushType(full, "wells", raw.WELLS_ALL, (c) => { fullTotal += c; });
+  pushType(full, "vns", raw.VNS_ALL, (c) => { fullTotal += c; });
+  pushType(sect, "polyclinic", raw.CLINICS_SECTION, (c) => { sectTotal += c; });
+  pushType(sect, "hospital", raw.HOSPITALS_SECTION, (c) => { sectTotal += c; });
+  pushType(sect, "school", raw.SCHOOLS_SECTION, (c) => { sectTotal += c; });
+  pushType(sect, "kindergarten", raw.KINDERGARTENS_SECTION, (c) => { sectTotal += c; });
+  pushType(sect, "boiler", raw.BOILER_SECTION, (c) => { sectTotal += c; });
+  pushType(sect, "ctp", raw.CTP_SECTION, (c) => { sectTotal += c; });
+  pushType(sect, "kns", raw.KNS_SECTION, (c) => { sectTotal += c; });
+  pushType(sect, "wells", raw.WELLS_SECTION, (c) => { sectTotal += c; });
+  pushType(sect, "vns", raw.VNS_SECTION, (c) => { sectTotal += c; });
+  const fullStr = fullTotal ? `${fullTotal} (${full.join(", ")})` : "0";
+  const sectStr = sectTotal ? `${sectTotal} (${sect.join(", ")})` : "0";
   return { fullStr, sectStr };
 }
 
