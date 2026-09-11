@@ -326,7 +326,8 @@ async function fetchPlannedRowsForRange(startIso, endIso, includeHistory = false
     "sort[0]": "createDateTime:ASC",
     "filters[$and][0][BASE_TYPE][$eq]": 1,
     "filters[$and][1][createDateTime][$lte]": endIso,
-    "filters[$and][2][recoveryPlanDateTime][$gte]": startIso,
+    "filters[$and][2][$or][0][recoveryPlanDateTime][$gte]": startIso,
+    "filters[$and][2][$or][1][factRestoreDateTime][$gte]": startIso,
     ...statusFilters,
   });
 }
