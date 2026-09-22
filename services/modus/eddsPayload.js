@@ -267,7 +267,7 @@ function buildEddsPayload(tnLike) {
   const timeCreate = toDateEDDS(raw.F81_060_EVENTDATETIME || obj.createDateTime, true) || null;
 
   const planDateClose =
-    toDateEDDSPlus2h(raw.REPAIRDATETIME || raw.F81_070_RESTOR_SUPPLAYDATETIME || obj.recoveryPlanDateTime, true) || null;
+    toDateEDDS(raw.REPAIRDATETIME || raw.F81_070_RESTOR_SUPPLAYDATETIME || obj.recoveryPlanDateTime, true) || null;
 
   const districtName = raw.DISTRICT || raw.SCNAME || obj.district || obj.dispCenter || null;
   const districtId = DISTRICT_MAP[districtName] || null;

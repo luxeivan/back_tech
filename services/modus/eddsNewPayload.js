@@ -332,7 +332,7 @@ function buildCommentText(raw) {
     formatMskDateTime(raw?.STARTDATETIME || raw?.F81_060_EVENTDATETIME) ||
     "дата не указана";
   const planAt =
-    formatMskDateTimePlus2h(raw?.REPAIRDATETIME) ||
+    formatMskDateTime(raw?.REPAIRDATETIME) ||
     "дата не указана";
   const workDescription =
     clean(raw?.F81_042_DISPNAME) || "Описание работ не указано";
@@ -442,12 +442,12 @@ function buildEddsNewPayload(item) {
     console.warn("[EDDS] shutdownInfo.disabledAt пустой — EDDS отклонит если обязательно");
   }
 
-  const plannedInclusionAt = toIsoPlus2h(raw?.REPAIRDATETIME || mapped?.repairDateTime);
+  const plannedInclusionAt = toIso(raw?.REPAIRDATETIME || mapped?.repairDateTime);
   if (!plannedInclusionAt) {
     console.warn("[EDDS] shutdownInfo.plannedInclusionAt пустой — EDDS отклонит если обязательно");
   }
 
-  const planDateClose = toDateEDDSPlus2h(raw?.REPAIRDATETIME || mapped?.repairDateTime, true);
+  const planDateClose = toDateEDDS(raw?.REPAIRDATETIME || mapped?.repairDateTime, true);
 
   const peopleCount = toInt(raw?.POPULATION_COUNT);
   const placesCount = toInt(raw?.SETTLEMENT_COUNT);
