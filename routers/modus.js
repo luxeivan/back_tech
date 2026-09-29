@@ -206,6 +206,52 @@ function logEddsV2AsyncError(prefix, e) {
   console.error(prefix, e?.stack || e?.code || e?.message || e);
 }
 
+// ── Поэтапное логирование (Этап N — Название) ───────────────────────────────
+function createStageLogger(prefix, sharedStages) {
+  const stages = sharedStages || [];
+  return {
+    start(num, name) {
+      const stage = { num, name, status: "pending", error: null };
+      stages.push(stage);
+      console.log(`[${prefix}] Этап ${num} — ${name}...`);
+      return stage;
+    },
+    success(stage, detail) {
+      stage.status = "success";
+      console.log(`[${prefix}] Этап ${stage.num} — ${stage.name} ✓${detail ? " " + detail : ""}`);
+    },
+    fail(stage, error) {
+      stage.status = "error";
+      stage.error = String(error || "неизвестная ошибка");
+      console.error(`[${prefix}] Этап ${stage.num} — ${stage.name} ✗ ${stage.error}`);
+    },
+    skip(stage, reason) {
+      stage.status = "skipped";
+      console.log(`[${prefix}] Этап ${stage.num} — ${stage.name} ⊘ ${reason || "пропущен"}`);
+    },
+    summary() {
+      const line = "═".repeat(60);
+      console.log(`\n${line}`);
+      console.log(`  ИТОГ [${prefix}]`);
+      console.log(line);
+      for (const s of stages) {
+        const icon = s.status === "success" ? "✓" : s.status === "error" ? "✗" : s.status === "skipped" ? "⊘" : "…";
+        const tail = s.error ? ` — ${s.error}` : "";
+        const msg = `  Этап ${s.num} — ${s.name} ${icon}${tail}`;
+        if (s.status === "error") console.error(msg);
+        else console.log(msg);
+      }
+      const errors = stages.filter((s) => s.status === "error");
+      if (errors.length) {
+        console.error(`  ⚠ ОШИБКА: ${errors.map((e) => `Этап ${e.num} (${e.name})`).join(", ")}`);
+      } else {
+        console.log(`  ✅ Все этапы пройдены`);
+      }
+      console.log(`${line}\n`);
+    },
+  };
+}
+
 function writeEddsV2AsyncErrorJournal({ guid, tnNumber, target, e }) {
   const message = e?.message || e?.code || "Ошибка до ответа ЕДДС v2";
   return writeEdsJournal({
@@ -482,19 +528,31 @@ const isFinalStatus = (s) =>
   ["закрыта", "запитана", "удалена"].includes(norm(s));
 
 router.put("/", async (req, res) => {
+  const sharedStages = [];
+  const slog = createStageLogger("PUT", sharedStages);
   try {
+    // Этап 1 — Авторизация
+    const st1 = slog.start(1, "Авторизация (Bearer SECRET_FOR_MODUS)");
     if (!isAuthorized(req)) {
+      slog.fail(st1, "Неверный или отсутствующий токен");
+      slog.summary();
       return res.status(403).json({ status: "Forbidden" });
     }
+    slog.success(st1);
 
+    // Этап 2 — Валидация тела запроса
+    const st2 = slog.start(2, "Валидация тела запроса (Data/data массив)");
     const items = req.body.data || req.body.Data;
     if (!items || !Array.isArray(items) || items.length === 0) {
+      slog.fail(st2, "Не хватает требуемых данных (ожидается Data или data: массив)");
+      slog.summary();
       return res.status(400).json({
         status: "error",
         message:
           "Не хватает требуемых данных (ожидается Data или data: массив)",
       });
     }
+    slog.success(st2, `получено элементов: ${items.length}`);
 
     const mapItem = (item) => {
       const status = (item.STATUS_NAME || "").toString().trim().toLowerCase();
@@ -537,19 +595,32 @@ router.put("/", async (req, res) => {
       return patch;
     };
 
+    // Этап 3 — Strapi JWT
+    const st3 = slog.start(3, "Авторизация в Strapi (JWT)");
     const jwt = await getJwt();
     if (!jwt) {
+      slog.fail(st3, "Не удалось авторизоваться в Strapi");
+      slog.summary();
       return res.status(500).json({
         status: "error",
         message: "Не удалось авторизоваться в Strapi",
       });
     }
+    slog.success(st3);
 
     const fiasSet = new Set();
+    let itemCounter = 0;
 
     const results = await items.reduce(async (prevPromise, rawItem, index) => {
       const acc = await prevPromise;
+      itemCounter++;
+      const islg = createStageLogger(`PUT[${index + 1}]`, sharedStages);
+
+      // Этап 4 — Маппинг полей МОДУС → внутренняя форма
+      const st4 = islg.start(4, "Маппинг полей МОДУС → внутренняя форма");
       const mapped = mapItem(rawItem);
+      islg.success(st4, `guid=${mapped.guid || "нет"}`);
+
       try {
         const fiasCodes = extractFiasList(rawItem);
         fiasCodes.forEach((id) => fiasSet.add(id));
@@ -561,6 +632,7 @@ router.put("/", async (req, res) => {
       }
 
       if (!mapped.guid) {
+        islg.fail(islg.start(5, "Проверка GUID"), "Не передан GUID записи");
         acc.push({
           success: false,
           index: index + 1,
@@ -570,6 +642,8 @@ router.put("/", async (req, res) => {
       }
 
       try {
+        // Этап 5 — Поиск записи в Strapi + расчёт веток
+        const st5 = islg.start(5, "Поиск записи в Strapi + расчёт веток");
         const search = await axios.get(`${urlStrapi}/api/teh-narusheniyas`, {
           headers: { Authorization: `Bearer ${jwt}` },
           params: {
@@ -616,9 +690,10 @@ router.put("/", async (req, res) => {
           prevStatus === "удалена" &&
           nextIsPlannedCreateOrUpdateStatus;
 
-        console.log(`[PUT] guid=${mapped.guid} baseType=${nextBaseType} isPlanned=${isPlanned} needEddsPlanned=${needEddsPlanned} needEddsDelete=${needEddsDelete} statusChanged=${statusChanged} prev=${prevStatus} next=${nextStatus}`);
+        islg.success(st5, `documentId=${documentId || "не найден"} baseType=${nextBaseType} statusChanged=${statusChanged} needEdds=${needEdds} needEddsPlanned=${needEddsPlanned} needEddsDelete=${needEddsDelete} needEddsRestore=${needEddsRestore}`);
 
         if (!documentId) {
+          islg.fail(st5, "Запись с таким GUID не найдена");
           acc.push({
             success: false,
             index: index + 1,
@@ -628,6 +703,8 @@ router.put("/", async (req, res) => {
           return acc;
         }
 
+        // Этап 6 — Сборка patch (diff + merge raw JSON + auto-description)
+        const st6 = islg.start(6, "Сборка patch (diff + merge raw JSON + auto-description)");
         // Сначала считаем обычный патч по всем полям
         let patch = buildPatch(current, mapped);
 
@@ -690,9 +767,10 @@ router.put("/", async (req, res) => {
         } catch (e) {
           console.warn("[PUT] autoDescription generation skipped:", e?.message);
         }
-        // ─────────────────────────────────────────────────────────────────────────────
+        islg.success(st6, `полей в patch: ${Object.keys(patch).length}`);
 
         if (Object.keys(patch).length === 0) {
+          islg.skip(islg.start(7, "Запись в Strapi (PUT)"), "Изменений нет");
           acc.push({
             success: true,
             index: index + 1,
@@ -703,12 +781,17 @@ router.put("/", async (req, res) => {
           return acc;
         }
 
+        // Этап 7 — Запись в Strapi (PUT)
+        const st7 = islg.start(7, "Запись в Strapi (PUT /api/teh-narusheniyas)");
         const upd = await axios.put(
           `${urlStrapi}/api/teh-narusheniyas/${documentId}`,
           { data: patch },
           { headers: { Authorization: `Bearer ${jwt}` } }
         );
+        islg.success(st7, `documentId=${documentId}`);
 
+        // Этап 8 — SSE-уведомление
+        const st8 = islg.start(8, "SSE-уведомление (tn-upsert)");
         try {
           broadcast({
             type: "tn-upsert",
@@ -719,10 +802,13 @@ router.put("/", async (req, res) => {
             patch,
             timestamp: Date.now(),
           });
+          islg.success(st8);
         } catch (e) {
-          console.error("SSE broadcast error (update):", e?.message);
+          islg.fail(st8, e?.message);
         }
         if (needEdds) {
+          // Этап 9 — Отправка в ЕДДС (авария, BASE_TYPE=0)
+          const st9 = islg.start(9, "Отправка в ЕДДС v1 (авария, через /services/edds)");
           let strapiTn = null;
           try {
             const rFull = await axios.get(`${urlStrapi}/api/teh-narusheniyas`, {
@@ -790,7 +876,10 @@ router.put("/", async (req, res) => {
           ].filter(Boolean);
 
           console.log(`[modus→edds] candidates: ${candidates.join(", ")}`);
+          islg.success(st9, `payload сформирован, self-POST через setTimeout`);
           setTimeout(async () => {
+            const asyncSlog = createStageLogger(`PUT[${index + 1}→EDDS]`);
+            const ast = asyncSlog.start(1, "Доставка в /services/edds (self-POST)");
             let delivered = false;
 
             for (const url of candidates) {
@@ -826,11 +915,13 @@ router.put("/", async (req, res) => {
                     (resp?.data?.success === true || !!claimId);
 
                   if (ok) {
+                    asyncSlog.success(ast, `claim_id=${claimId || "—"}`);
                     console.log(
                       `[modus→edds] ✅ GUID=${mapped.guid} отправлен в ЕДДС через ${url}` +
                         (claimId ? `; claim_id=${claimId}` : "")
                     );
                   } else {
+                    asyncSlog.fail(ast, `HTTP ${resp?.status}; success=${resp?.data?.success}; message=${resp?.data?.message}`);
                     console.warn(
                       `[modus→edds] ❌ ЕДДС не приняла GUID=${mapped.guid}: HTTP ${resp?.status}; success=${resp?.data?.success}; message=${resp?.data?.message}; тело=${bodyClip}`
                     );
@@ -848,6 +939,7 @@ router.put("/", async (req, res) => {
             }
 
             if (!delivered) {
+              asyncSlog.fail(ast, "Все кандидаты вернули 404");
               console.error(
                 `[modus→edds] ❌ Не удалось доставить GUID=${mapped.guid} до /services/edds — все кандидаты вернули 404`
               );
@@ -856,6 +948,8 @@ router.put("/", async (req, res) => {
         }
 
         if ((needEddsPlanned || needEddsRestore) && !needEddsDelete) {
+          // Этап 10 — Отправка плановой в ЕДДС
+          const st10 = islg.start(10, `Отправка плановой в ЕДДС (${PLANNED_EDDS_TRANSPORT})`);
           const usePut = !!existingEdsRequestId;
           const method = usePut ? "PUT" : "POST";
           const suffix = usePut ? `/${existingEdsRequestId}` : "";
@@ -869,12 +963,14 @@ router.put("/", async (req, res) => {
           );
 
           if (PLANNED_EDDS_SEND_PAUSED) {
+            islg.skip(st10, PLANNED_EDDS_PAUSE_MESSAGE);
             await writePlannedEddsPausedJournal({
               guid: mapped.guid,
               tnNumber: mapped.number,
               target: `ЕДДС ${PLANNED_EDDS_TRANSPORT} ${method}`,
             });
           } else if (PLANNED_EDDS_TRANSPORT === "v1") {
+            islg.success(st10, `mode=${usePut ? "update" : "create"}`);
             await sendPlannedEddsV1({
               item: mergedForNew,
               guid: mapped.guid,
@@ -882,6 +978,7 @@ router.put("/", async (req, res) => {
               mode: usePut ? "update" : "create",
             });
           } else {
+            islg.success(st10, `v2 mode=${method} suffix=${suffix}`);
             setTimeout(async () => {
             try {
               const { payload: v2Payload, errors: buildErrors } = buildEddsNewPayload({ data: mergedForNew });
@@ -992,6 +1089,8 @@ router.put("/", async (req, res) => {
         }
 
         if (needEddsDelete) {
+          // Этап 11 — Удаление в ЕДДС (DELETE)
+          const st11 = islg.start(11, `Удаление в ЕДДС (${PLANNED_EDDS_TRANSPORT} DELETE)`);
           const mergedForDelete = { ...mapped, data: mergedRaw };
           if (mapped?.STATUS_NAME) mergedForDelete.STATUS_NAME = mapped.STATUS_NAME;
           console.log(
@@ -999,12 +1098,14 @@ router.put("/", async (req, res) => {
           );
 
           if (PLANNED_EDDS_SEND_PAUSED) {
+            islg.skip(st11, PLANNED_EDDS_PAUSE_MESSAGE);
             await writePlannedEddsPausedJournal({
               guid: mapped.guid,
               tnNumber: mapped.number,
               target: `ЕДДС ${PLANNED_EDDS_TRANSPORT} DELETE`,
             });
           } else if (PLANNED_EDDS_TRANSPORT === "v1") {
+            islg.success(st11, "mode=update (статус «удалена» → code 4)");
             await sendPlannedEddsV1({
               item: mergedForDelete,
               guid: mapped.guid,
@@ -1012,6 +1113,7 @@ router.put("/", async (req, res) => {
               mode: "update",
             });
           } else {
+            islg.success(st11, `DELETE /${existingEdsRequestId}`);
             setTimeout(async () => {
             try {
               const eddsUrl = `${process.env.EDDS_NEW_BASE_URL}/edds/external/requests/electricity/${existingEdsRequestId}`;
@@ -1082,13 +1184,15 @@ router.put("/", async (req, res) => {
           }
         }
 
-        // ── Auto-delete planned ТН with status "удалена" from Strapi ──
+        // Этап 12 — Удаление «удалённых» из Strapi (только для плановых)
         if (isPlanned && nextStatus === "удалена") {
+          const st12 = islg.start(12, "Удаление плановой ТН из Strapi (status=удалена)");
           try {
             await axios.delete(
               `${urlStrapi}/api/teh-narusheniyas/${documentId}`,
               { headers: { Authorization: `Bearer ${jwt}` } }
             );
+            islg.success(st12, `documentId=${documentId}`);
             console.log(`[PUT] ✅ Плановая ТН удалена из Strapi: guid=${mapped.guid} documentId=${documentId}`);
             broadcast({
               type: "tn-delete",
@@ -1099,6 +1203,7 @@ router.put("/", async (req, res) => {
               timestamp: Date.now(),
             });
           } catch (e) {
+            islg.fail(st12, e?.response?.data || e?.message);
             console.error(
               `[PUT] ❌ Не удалось удалить плановую ТН из Strapi: guid=${mapped.guid} documentId=${documentId}:`,
               e?.response?.data || e?.message
@@ -1117,29 +1222,40 @@ router.put("/", async (req, res) => {
           e?.response?.data?.error?.message ||
           e?.message ||
           "Неизвестная ошибка";
+        islg.fail(islg.start(99, "Обработка элемента"), msg);
         acc.push({ success: false, index: index + 1, error: msg });
       }
 
       return acc;
     }, Promise.resolve([]));
 
+    // Этап 13 — Фоновый геокодинг адресов
+    const st13 = slog.start(13, "Фоновый геокодинг адресов (DaData)");
     setTimeout(() => {
       if (!fiasSet.size) {
+        slog.skip(st13, "FIAS не найдены");
+        slog.summary();
         return;
       }
       upsertAddressesInStrapi([...fiasSet], jwt).catch((e) =>
         console.warn("[modus] Ошибка фоновой обработки адресов:", e?.message)
       );
+      slog.success(st13, `FIAS: ${fiasSet.size}`);
+      slog.summary();
     }, 0);
 
     return res.json({ status: "ok", results });
   } catch (e) {
     const msg = e?.message || "Внутренняя ошибка сервера";
+    slog.fail(slog.start(99, "Обработка запроса"), msg);
+    slog.summary();
     return res.status(500).json({ status: "error", message: msg });
   }
 });
 
 router.post("/", async (req, res) => {
+  const sharedStages = [];
+  const slog = createStageLogger("POST", sharedStages);
   const authorization = req.get("Authorization");
 
   async function sendDataSequentially(dataArray) {
@@ -1149,8 +1265,12 @@ router.post("/", async (req, res) => {
     const results = await dataArray.reduce(
       async (previousPromise, item, index) => {
         const accumulatedResults = await previousPromise;
+        const islg = createStageLogger(`POST[${index + 1}]`, sharedStages);
         try {
           const guid = item?.guid;
+
+          // Этап 1 — Проверка дубликатов (GUID)
+          const st1 = islg.start(1, "Проверка дубликатов (GUID в Strapi)");
           if (guid) {
             try {
               const search = await axios.get(
@@ -1165,6 +1285,7 @@ router.post("/", async (req, res) => {
               );
               const found = search?.data?.data?.[0];
               if (found) {
+                islg.fail(st1, "Запись с таким GUID уже существует (duplicate)");
                 const existingId = found?.documentId || found?.id;
                 accumulatedResults.push({
                   success: false,
@@ -1176,17 +1297,21 @@ router.post("/", async (req, res) => {
                 });
                 return accumulatedResults;
               }
+              islg.success(st1, "дубликатов нет");
             } catch (e) {
+              islg.fail(st1, `Не удалось проверить: ${e?.response?.status || e?.message}`);
               console.warn(
                 `[POST] Не удалось выполнить проверку дубликатов для guid=${guid}:`,
                 e?.response?.status || e?.message
               );
             }
+          } else {
+            islg.skip(st1, "GUID не передан");
           }
 
-          // Build payload with auto-description on create
+          // Этап 2 — Формирование payload + auto-description
+          const st2 = islg.start(2, "Формирование payload + auto-description");
           const payload = { ...item };
-          // Сохраняем оригинальное описание MODUS для кнопки "Исходник"
           const originalModusDesc = String(item.description ?? "").trim();
           if (originalModusDesc) {
             payload.raw_description = originalModusDesc;
@@ -1197,46 +1322,47 @@ router.post("/", async (req, res) => {
               ...item,
             });
             if (autoDesc) payload.description = autoDesc;
+            islg.success(st2, autoDesc ? "auto-description сгенерирован" : "auto-description пуст");
           } catch (e) {
+            islg.fail(st2, e?.message);
             console.warn("[POST] autoDescription generation failed:", e?.message);
           }
+
+          // Этап 3 — Запись в Strapi (POST /api/teh-narusheniyas)
+          const st3 = islg.start(3, "Запись в Strapi (POST /api/teh-narusheniyas)");
           const response = await axios.post(
             `${urlStrapi}/api/teh-narusheniyas`,
             { data: payload },
             { headers: { Authorization: `Bearer ${jwt}` } }
           );
 
-          // Достаём реальные данные из ответа Strapi (v4/v5) и тянем дефолт из самой Strapi (без хардкода)
           const created = response?.data?.data;
           const createdId = created?.id || created?.documentId;
           const createdAttrs = created?.attributes || {};
-          let descriptionFromStrapi = createdAttrs?.description;
-          if (descriptionFromStrapi == null && createdId) {
-            descriptionFromStrapi = await fetchTnDescriptionById(
-              createdId,
-              jwt
-            );
-          }
+          islg.success(st3, `createdId=${createdId}`);
 
-          accumulatedResults.push({
-            success: true,
-            id: createdId,
-            index: index + 1,
-          });
-          console.log(`[POST] Элемент ${index + 1} успешно отправлен`);
+          // Этап 4 — Извлечение FIAS
+          const st4 = islg.start(4, "Извлечение FIAS из ADDRESS_LIST");
           try {
             const fiasCodes = extractFiasList(item);
             fiasCodes.forEach((id) => fiasSet.add(id));
+            islg.success(st4, `FIAS: ${fiasCodes.size || fiasCodes.length}`);
           } catch (e) {
+            islg.fail(st4, e?.message);
             console.warn("[POST] Пропущено извлечение адресов:", e?.message);
           }
+
+          // Этап 5 — SSE-уведомление (tn-upsert)
+          const st5 = islg.start(5, "SSE-уведомление (tn-upsert)");
           try {
+            let descriptionFromStrapi = createdAttrs?.description;
+            if (descriptionFromStrapi == null && createdId) {
+              descriptionFromStrapi = await fetchTnDescriptionById(createdId, jwt);
+            }
             const entryForSse = {
               ...item,
               id: createdId,
-              // если фронт слушает только SSE — отдадим корректное описание из Strapi
               description: descriptionFromStrapi,
-              // expose Strapi-managed PES fields (override-friendly)
               PES_COUNT: createdAttrs?.PES_COUNT ?? 0,
               PES_POWER: createdAttrs?.PES_POWER ?? 0,
             };
@@ -1248,19 +1374,28 @@ router.post("/", async (req, res) => {
               entry: entryForSse,
               timestamp: Date.now(),
             });
+            islg.success(st5);
           } catch (e) {
+            islg.fail(st5, e?.message);
             console.error("Ошибка SSE broadcast (create):", e?.message);
           }
 
-          // ── Auto-send planned outages to EDDS ───────────────────────────
+          // Этап 6 — Отправка плановой в ЕДДС
           if (item.BASE_TYPE === 1) {
+            const st6 = islg.start(6, `Отправка плановой в ЕДДС (${PLANNED_EDDS_TRANSPORT})`);
             const plannedStatus = item.STATUS_NAME || payload.STATUS_NAME || payload?.data?.STATUS_NAME;
             const canSendPlanned =
               isPlannedEddsV1CreateOrUpdateStatus(plannedStatus);
             if (!canSendPlanned) {
+              islg.skip(st6, `status="${plannedStatus || "пусто"}" — не «начата»/«закрыта»`);
               console.log(
                 `[POST→EDDS] Плановая заявка не отправляется в ЕДДС: status="${plannedStatus || "пусто"}", guid=${item.guid}`
               );
+              accumulatedResults.push({
+                success: true,
+                id: createdId,
+                index: index + 1,
+              });
               return accumulatedResults;
             }
 
@@ -1268,12 +1403,14 @@ router.post("/", async (req, res) => {
               `[POST→EDDS] Плановая заявка, автоматическая отправка в ЕДДС ${PLANNED_EDDS_TRANSPORT}: guid=${item.guid}`
             );
             if (PLANNED_EDDS_SEND_PAUSED) {
+              islg.skip(st6, PLANNED_EDDS_PAUSE_MESSAGE);
               await writePlannedEddsPausedJournal({
                 guid: item.guid,
                 tnNumber: item.number,
                 target: `ЕДДС ${PLANNED_EDDS_TRANSPORT}`,
               });
             } else if (PLANNED_EDDS_TRANSPORT === "v1") {
+              islg.success(st6, "mode=create (v1)");
               await sendPlannedEddsV1({
                 item: payload,
                 guid: item.guid,
@@ -1281,6 +1418,7 @@ router.post("/", async (req, res) => {
                 mode: "create",
               });
             } else {
+              islg.success(st6, "v2 mode=POST");
               setTimeout(async () => {
               try {
                 const { payload: v2Payload, errors: buildErrors } = buildEddsNewPayload({ data: item });
@@ -1390,8 +1528,9 @@ router.post("/", async (req, res) => {
             }
           }
 
-          // ── Auto-delete planned ТН with status "удалена" from Strapi ──
+          // Этап 7 — Удаление «удалённых» из Strapi (только для плановых)
           if (item.BASE_TYPE === 1) {
+            const st7 = islg.start(7, "Удаление плановой ТН из Strapi (status=удалена)");
             const delStatus = (item.STATUS_NAME || "").toString().trim().toLowerCase();
             if (delStatus === "удалена") {
               try {
@@ -1399,6 +1538,7 @@ router.post("/", async (req, res) => {
                   `${urlStrapi}/api/teh-narusheniyas/${createdId}`,
                   { headers: { Authorization: `Bearer ${jwt}` } }
                 );
+                islg.success(st7, `documentId=${createdId}`);
                 console.log(`[POST] ✅ Плановая ТН удалена из Strapi: guid=${item.guid} documentId=${createdId}`);
                 broadcast({
                   type: "tn-delete",
@@ -1409,15 +1549,24 @@ router.post("/", async (req, res) => {
                   timestamp: Date.now(),
                 });
               } catch (e) {
+                islg.fail(st7, e?.response?.data || e?.message);
                 console.error(
                   `[POST] ❌ Не удалось удалить плановую ТН из Strapi: guid=${item.guid} documentId=${createdId}:`,
                   e?.response?.data || e?.message
                 );
               }
+            } else {
+              islg.skip(st7, `status="${delStatus}" — не «удалена»`);
             }
           }
-          // ─────────────────────────────────────────────────────────────────
+
+          accumulatedResults.push({
+            success: true,
+            id: createdId,
+            index: index + 1,
+          });
         } catch (error) {
+          islg.fail(islg.start(99, "Обработка элемента"), error.message);
           console.error(
             `[POST] Ошибка при отправке элемента ${index + 1}:`,
             error.message
@@ -1442,63 +1591,80 @@ router.post("/", async (req, res) => {
       );
     }, 0);
 
+    slog.summary();
     return results;
   }
 
-  if (authorization === `Bearer ${secretModus}`) {
-    if (!req.body?.Data) {
-      return res
-        .status(400)
-        .json({ status: "error", message: "Не хватает требуемых данных" });
-    }
-    const data = req.body.Data;
-    const prepareData = data.map((item) => {
-      const baseType = parseBaseType(item.BASE_TYPE);
-      const prepared = {
-        guid: item.VIOLATION_GUID_STR,
-        number: `${item.F81_010_NUMBER}`,
-        energoObject: item.F81_041_ENERGOOBJECTNAME,
-        createDateTime: item.F81_060_EVENTDATETIME,
-        recoveryPlanDateTime: item.REPAIRDATETIME,
-        repairDateTime: item.REPAIRDATETIME,
-        addressList: item.ADDRESS_LIST,
-        // description: item.F81_042_DISPNAME,
-        recoveryFactDateTime: item.F81_290_RECOVERYDATETIME,
-        factRestoreDateTime: item.F81_070_RESTOR_SUPPLAYDATETIME,
-        normalizationDateTime: item.F81_290_RECOVERYDATETIME,
-        dispCenter: item.DISPCENTER_NAME_,
-        STATUS_NAME: (item.STATUS_NAME || "").toString().trim(),
-        isActive:
-          (item.STATUS_NAME || "").toString().trim().toLowerCase() === "открыта",
-        data: item,
-      };
-      if (baseType !== null) {
-        prepared.BASE_TYPE = baseType;
-      }
-      return prepared;
-    });
-
-    const results = await sendDataSequentially(prepareData);
-    if (!results) {
-      return res.status(500).json({ status: "error" });
-    }
-
-    const anyCreated = results.some((r) => r?.success === true);
-    const allDuplicates =
-      results.length > 0 && results.every((r) => r?.status === "duplicate");
-
-    if (allDuplicates && !anyCreated) {
-      return res.status(409).json({
-        status: "duplicate",
-        message: "Запись с таким GUID уже существует",
-        results,
-      });
-    }
-
-    return res.json({ status: "ok", results });
-  } else {
-    res.status(403).json({ status: "Forbidden" });
+  // Этап 1 — Авторизация
+  const stAuth = slog.start(1, "Авторизация (Bearer SECRET_FOR_MODUS)");
+  if (authorization !== `Bearer ${secretModus}`) {
+    slog.fail(stAuth, "Неверный или отсутствующий токен");
+    slog.summary();
+    return res.status(403).json({ status: "Forbidden" });
   }
+  slog.success(stAuth);
+
+  // Этап 2 — Валидация тела запроса
+  const stBody = slog.start(2, "Валидация тела запроса (Data массив)");
+  if (!req.body?.Data) {
+    slog.fail(stBody, "Не хватает требуемых данных (ожидается Data)");
+    slog.summary();
+    return res
+      .status(400)
+      .json({ status: "error", message: "Не хватает требуемых данных" });
+  }
+  const data = req.body.Data;
+  slog.success(stBody, `получено элементов: ${data.length}`);
+
+  // Этап 3 — Маппинг полей МОДУС → внутренняя форма
+  const stMap = slog.start(3, "Маппинг полей МОДУС → внутренняя форма");
+  const prepareData = data.map((item) => {
+    const baseType = parseBaseType(item.BASE_TYPE);
+    const prepared = {
+      guid: item.VIOLATION_GUID_STR,
+      number: `${item.F81_010_NUMBER}`,
+      energoObject: item.F81_041_ENERGOOBJECTNAME,
+      createDateTime: item.F81_060_EVENTDATETIME,
+      recoveryPlanDateTime: item.REPAIRDATETIME,
+      repairDateTime: item.REPAIRDATETIME,
+      addressList: item.ADDRESS_LIST,
+      recoveryFactDateTime: item.F81_290_RECOVERYDATETIME,
+      factRestoreDateTime: item.F81_070_RESTOR_SUPPLAYDATETIME,
+      normalizationDateTime: item.F81_290_RECOVERYDATETIME,
+      dispCenter: item.DISPCENTER_NAME_,
+      STATUS_NAME: (item.STATUS_NAME || "").toString().trim(),
+      isActive:
+        (item.STATUS_NAME || "").toString().trim().toLowerCase() === "открыта",
+      data: item,
+    };
+    if (baseType !== null) {
+      prepared.BASE_TYPE = baseType;
+    }
+    return prepared;
+  });
+  slog.success(stMap, `подготовлено: ${prepareData.length}`);
+
+  const results = await sendDataSequentially(prepareData);
+  if (!results) {
+    slog.fail(slog.start(99, "Обработка"), "sendDataSequentially вернул null");
+    slog.summary();
+    return res.status(500).json({ status: "error" });
+  }
+
+  const anyCreated = results.some((r) => r?.success === true);
+  const allDuplicates =
+    results.length > 0 && results.every((r) => r?.status === "duplicate");
+
+  if (allDuplicates && !anyCreated) {
+    slog.summary();
+    return res.status(409).json({
+      status: "duplicate",
+      message: "Запись с таким GUID уже существует",
+      results,
+    });
+  }
+
+  return res.json({ status: "ok", results });
 });
 
 module.exports = router;
