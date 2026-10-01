@@ -81,8 +81,9 @@ async function validateTokenWithStrapi(token) {
   }
 }
 
-function isPreviewUser(user) {
-  return String(user?.view_role || "").trim().toLowerCase() === "preview";
+function isAuditUser(user) {
+  const role = String(user?.view_role || "").trim().toLowerCase();
+  return role === "preview" || role === "standart";
 }
 
 async function resolveAuthUser(req, body = {}, { requirePreview = false } = {}) {
@@ -118,11 +119,11 @@ async function resolveAuthUser(req, body = {}, { requirePreview = false } = {}) 
     };
   }
 
-  if (requirePreview && !isPreviewUser(auth.user)) {
+  if (requirePreview && !isAuditUser(auth.user)) {
     return {
       ok: false,
       status: 403,
-      payload: { ok: false, message: "Access denied: preview role required" },
+      payload: { ok: false, message: "Access denied: preview/standart role required" },
     };
   }
 
