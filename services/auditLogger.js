@@ -564,10 +564,6 @@ function rowToUi(item) {
   };
 }
 
-function containsCi(haystack, needle) {
-  return String(haystack || "").toLowerCase().includes(String(needle || "").toLowerCase());
-}
-
 function parseIsoDateSafe(value) {
   const s = String(value || "").trim();
   if (!s) return "";
@@ -600,6 +596,70 @@ function buildPageFilterParams(pagePath) {
     };
   }
   return { "filters[page][$containsi]": page };
+}
+
+function pesEntriesFromDetails(details) {
+  const parsed = parseDetailsMaybeJson(details ?? "");
+  const obj =
+    parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  if (!obj) return [];
+  const list = Array.isArray(obj.pes) ? obj.pes : [];
+  return list.filter((p) => p && typeof p === "object");
+}
+
+// "076" / "76" / "№76" -> "76"
+function pesNumberKey(value) {
+  return String(value == null ? "" : value).replace(/\D+/g, "").replace(/^0+/, "");
+}
+
+// Термы для Strapi-префильтра по details ($containsi) — режет ~19k строк до сотен.
+// Точная сверка всё равно остаётся в rowMatchesPesSearch.
+function pesSearchPrefilterTerms(needle) {
+  const raw = String(needle || "").trim();
+  if (!raw) return [];
+  const low = raw.toLowerCase();
+  const key = pesNumberKey(raw);
+  const terms = new Set();
+
+  // Точное совпадение поля number. Strapi отдаёт JSON как text с пробелом
+  // после двоеточия (`"number": "076"`), без пробела containsi не матчит.
+  if (key) {
+    terms.add(`"number": "${key}"`);
+    terms.add(`"number": "${key.padStart(2, "0")}"`);
+    terms.add(`"number": "${key.padStart(3, "0")}"`);
+  }
+
+  // Подстрока по имени (госномер и т.п.) — не для чисто цифровых запросов,
+  // иначе "76" хватает половину hex-id/chat_id и скан снова раздувается.
+  const digitsOnly = raw.replace(/^№\s*/, "");
+  const isNumericQuery = key && /^\d+$/.test(digitsOnly);
+  if (!isNumericQuery) {
+    terms.add(low);
+    const stripped = low.replace(/^№\s*/, "").trim();
+    if (stripped && stripped !== low) terms.add(stripped);
+  }
+
+  return [...terms];
+}
+
+// Поиск по номеру ПЭС: нормализованный номер или подстрока в имени.
+// Подстрока по номеру/всему details_json не подходит — "76" попадает в "176" и hex-id.
+function rowMatchesPesSearch(row, needle) {
+  const raw = String(needle || "").trim();
+  if (!raw) return true;
+
+  const low = raw.toLowerCase();
+  const key = pesNumberKey(raw);
+  const entries = pesEntriesFromDetails(row?.details_json ?? row?.details ?? "");
+
+  return entries.some((p) => {
+    const number = String(p.number ?? "").trim();
+    const name = String(p.name ?? "").trim().toLowerCase();
+
+    if (key && pesNumberKey(number) === key) return true;
+    if (name && name.includes(low)) return true;
+    return false;
+  });
 }
 
 function rowMatchesTn(row, tnType, tnValue) {
@@ -665,11 +725,17 @@ async function readAuditEvents({
   if (toIso) baseParams["filters[event_time][$lte]"] = toIso;
   if (safeStatusEvent) baseParams["filters[status_event][$eq]"] = safeStatusEvent;
 
+  const prefilterTerms = pesSearchPrefilterTerms(searchNeedle);
+  if (prefilterTerms.length === 1) {
+    baseParams["filters[details][$containsi]"] = prefilterTerms[0];
+  } else if (prefilterTerms.length > 1) {
+    prefilterTerms.forEach((term, i) => {
+      baseParams[`filters[$or][${i}][details][$containsi]`] = term;
+    });
+  }
+
   const applyUiFilters = (row) => {
-    const hasSearch =
-      !searchNeedle ||
-      containsCi(row.entity_id, searchNeedle) ||
-      containsCi(detailsToString(row.details_json), searchNeedle);
+    const hasSearch = rowMatchesPesSearch(row, searchNeedle);
     const hasTn = rowMatchesTn(row, safeTnType, tnValue);
     return hasSearch && hasTn;
   };
