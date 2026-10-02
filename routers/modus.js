@@ -710,12 +710,14 @@ router.put("/", async (req, res) => {
 
         // Всегда объединяем сырые данные: то, что прилетело из MODUS (mapped.data),
         // накладываем поверх того, что уже хранится в Strapi (currentRaw)
-        // null/пустые строки из incoming НЕ затирают существующие значения
+        // null из incoming ОБНУЛЯЕТ поле (нет данных → пусто), пустая строка —
+        // не затирает; ключи, отсутствующие в payload, не трогаются
         const incomingRaw = mapped.data || {};
-        const cleanedIncoming = Object.fromEntries(
-          Object.entries(incomingRaw).filter(([, v]) => v !== null && v !== "")
-        );
-        const mergedRaw = { ...(currentRaw || {}), ...cleanedIncoming };
+        const mergedRaw = { ...(currentRaw || {}) };
+        Object.entries(incomingRaw).forEach(([key, value]) => {
+          if (value === null) mergedRaw[key] = null;
+          else if (value !== "") mergedRaw[key] = value;
+        });
         const rawChanged = JSON.stringify(mergedRaw) !== JSON.stringify(currentRaw || {});
         if (rawChanged) {
           patch.data = mergedRaw;
