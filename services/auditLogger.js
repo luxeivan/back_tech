@@ -662,6 +662,25 @@ function rowMatchesPesSearch(row, needle) {
   });
 }
 
+// Нормализация названий филиала/ПО для сравнения (регистр, ё/е, пробелы).
+function normOrgName(value) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/ё/g, "е");
+}
+
+// Точное совпадение филиала/ПО в pes[] записи details — для фильтров /logging/pes.
+function rowMatchesPesOrg(row, branch, po) {
+  const b = normOrgName(branch);
+  const p = normOrgName(po);
+  if (!b && !p) return true;
+  const entries = pesEntriesFromDetails(row?.details_json ?? row?.details ?? "");
+  return entries.some(
+    (e) => (!b || normOrgName(e.branch) === b) && (!p || normOrgName(e.po) === p)
+  );
+}
+
 function rowMatchesTn(row, tnType, tnValue) {
   const needle = String(tnValue || "").trim().toLowerCase();
   if (!needle) return true;
@@ -690,13 +709,15 @@ async function readAuditEvents({
   pageSize = 0,
   action = "",
   username = "",
-  page: pagePath = "",
+  pagePath = "",
   search = "",
   from = "",
   to = "",
   statusEvent = "",
   tnType = "",
   tnValue = "",
+  branch = "",
+  po = "",
 } = {}) {
   const safePage = Math.min(100000, Math.max(1, Number(page) || 1));
   const safePageSize = Math.min(100, Math.max(1, Number(pageSize || limit) || 200));
@@ -704,8 +725,12 @@ async function readAuditEvents({
   const toIso = parseIsoDateSafe(to);
   const safeStatusEvent = normalizeStatusEvent(statusEvent);
   const safeTnType = normalizeTnType(tnType);
+  const safeBranch = String(branch || "").trim();
+  const safePo = String(po || "").trim();
   const searchNeedle = String(search || "").trim().toLowerCase();
-  const hasClientSideFilters = Boolean(searchNeedle || String(tnValue || "").trim());
+  const hasClientSideFilters = Boolean(
+    searchNeedle || String(tnValue || "").trim() || safeBranch || safePo
+  );
 
   if (from && !fromIso) {
     throw new Error("Invalid 'from' date");
@@ -725,19 +750,36 @@ async function readAuditEvents({
   if (toIso) baseParams["filters[event_time][$lte]"] = toIso;
   if (safeStatusEvent) baseParams["filters[status_event][$eq]"] = safeStatusEvent;
 
+  // Все составные условия — через $and, чтобы не конфликтовать с верхнеуровневым
+  // $or из buildPageFilterParams (иначе $or[0]/$or[1] перезаписываются между собой).
+  let andIdx = 0;
+
   const prefilterTerms = pesSearchPrefilterTerms(searchNeedle);
   if (prefilterTerms.length === 1) {
     baseParams["filters[details][$containsi]"] = prefilterTerms[0];
   } else if (prefilterTerms.length > 1) {
     prefilterTerms.forEach((term, i) => {
-      baseParams[`filters[$or][${i}][details][$containsi]`] = term;
+      baseParams[`filters[$and][${andIdx}][$or][${i}][details][$containsi]`] = term;
     });
+    andIdx += 1;
+  }
+
+  // Префильтр по филиалу/ПО (грубый, по подстроке) — режет скан; точная сверка
+  // остаётся в rowMatchesPesOrg.
+  if (safeBranch) {
+    baseParams[`filters[$and][${andIdx}][details][$containsi]`] = safeBranch;
+    andIdx += 1;
+  }
+  if (safePo) {
+    baseParams[`filters[$and][${andIdx}][details][$containsi]`] = safePo;
+    andIdx += 1;
   }
 
   const applyUiFilters = (row) => {
     const hasSearch = rowMatchesPesSearch(row, searchNeedle);
     const hasTn = rowMatchesTn(row, safeTnType, tnValue);
-    return hasSearch && hasTn;
+    const hasOrg = rowMatchesPesOrg(row, safeBranch, safePo);
+    return hasSearch && hasTn && hasOrg;
   };
 
   let data = [];

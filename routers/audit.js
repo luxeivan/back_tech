@@ -213,6 +213,8 @@ router.get("/events", async (req, res) => {
     const statusEvent = String(req.query.statusEvent || "").trim();
     const tnType = String(req.query.tnType || "").trim();
     const tnValue = String(req.query.tnValue || "").trim();
+    const branch = String(req.query.branch || "").trim();
+    const po = String(req.query.po || "").trim();
 
     const startedAt = Date.now();
     try {
@@ -222,13 +224,15 @@ router.get("/events", async (req, res) => {
         pageSize: safePageSize,
         action,
         username,
-        page: pagePath,
+        pagePath,
         search,
         from,
         to,
         statusEvent,
         tnType,
         tnValue,
+        branch,
+        po,
       });
       const data = Array.isArray(parsed?.data) ? parsed.data : [];
 
@@ -249,13 +253,15 @@ router.get("/events", async (req, res) => {
             pageSize: safePageSize,
             action: action || null,
             username: username || null,
-            page: pagePath || null,
+            pagePath: pagePath || null,
             search: search || null,
             from: from || null,
             to: to || null,
             statusEvent: statusEvent || null,
             tnType: tnType || null,
             tnValue: tnValue || null,
+            branch: branch || null,
+            po: po || null,
           },
         },
       });
@@ -285,13 +291,15 @@ router.get("/events", async (req, res) => {
             pageSize: safePageSize,
             action: action || null,
             username: username || null,
-            page: pagePath || null,
+            pagePath: pagePath || null,
             search: search || null,
             from: from || null,
             to: to || null,
             statusEvent: statusEvent || null,
             tnType: tnType || null,
             tnValue: tnValue || null,
+            branch: branch || null,
+            po: po || null,
           },
         },
       });
