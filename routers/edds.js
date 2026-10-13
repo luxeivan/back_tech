@@ -4,6 +4,7 @@ const axios = require("axios");
 require("dotenv").config();
 const { logAuditFromReq } = require("../services/auditLogger");
 const { resolveAccidentLocation } = require("../services/edds/resolveAccidentLocation");
+const { broadcast } = require("../services/sse");
 
 const router = express.Router();
 
@@ -210,6 +211,23 @@ async function writeJournal({ target, operation, reqBody, endpoint, result }) {
     console.warn("[ЕДДС][journal] не удалось создать запись:", e?.response?.status, e?.message);
   }
 }
+
+// Запись в журнал + SSE-уведомление: фронт перечитывает журнал отправок
+// только по SSE, поэтому без broadcast столбец «Отправки» остаётся устаревшим.
+function journalAndNotify(args) {
+  setImmediate(() =>
+    writeJournal(args)
+      .catch(() => {})
+      .finally(() =>
+        broadcast({
+          type: "edds-journal-updated",
+          source: "edds",
+          guid: args?.reqBody?.incident_id || args?.reqBody?._meta?.guid || null,
+          timestamp: Date.now(),
+        })
+      )
+  );
+}
 // ===========================================================================
 
 function jsonForShell(data) {
@@ -399,7 +417,7 @@ router.post("/", async (req, res) => {
 
     if (!resp1.ok && !fallbackUrl) {
       logResponse(resp1, { url: primaryUrl });
-      setImmediate(() => writeJournal({ target: "ЕДДС", operation: forceUpdate ? "update" : "create", reqBody: payload, endpoint: primaryUrl, result: resp1 }).catch(() => {}));
+      journalAndNotify({ target: "ЕДДС", operation: forceUpdate ? "update" : "create", reqBody: payload, endpoint: primaryUrl, result: resp1 });
       return res.status(502).json({ ok: false, error: "Ошибка curl", code: resp1.code, stderr: resp1.stderr });
     }
 
@@ -409,7 +427,7 @@ router.post("/", async (req, res) => {
       const resp2 = await runCurl(fallbackUrl, payload, { debug });
       logResponse(resp2, { url: fallbackUrl });
 
-      setImmediate(() => writeJournal({ target: "ЕДДС", operation: "update", reqBody: payload, endpoint: fallbackUrl, result: resp2 }).catch(() => {}));
+      journalAndNotify({ target: "ЕДДС", operation: "update", reqBody: payload, endpoint: fallbackUrl, result: resp2 });
 
       if (!resp2.ok) {
         return res.status(502).json({ ok: false, error: "Ошибка curl (update)", code: resp2.code, stderr: resp2.stderr });
@@ -418,7 +436,7 @@ router.post("/", async (req, res) => {
     }
 
     logResponse(resp1, { url: primaryUrl });
-    setImmediate(() => writeJournal({ target: "ЕДДС", operation: forceUpdate ? "update" : "create", reqBody: payload, endpoint: primaryUrl, result: resp1 }).catch(() => {}));
+    journalAndNotify({ target: "ЕДДС", operation: forceUpdate ? "update" : "create", reqBody: payload, endpoint: primaryUrl, result: resp1 });
     return res.json(debug ? { ...resp1.parsed, _via: forceUpdate ? "update" : "create" } : (resp1.parsed || { raw: resp1.stdout }));
   } catch (e) {
     return res.status(500).json({ ok: false, error: e.message });

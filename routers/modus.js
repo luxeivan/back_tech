@@ -1494,6 +1494,15 @@ router.post("/", async (req, res) => {
                             e?.response?.status || e?.message
                           );
                         }
+                        // Фронт перечитывает столбец «Отправки»/флаг sendedEdds только по SSE
+                        broadcast({
+                          type: "tn-upsert",
+                          source: "modus",
+                          action: "autosend-edds",
+                          id: createdDocumentId,
+                          guid: guidForLog,
+                          timestamp: Date.now(),
+                        });
                       }
                       logAuditEvent({
                         username: "Автоотправка",
