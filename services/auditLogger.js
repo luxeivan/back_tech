@@ -98,6 +98,9 @@ function humanAction(action) {
     pes_ready: "ПЭС: возврат в резерв",
     pes_repair: "ПЭС: перевод в ремонт",
     audit_logs_filter: "Обновил фильтры журнала действий",
+    autosend_toggle: "Переключил автоотправку аварийных ТН",
+    send_edds_auto_ok: "Автоотправка ТН в ЕДДС (POST из МОДУС)",
+    send_edds_auto_error: "Ошибка автоотправки ТН в ЕДДС (POST из МОДУС)",
   };
   return map[action] || action;
 }
@@ -123,6 +126,9 @@ const ALLOWED_ACTIONS = new Set([
   "pes_connect",
   "pes_ready",
   "pes_repair",
+  "autosend_toggle",
+  "send_edds_auto_ok",
+  "send_edds_auto_error",
 ]);
 
 function normalizeAction(action) {

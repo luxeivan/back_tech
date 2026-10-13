@@ -16,6 +16,8 @@ const {
   upsertAddressesInStrapi,
 } = require("../services/modus/addresses");
 const { getJwt, fetchTnDescriptionById } = require("../services/modus/strapi");
+const { getAutoSendState } = require("../services/modus/autoSend");
+const { logAuditEvent } = require("../services/auditLogger");
 require("dotenv").config();
 
 // ── Журнал отправок (zhurnal-otpravkis) ─────────────────────────────────────
@@ -300,6 +302,72 @@ function isDuplicateEddsV1Error(resp) {
   } catch {
     return false;
   }
+}
+
+// Self-POST в /services/edds (тот же роутер, что и ручная отправка) —
+// возвращает { delivered, ok, claimId, error }.
+async function deliverEddsV1SelfPost({ jwt, payload, guid, req, logLabel }) {
+  const explicitSelf = String(process.env.SELF_EDDS_URL || "").trim();
+  const port = Number(process.env.PORT || process.env.BACK_PORT || 3110);
+  const protocol = req?.protocol || "http";
+  const host = req?.get?.("host") || `127.0.0.1:${port}`;
+  const qs = "debug=1";
+  const candidates = [
+    explicitSelf && `${explicitSelf}?${qs}`,
+    `http://127.0.0.1:${port}/services/edds?${qs}`,
+    `http://localhost:${port}/services/edds?${qs}`,
+    `${protocol}://${host}/services/edds?${qs}`,
+    `${protocol}://${host}/api/services/edds?${qs}`,
+  ].filter(Boolean);
+
+  for (const url of candidates) {
+    try {
+      const resp = await axios.post(url, payload, {
+        headers: { Authorization: `Bearer ${jwt}` },
+        timeout: 30000,
+        validateStatus: () => true,
+      });
+
+      const body =
+        typeof resp?.data === "string" ? resp.data : JSON.stringify(resp?.data ?? "", null, 2);
+      const bodyClip = body.length > 4000 ? body.slice(0, 4000) + `… (${body.length} chars)` : body;
+      console.log(`[${logLabel}] try ${url} → HTTP ${resp?.status}; body=${bodyClip}`);
+
+      if (resp?.status === 404) continue;
+
+      const claimId = resp?.data?.data?.claim_id ?? resp?.data?.claim_id;
+      const ok =
+        resp?.status >= 200 &&
+        resp?.status < 300 &&
+        (resp?.data?.success === true || !!claimId);
+
+      if (ok) {
+        console.log(
+          `[${logLabel}] ✅ GUID=${guid} отправлен в ЕДДС через ${url}` +
+            (claimId ? `; claim_id=${claimId}` : "")
+        );
+      } else {
+        console.warn(
+          `[${logLabel}] ❌ ЕДДС не приняла GUID=${guid}: HTTP ${resp?.status}; success=${resp?.data?.success}; message=${resp?.data?.message}`
+        );
+      }
+
+      return {
+        delivered: true,
+        ok,
+        claimId: claimId || null,
+        error: ok ? null : resp?.data?.message || `HTTP ${resp?.status}`,
+      };
+    } catch (e) {
+      const code = e?.response?.status || e?.code || e?.message;
+      console.warn(`[${logLabel}] Ошибка запроса ${url} для GUID=${guid}: ${code}`);
+    }
+  }
+
+  console.error(
+    `[${logLabel}] ❌ Не удалось доставить GUID=${guid} до /services/edds — все кандидаты вернули 404`
+  );
+  return { delivered: false, ok: false, claimId: null, error: "Все кандидаты вернули 404" };
 }
 
 function normStatus(s) {
@@ -1380,6 +1448,80 @@ router.post("/", async (req, res) => {
           } catch (e) {
             islg.fail(st5, e?.message);
             console.error("Ошибка SSE broadcast (create):", e?.message);
+          }
+
+          // Этап 5а — Автоотправка аварийной ТН в ЕДДС (если включена, BASE_TYPE=0)
+          const isEmergency = Number(item?.BASE_TYPE ?? item?.data?.BASE_TYPE) === 0;
+          if (isEmergency) {
+            const st5a = islg.start(5.5, "Автоотправка в ЕДДС v1 (авария, флаг tn-avtootpravkas)");
+            try {
+              const { enabled: autoSendOn } = await getAutoSendState(jwt);
+              if (!autoSendOn) {
+                islg.skip(st5a, "Автоотправка выключена");
+              } else {
+                const mergedForEdds = { ...payload };
+                const eddsPayload = buildEddsPayload({ data: mergedForEdds });
+                if (!eddsPayload) {
+                  islg.skip(st5a, "Не удалось собрать payload для ЕДДС");
+                } else {
+                  islg.success(st5a, "payload собран, доставка через setTimeout");
+                  const guidForLog = item?.guid || null;
+                  const createdDocumentId = created?.documentId || createdId;
+                  setTimeout(async () => {
+                    const logLabel = `POST[${index + 1}→EDDS]`;
+                    try {
+                      const result = await deliverEddsV1SelfPost({
+                        jwt,
+                        payload: eddsPayload,
+                        guid: guidForLog,
+                        req,
+                        logLabel,
+                      });
+                      if (result.ok) {
+                        try {
+                          await axios.put(
+                            `${urlStrapi}/api/teh-narusheniyas/${createdDocumentId}`,
+                            { data: { sendedEdds: true } },
+                            { headers: { Authorization: `Bearer ${jwt}` }, timeout: 15000 }
+                          );
+                          console.log(
+                            `[autosend] GUID=${guidForLog} sendedEdds=true проставлен` +
+                              (result.claimId ? `; claim_id=${result.claimId}` : "")
+                          );
+                        } catch (e) {
+                          console.warn(
+                            "[autosend] Не удалось проставить sendedEdds:",
+                            e?.response?.status || e?.message
+                          );
+                        }
+                      }
+                      logAuditEvent({
+                        username: "Автоотправка",
+                        role: "system",
+                        source: "backend",
+                        action: result.ok ? "send_edds_auto_ok" : "send_edds_auto_error",
+                        page: "/services/modus",
+                        entity: "tn",
+                        entity_id: String(guidForLog || createdDocumentId || ""),
+                        details: {
+                          claim_id: result.claimId,
+                          delivered: result.delivered,
+                          error: result.error,
+                        },
+                      }).catch(() => {});
+                    } catch (e) {
+                      console.error(
+                        `[autosend] Ошибка автоотправки GUID=${guidForLog}:`,
+                        e?.message
+                      );
+                    }
+                  }, 0);
+                }
+              }
+            } catch (e) {
+              islg.fail(st5a, e?.message);
+              console.warn("[autosend] Ошибка проверки флага автоотправки:", e?.message);
+            }
           }
 
           // Этап 6 — Отправка плановой в ЕДДС

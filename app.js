@@ -16,6 +16,7 @@ const auditRoutes = require("./routers/audit");
 const integrationMappingsRoutes = require("./routers/integrationMappings");
 const weatherRoutes = require("./routers/weather");
 const operationalDashboardRoutes = require("./routers/operationalDashboard");
+const autosendRoutes = require("./routers/autosend");
 const {
   startOperationalDashboardStatsScheduler,
 } = require("./services/operationalDashboardStats");
@@ -63,6 +64,7 @@ app.use("/services/audit", auditRoutes);
 app.use("/services/integration-mappings", integrationMappingsRoutes);
 app.use("/services/weather", weatherRoutes);
 app.use("/services/operational-dashboard", operationalDashboardRoutes);
+app.use("/services/autosend", autosendRoutes);
 
 app.use("/services/webhooks", webhooks);
 app.get("/services/event", sseHandler);
