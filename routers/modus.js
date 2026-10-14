@@ -17,7 +17,7 @@ const {
 } = require("../services/modus/addresses");
 const { getJwt, fetchTnDescriptionById } = require("../services/modus/strapi");
 const { getAutoSendState } = require("../services/modus/autoSend");
-const { sendToChannel } = require("../services/tnmax/tnMaxChannel");
+const { sendToChannel, deleteMessage } = require("../services/tnmax/tnMaxChannel");
 const { logAuditEvent } = require("../services/auditLogger");
 require("dotenv").config();
 
@@ -770,6 +770,37 @@ router.put("/", async (req, res) => {
             error: "Запись с таким GUID не найдена",
           });
           return acc;
+        }
+
+        // Этап 5.5 — Удаление ошибочной ТН из MAX (номер=-1 → пост гасим)
+        if (Number(mapped.number) === -1) {
+          const st55 = islg.start(5.5, "Удаление ошибочной ТН из MAX (номер=-1)");
+          const storedMid =
+            found?.mid_MAX_operativnayObstanovka ||
+            currentAttrs?.mid_MAX_operativnayObstanovka ||
+            null;
+          if (!storedMid) {
+            islg.skip(st55, "mid не сохранён — пост в MAX не отправлялся");
+          } else {
+            try {
+              await deleteMessage(storedMid);
+              try {
+                await axios.put(
+                  `${urlStrapi}/api/teh-narusheniyas/${documentId}`,
+                  { data: { mid_MAX_operativnayObstanovka: null } },
+                  { headers: { Authorization: `Bearer ${jwt}` }, timeout: 15000 }
+                );
+                islg.success(st55, `mid=${storedMid} удалён из MAX, поле очищено`);
+              } catch (ce) {
+                islg.success(
+                  st55,
+                  `mid=${storedMid} удалён из MAX, но поле не очищено: ${ce?.response?.status || ce?.message}`
+                );
+              }
+            } catch (e) {
+              islg.fail(st55, e?.response?.data?.message || e?.message);
+            }
+          }
         }
 
         // Этап 6 — Сборка patch (diff + merge raw JSON + auto-description)
