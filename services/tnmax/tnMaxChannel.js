@@ -1,5 +1,6 @@
 // Минимальный клиент MAX для тестового канала ОО.
 const axios = require("axios");
+const FormData = require("form-data");
 
 // platform-api2.max.ru требует сертификат Минцифры в trust store — локально его нет,
 // поэтому по умолчанию старый домен (как у pes/max). Переопределение: TN_MAX_API_BASE.
@@ -68,9 +69,41 @@ async function deleteMessage(mid) {
   return data;
 }
 
+// Загрузка изображения в MAX: POST /uploads?type=image → multipart → mediafile token.
+async function uploadImage(buffer, filename = "image.png") {
+  const { token } = getConfig();
+  if (!token) throw new Error("Не задан TN_MAX_BOT_OO");
+
+  const { data: up } = await axios.post(`${apiBase()}/uploads?type=image`, null, {
+    headers: { Authorization: token, Accept: "application/json" },
+    timeout: 15000,
+  });
+
+  const form = new FormData();
+  form.append("data", buffer, { filename, contentType: "image/png" });
+
+  const { data } = await axios.post(up.url, form, {
+    headers: { Authorization: token, ...form.getHeaders() },
+    timeout: 60000,
+    maxBodyLength: 60 * 1024 * 1024,
+  });
+
+  // Реальный ответ MAX: {"photos":{"0":{"token":"..."}}} (docs: photos.photoIds.token — устарел)
+  const firstPhoto = data?.photos ? Object.values(data.photos)[0] : null;
+  const mediaToken = firstPhoto?.token || data?.photos?.photoIds?.token || data?.token;
+  if (!mediaToken) {
+    throw new Error(`MAX upload не вернул токен: ${JSON.stringify(data)}`);
+  }
+  console.log(
+    `[tnmax] image uploaded: ${filename}, ${buffer.length} байт, token=${String(mediaToken).slice(0, 16)}…`
+  );
+  return mediaToken;
+}
+
 module.exports = {
   apiBase,
   getConfig,
   sendToChannel,
   deleteMessage,
+  uploadImage,
 };

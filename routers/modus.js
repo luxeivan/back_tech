@@ -17,7 +17,8 @@ const {
 } = require("../services/modus/addresses");
 const { getJwt, fetchTnDescriptionById } = require("../services/modus/strapi");
 const { getAutoSendState } = require("../services/modus/autoSend");
-const { sendToChannel, deleteMessage } = require("../services/tnmax/tnMaxChannel");
+const { sendToChannel, deleteMessage, uploadImage } = require("../services/tnmax/tnMaxChannel");
+const { generateTablesPngs } = require("../services/tnmax/pdf");
 const { logAuditEvent } = require("../services/auditLogger");
 require("dotenv").config();
 
@@ -1745,14 +1746,50 @@ router.post("/", async (req, res) => {
             }
           }
 
-          // Этап 8 — Автоотправка guid в MAX (тестовый канал, только аварийные)
+          // Этап 8 — Автоотправка в MAX (тестовый канал, только аварийные):
+          // 2 таблицы картинками + guid текстом; при сбое таблиц — только guid
           if (isEmergency) {
-            const st8 = islg.start(8, "Автоотправка guid в MAX (тестовый канал)");
+            const st8 = islg.start(8, "Автоотправка в MAX (таблицы + guid)");
             if (!guid) {
               islg.skip(st8, "GUID отсутствует");
             } else {
+              let attachments = [];
+              let tablesNote = "";
               try {
-                const maxResult = await sendToChannel({ text: guid });
+                const pngs = await generateTablesPngs({ jwt });
+                console.log(
+                  `[tnmax] Таблицы сформированы для guid=${guid}: ${pngs.length} PNG (${pngs.map((p) => `${p.name}:${p.buffer.length}б`).join(", ")}), загружаю в MAX...`
+                );
+                for (const png of pngs) {
+                  const mediaToken = await uploadImage(png.buffer, png.name);
+                  attachments.push({ type: "image", payload: { token: mediaToken } });
+                }
+                tablesNote = ` таблиц=${attachments.length}`;
+              } catch (te) {
+                attachments = [];
+                tablesNote = ` таблицы НЕ отправлены: ${te?.message}`;
+                console.warn(
+                  `[tnmax] Таблицы не сформированы для guid=${guid}:`,
+                  te?.message
+                );
+              }
+
+              try {
+                let maxResult = null;
+                for (let attempt = 1; attempt <= 3; attempt++) {
+                  try {
+                    maxResult = await sendToChannel({ text: guid, attachments });
+                    break;
+                  } catch (se) {
+                    const code = se?.response?.data?.code;
+                    if (code === "attachment.not.ready" && attempt < 3) {
+                      await new Promise((r) => setTimeout(r, 1200));
+                      continue;
+                    }
+                    throw se;
+                  }
+                }
+
                 const mid = maxResult?.message?.body?.mid || "";
                 const url = maxResult?.message?.url || "-";
 
@@ -1778,7 +1815,7 @@ router.post("/", async (req, res) => {
                 } else {
                   islg.success(
                     st8,
-                    `guid=${guid} mid=${mid || "-"} url=${url}` +
+                    `guid=${guid} mid=${mid || "-"} url=${url}${tablesNote}` +
                       (mid ? "; mid сохранён в Strapi" : "; mid отсутствует в ответе MAX")
                   );
                 }

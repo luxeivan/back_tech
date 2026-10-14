@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y \
     openssl \
     ca-certificates \
     gnupg \
+    poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Configure OpenSSL GOST engine
