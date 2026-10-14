@@ -17,6 +17,7 @@ const {
 } = require("../services/modus/addresses");
 const { getJwt, fetchTnDescriptionById } = require("../services/modus/strapi");
 const { getAutoSendState } = require("../services/modus/autoSend");
+const { sendToChannel } = require("../services/tnmax/tnMaxChannel");
 const { logAuditEvent } = require("../services/auditLogger");
 require("dotenv").config();
 
@@ -1710,6 +1711,26 @@ router.post("/", async (req, res) => {
               }
             } else {
               islg.skip(st7, `status="${delStatus}" — не «удалена»`);
+            }
+          }
+
+          // Этап 8 — Автоотправка guid в MAX (тестовый канал, только аварийные)
+          if (isEmergency) {
+            const st8 = islg.start(8, "Автоотправка guid в MAX (тестовый канал)");
+            if (!guid) {
+              islg.skip(st8, "GUID отсутствует");
+            } else {
+              try {
+                const maxResult = await sendToChannel({ text: guid });
+                islg.success(
+                  st8,
+                  `guid=${guid}` +
+                    ` mid=${maxResult?.message?.body?.mid || "-"}` +
+                    ` url=${maxResult?.message?.url || "-"}`
+                );
+              } catch (e) {
+                islg.fail(st8, e?.response?.data?.message || e?.message);
+              }
             }
           }
 

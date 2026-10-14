@@ -1,7 +1,4 @@
 // Минимальный клиент MAX для тестового канала ОО.
-// ENV: TN_MAX_BOT_OO (токен бота), MAX_CHAT_ID_OO (chat_id канала, обязателен),
-// MAX_CHANEL_OO (ссылка — только для справки, id из ссылки НЕ является chat_id).
-// Env читаем лениво: dotenv.config() в app.js выполняется после require роутеров.
 const axios = require("axios");
 
 // platform-api2.max.ru требует сертификат Минцифры в trust store — локально его нет,
