@@ -17,6 +17,7 @@ const integrationMappingsRoutes = require("./routers/integrationMappings");
 const weatherRoutes = require("./routers/weather");
 const operationalDashboardRoutes = require("./routers/operationalDashboard");
 const autosendRoutes = require("./routers/autosend");
+const tnMaxRoutes = require("./routers/tnMax");
 const {
   startOperationalDashboardStatsScheduler,
 } = require("./services/operationalDashboardStats");
@@ -65,6 +66,7 @@ app.use("/services/integration-mappings", integrationMappingsRoutes);
 app.use("/services/weather", weatherRoutes);
 app.use("/services/operational-dashboard", operationalDashboardRoutes);
 app.use("/services/autosend", autosendRoutes);
+app.use("/services/tnmax", tnMaxRoutes);
 
 app.use("/services/webhooks", webhooks);
 app.get("/services/event", sseHandler);
