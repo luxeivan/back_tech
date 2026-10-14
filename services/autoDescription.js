@@ -84,6 +84,31 @@ function collectSocialNames(arr) {
   );
 }
 
+// Заголовки блоков СЗО, собираемых из SocialObjects (фолбэк, когда в
+// ADDRESS_LIST нет секций — например, в тестовых пейлоадах МОДУСа).
+const SOCIAL_BLOCK_TITLES = {
+  polyclinic: "Поликлиники",
+  hospital: "Больницы",
+  school: "Школы",
+  kindergarten: "Детские сады",
+  boiler: "Котельные",
+  ctp: "ЦТП",
+  kns: "КНС",
+  wells: "ВЗУ",
+  vns: "ВНС",
+};
+
+function buildSocialObjectsBlocks(arr) {
+  const buckets = collectSocialNames(arr);
+  return Object.entries(SOCIAL_BLOCK_TITLES)
+    .map(([key, title]) => {
+      const names = buckets[key] || [];
+      return names.length ? `${title}:\n${names.join("\n")}` : null;
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 function fmtCountDeclOnly(count, forms) {
   const c = num(count);
   if (!c) return null;
@@ -264,7 +289,7 @@ function stripHousesAndSzo(addressList) {
     .join("; ");
 }
 
-function buildAutoDescription(raw = {}) {
+function buildAutoDescription(raw = {}, { includeHousesAddresses = true, socialObjectsBlocks = false } = {}) {
   const sc = s(raw.SC_PO);
   const when = formatDateTimeNew(raw.F81_060_EVENTDATETIME);
   const ownSc = s(raw.SC_FILIAL);
@@ -311,19 +336,24 @@ function buildAutoDescription(raw = {}) {
 
   // Адреса отключённых домов + секции СЗО отдельными блоками
   const addressList = s(raw.ADDRESS_LIST);
-  if (addressList) {
-    const { addresses, sections } = splitAddressesAndSzoSections(addressList);
-    const blocks = [];
-    const streetsOnly = stripHousesAndSzo(addresses);
-    if (streetsOnly) {
-      blocks.push(`Адреса отключенных объектов: ${streetsOnly}`);
-    }
-    sections.forEach((sec) => {
-      blocks.push(`${sec.title}\n${sec.items.join("\n")}`);
-    });
-    if (blocks.length) {
-      outageLines.push(blocks.join("\n\n"));
-    }
+  const { addresses, sections } = addressList
+    ? splitAddressesAndSzoSections(addressList)
+    : { addresses: "", sections: [] };
+  const blocks = [];
+  const streetsOnly = addressList ? stripHousesAndSzo(addresses) : "";
+  if (includeHousesAddresses && streetsOnly) {
+    blocks.push(`Адреса отключенных объектов: ${streetsOnly}`);
+  }
+  sections.forEach((sec) => {
+    blocks.push(`${sec.title}\n${sec.items.join("\n")}`);
+  });
+  // Фолбэк: в ADDRESS_LIST нет секций СЗО (тестовые пейлоады) — берём из SocialObjects
+  if (socialObjectsBlocks && !sections.length) {
+    const fromSocial = buildSocialObjectsBlocks(raw.SocialObjects);
+    if (fromSocial) blocks.push(fromSocial);
+  }
+  if (blocks.length) {
+    outageLines.push(blocks.join("\n\n"));
   }
 
   const pesCount = num(raw.PES_COUNT);

@@ -19,6 +19,7 @@ const { getJwt, fetchTnDescriptionById } = require("../services/modus/strapi");
 const { getAutoSendState } = require("../services/modus/autoSend");
 const { sendToChannel, deleteMessage, uploadImage } = require("../services/tnmax/tnMaxChannel");
 const { generateTablesPngs } = require("../services/tnmax/pdf");
+const { buildMaxPostText } = require("../services/tnmax/postTextTemplate");
 const { logAuditEvent } = require("../services/auditLogger");
 require("dotenv").config();
 
@@ -1774,11 +1775,18 @@ router.post("/", async (req, res) => {
                 );
               }
 
+              let postText = guid;
+              try {
+                postText = buildMaxPostText({ ...(item?.data || {}), ...item }) || guid;
+              } catch (te) {
+                console.warn(`[tnmax] Шаблон текста не собрался (guid=${guid}), отправляю guid:`, te?.message);
+              }
+
               try {
                 let maxResult = null;
                 for (let attempt = 1; attempt <= 3; attempt++) {
                   try {
-                    maxResult = await sendToChannel({ text: guid, attachments });
+                    maxResult = await sendToChannel({ text: postText, attachments });
                     break;
                   } catch (se) {
                     const code = se?.response?.data?.code;
