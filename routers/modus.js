@@ -1722,12 +1722,35 @@ router.post("/", async (req, res) => {
             } else {
               try {
                 const maxResult = await sendToChannel({ text: guid });
-                islg.success(
-                  st8,
-                  `guid=${guid}` +
-                    ` mid=${maxResult?.message?.body?.mid || "-"}` +
-                    ` url=${maxResult?.message?.url || "-"}`
-                );
+                const mid = maxResult?.message?.body?.mid || "";
+                const url = maxResult?.message?.url || "-";
+
+                let saveError = null;
+                if (mid) {
+                  try {
+                    const midDocId = created?.documentId || createdId;
+                    await axios.put(
+                      `${urlStrapi}/api/teh-narusheniyas/${midDocId}`,
+                      { data: { mid_MAX_operativnayObstanovka: mid } },
+                      { headers: { Authorization: `Bearer ${jwt}` }, timeout: 15000 }
+                    );
+                  } catch (se) {
+                    saveError = se?.response?.status || se?.message;
+                  }
+                }
+
+                if (saveError) {
+                  islg.fail(
+                    st8,
+                    `отправлено (mid=${mid}), но mid не сохранён в Strapi: ${saveError}`
+                  );
+                } else {
+                  islg.success(
+                    st8,
+                    `guid=${guid} mid=${mid || "-"} url=${url}` +
+                      (mid ? "; mid сохранён в Strapi" : "; mid отсутствует в ответе MAX")
+                  );
+                }
               } catch (e) {
                 islg.fail(st8, e?.response?.data?.message || e?.message);
               }

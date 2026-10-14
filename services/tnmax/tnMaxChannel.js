@@ -50,8 +50,27 @@ async function sendToChannel({
   return data;
 }
 
+async function deleteMessage(mid) {
+  const { token } = getConfig();
+
+  if (!token) throw new Error("Не задан TN_MAX_BOT_OO");
+  if (!mid) throw new Error("mid обязателен");
+
+  const { data } = await axios.delete(`${apiBase()}/messages`, {
+    headers: {
+      Authorization: token,
+      "Content-Type": "application/json",
+    },
+    params: { message_id: mid },
+    timeout: 20000,
+  });
+
+  return data;
+}
+
 module.exports = {
   apiBase,
   getConfig,
   sendToChannel,
+  deleteMessage,
 };
