@@ -1,9 +1,10 @@
-// Рендер docDefinition → PDF (pdfmake Node-API) и PDF → PNG (pdftoppm/poppler).
+// Рендер docDefinition → PDF (pdfmake Node-API) и PDF → PNG (pdftoppm/poppler) с обрезкой белых полей.
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { execFile } = require("child_process");
 const pdfmake = require("pdfmake");
+const { trimWhiteMargins } = require("./trim");
 
 // pdfmake — синглтон; настраиваем один раз при первом использовании.
 let pdfmakeReady = false;
@@ -66,7 +67,7 @@ async function pdfToPngs(pdfBuffer) {
         return na - nb;
       });
 
-    return names.map((name) => fs.readFileSync(path.join(tmpDir, name)));
+    return names.map((name) => trimWhiteMargins(fs.readFileSync(path.join(tmpDir, name))));
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
