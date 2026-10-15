@@ -78,6 +78,17 @@ async function generateTablesPngs({ jwt }) {
 }
 
 // PDF-файлы для поста в MAX-канале (по одному file-вложению на сообщение — лимит API).
+// Имена как на фронте (exportTnPdf.js): «Аварийные ТН» — DD.MM.YYYY HH-mm-ss (МСК),
+// «ОО все филиалы» — OO_все филиалы.pdf
+function mskExportFilename(now = new Date()) {
+  const msk = new Date(now.getTime() + 3 * 60 * 60 * 1000);
+  const p = (n) => String(n).padStart(2, "0");
+  return (
+    `${p(msk.getUTCDate())}.${p(msk.getUTCMonth() + 1)}.${msk.getUTCFullYear()} ` +
+    `${p(msk.getUTCHours())}-${p(msk.getUTCMinutes())}-${p(msk.getUTCSeconds())}.pdf`
+  );
+}
+
 async function generateTablesPdfs({ jwt }) {
   if (!jwt) throw new Error("Нет JWT: авторизуйтесь");
 
@@ -124,8 +135,8 @@ async function generateTablesPdfs({ jwt }) {
 
   const [tnPdf, ooPdf] = await Promise.all([docToPdfBuffer(tnDoc), docToPdfBuffer(ooDoc)]);
   return [
-    { name: "tn-table.pdf", buffer: tnPdf },
-    { name: "oo-table.pdf", buffer: ooPdf },
+    { name: mskExportFilename(), buffer: tnPdf },
+    { name: "ОО_все филиалы.pdf", buffer: ooPdf },
   ];
 }
 

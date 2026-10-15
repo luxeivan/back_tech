@@ -56,6 +56,39 @@ function parseObjectLineFromDescription(desc) {
   return (parts[1] || "").trim();
 }
 
+// Жирные лейблы первого поста (включая двоеточие; значение после — обычное).
+// «Городской округ: …» НЕ в списке — по просьбе юзера (красный не поддержан API).
+const BOLD_LABELS = [
+  "Без напряжения:",
+  "ТП, РП полностью:",
+  "ТП, РП по одной секции:",
+  "МКД:",
+  "Чел:",
+  "Абонентов:",
+  "СЗО полностью:",
+  "СЗО по одной секции:",
+  "Направлено ПЭС:",
+  "Задействовано:",
+  "Прогнозируемое время включения",
+];
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+// Плейн-текст → HTML для MAX (format: "html"): жирные лейблы через <b>…</b>
+function boldifyForMax(plain) {
+  let html = escapeHtml(plain);
+  for (const label of BOLD_LABELS) {
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    html = html.replace(new RegExp(`(^|\\n)(${escaped})`, "g"), "$1<b>$2</b>");
+  }
+  return html;
+}
+
 function buildMaxPostText(raw = {}, { sequenceNumber } = {}) {
   // sequenceNumber — порядковый номер аварийки с 08:00 МСК (см. calcSequenceNumber в postPublisher);
   // fallback на номер ТН из МОДУСа, если нумерация не посчиталась
@@ -137,6 +170,7 @@ function buildClosePostText(
 module.exports = {
   buildMaxPostText,
   buildClosePostText,
+  boldifyForMax,
   parseSequenceFromDescription,
   parseObjectLineFromDescription,
   formatMskTime,

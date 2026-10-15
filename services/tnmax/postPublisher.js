@@ -5,7 +5,7 @@
 const axios = require("axios");
 const { sendToChannel, uploadFile } = require("./tnMaxChannel");
 const { generateTablesPdfs } = require("./pdf");
-const { buildMaxPostText, buildClosePostText } = require("./postTextTemplate");
+const { buildMaxPostText, buildClosePostText, boldifyForMax } = require("./postTextTemplate");
 
 const SEND_PAUSE_MS = 600; // лимит MAX: 2 сообщ/сек
 const RETRY_PAUSE_MS = 1200;
@@ -194,8 +194,10 @@ async function publishTnPost({ jwt, guid, raw, midDocId, urlStrapi }) {
   const sentUrls = [];
 
   try {
-    // 1) Текст (рич-шаблон, fallback guid)
-    await sendWithRetry({ text: postText }, "текст", sentMids, sentUrls);
+    // 1) Текст (рич-шаблон, fallback guid) — жирные лейблы через HTML
+    const htmlText = postText === guid ? guid : boldifyForMax(postText);
+    const textPayload = postText === guid ? { text: guid } : { text: htmlText, format: "html" };
+    await sendWithRetry(textPayload, "текст", sentMids, sentUrls);
     await new Promise((r) => setTimeout(r, SEND_PAUSE_MS));
 
     // 2–3) PDF-файлы — по одному file-вложению на сообщение (лимит MAX)
