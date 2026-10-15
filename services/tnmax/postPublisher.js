@@ -10,6 +10,55 @@ const { buildMaxPostText } = require("./postTextTemplate");
 const SEND_PAUSE_MS = 600; // лимит MAX: 2 сообщ/сек
 const RETRY_PAUSE_MS = 1200;
 const MAX_SEND_ATTEMPTS = 3;
+const MSK_OFFSET_MS = 3 * 60 * 60 * 1000; // MSK = UTC+3, без перехода на летнее время
+const OPERATIONAL_DAY_START_HOUR_MSK = 8;
+
+// Начало операционного окна: последняя 08:00 МСК ≤ now.
+// TN в 07:30 попадает в окно, начавшееся вчера в 08:00.
+function operationalWindowStart(now = new Date()) {
+  const msk = new Date(now.getTime() + MSK_OFFSET_MS);
+  const today0800Shifted = Date.UTC(
+    msk.getUTCFullYear(), msk.getUTCMonth(), msk.getUTCDate(),
+    OPERATIONAL_DAY_START_HOUR_MSK, 0, 0, 0
+  );
+  const startShifted = msk.getTime() < today0800Shifted
+    ? today0800Shifted - 24 * 60 * 60 * 1000
+    : today0800Shifted;
+  return new Date(startShifted - MSK_OFFSET_MS);
+}
+
+// Порядковый номер аварийки в текущем операционном окне (с 08:00 МСК).
+// Считаем аварийные (BASE_TYPE=0) без удалённых (-1) с createDateTime ≥ windowStart.
+// Текущая ТН уже записана в Strapi к Этапу 8 — входит в счёт.
+// При ошибке запроса возвращает null (fallback на номер МОДУСа в шаблоне).
+async function calcSequenceNumber({ jwt, urlStrapi, now = new Date() }) {
+  const windowStart = operationalWindowStart(now);
+  const iso = windowStart.toISOString();
+  try {
+    const { data } = await axios.get(`${urlStrapi}/api/teh-narusheniyas`, {
+      headers: { Authorization: `Bearer ${jwt}` },
+      params: {
+        "filters[BASE_TYPE][$eq]": 0,
+        "filters[number][$ne]": -1,
+        "filters[createDateTime][$gte]": iso,
+        "pagination[pageSize]": 1,
+        "sort[0]": "createDateTime:asc",
+      },
+      timeout: 15000,
+    });
+    const total = Number(data?.meta?.pagination?.total);
+    console.log(
+      `[tnmax] порядковый номер: total=${total} для окна с ${iso} (опер. окно с 08:00 МСК)`
+    );
+    return Number.isFinite(total) && total > 0 ? total : null;
+  } catch (e) {
+    console.warn(
+      `[tnmax] Не удалось посчитать порядковый номер (окно с ${iso}):`,
+      e?.response?.status || e?.message
+    );
+    return null;
+  }
+}
 
 // Сохранение mid-поля и текста поста в Strapi ОТДЕЛЬНЫМИ PUT (mid первым):
 // падение записи длинного текста не должно терять mid.
@@ -67,7 +116,8 @@ async function sendWithRetry(payload, label, sentMids, sentUrls) {
 async function publishTnPost({ jwt, guid, raw, midDocId, urlStrapi }) {
   let postText = guid;
   try {
-    postText = buildMaxPostText(raw) || guid;
+    const sequenceNumber = await calcSequenceNumber({ jwt, urlStrapi });
+    postText = buildMaxPostText(raw, { sequenceNumber }) || guid;
   } catch (te) {
     console.warn(`[tnmax] Шаблон текста не собрался (guid=${guid}), отправляю guid:`, te?.message);
   }
@@ -215,4 +265,6 @@ async function publishTnPost({ jwt, guid, raw, midDocId, urlStrapi }) {
 module.exports = {
   publishTnPost,
   savePostMeta,
+  calcSequenceNumber,
+  operationalWindowStart,
 };

@@ -24,8 +24,13 @@ function severityEmoji(population, szo) {
   return "🔴🔴";
 }
 
-function buildMaxPostText(raw = {}) {
-  const number = String(raw.F81_010_NUMBER ?? "").trim();
+function buildMaxPostText(raw = {}, { sequenceNumber } = {}) {
+  // sequenceNumber — порядковый номер аварийки с 08:00 МСК (см. calcSequenceNumber в postPublisher);
+  // fallback на номер ТН из МОДУСа, если нумерация не посчиталась
+  const number =
+    sequenceNumber != null && Number(sequenceNumber) > 0
+      ? String(sequenceNumber)
+      : String(raw.F81_010_NUMBER ?? "").trim();
   const population = num(raw.POPULATION_COUNT);
   const szo = szoCount(raw);
 
