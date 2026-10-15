@@ -18,7 +18,7 @@ const {
 const { getJwt, fetchTnDescriptionById } = require("../services/modus/strapi");
 const { getAutoSendState } = require("../services/modus/autoSend");
 const { deleteStoredMids } = require("../services/tnmax/tnMaxChannel");
-const { publishTnPost } = require("../services/tnmax/postPublisher");
+const { publishTnPost, publishClosePost } = require("../services/tnmax/postPublisher");
 const { logAuditEvent } = require("../services/auditLogger");
 require("dotenv").config();
 
@@ -920,6 +920,42 @@ router.put("/", async (req, res) => {
         } catch (e) {
           islg.fail(st8, e?.message);
         }
+
+        // Этап 8.5 — Пост-закрытие/запитка в MAX (авария, уже был первый пост)
+        {
+          const isOpenToClose =
+            statusChanged &&
+            ["закрыта", "запитана"].includes(nextStatus) &&
+            nextBaseType === 0;
+          if (!isOpenToClose) {
+            // тихо — этап не логируем, чтобы не засорять журнал плановых/прочих PUT
+          } else {
+            const st85 = islg.start(8.5, "Пост-закрытие в MAX (Доп. информация)");
+            const firstDescription =
+              currentAttrs?.description_MAX_operativnayObstanovka || null;
+            const firstMidRaw = currentAttrs?.mid_MAX_operativnayObstanovka || "";
+            const firstMid = String(firstMidRaw).split(",")[0].trim() || null;
+            const recoveryAt =
+              rawItem?.F81_290_RECOVERYDATETIME ||
+              mapped?.recoveryFactDateTime ||
+              null;
+            if (!firstDescription) {
+              islg.skip(st85, "первый пост не отправлялся (нет description_MAX_operativnayObstanovka)");
+            } else if (!recoveryAt) {
+              islg.skip(st85, "нет F81_290_RECOVERYDATETIME (время восстановления)");
+            } else {
+              const result = await publishClosePost({
+                guid: mapped.guid,
+                raw: rawItem,
+                firstDescription,
+                firstMid,
+              });
+              if (result.ok) islg.success(st85, result.message);
+              else islg.fail(st85, result.message);
+            }
+          }
+        }
+
         if (needEdds) {
           // Этап 9 — Отправка в ЕДДС (авария, BASE_TYPE=0)
           const st9 = islg.start(9, "Отправка в ЕДДС v1 (авария, через /services/edds)");

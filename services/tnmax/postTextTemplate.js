@@ -13,6 +13,7 @@ const SZO_ALL_FIELDS = [
 ];
 
 const num = (v) => (Number.isFinite(+v) ? +v : 0);
+const pad2 = (n) => String(n).padStart(2, "0");
 
 function szoCount(raw) {
   return SZO_ALL_FIELDS.reduce((sum, field) => sum + num(raw[field]), 0);
@@ -22,6 +23,37 @@ function severityEmoji(population, szo) {
   if (szo > 5 || population > 5000) return "🔴🔴🔴";
   if (szo === 0 && population <= 1000) return "🟢";
   return "🔴🔴";
+}
+
+// HH:MM по МСК (UTC+3, без DST)
+function formatMskTime(v) {
+  if (!v) return "";
+  const d = new Date(v);
+  if (isNaN(d.getTime())) return "";
+  const msk = new Date(d.getTime() + 3 * 60 * 60 * 1000);
+  return `${pad2(msk.getUTCHours())}:${pad2(msk.getUTCMinutes())}`;
+}
+
+// Порядковый номер из первой строки первого поста: "2. 🔴🔴 👪(3) 🏭(3)"
+function parseSequenceFromDescription(desc) {
+  const m = String(desc || "").match(/^\s*(\d+)\./);
+  return m ? Number(m[1]) : null;
+}
+
+// Количество кружков важности из шапки первого поста: "2. 🔴🔴 👪(3) 🏭(3)"
+function parseCircleCountFromDescription(desc) {
+  const firstLine = String(desc || "").split("\n")[0] || "";
+  const reds = (firstLine.match(/🔴/g) || []).length;
+  const greens = (firstLine.match(/🟢/g) || []).length;
+  const n = reds || greens;
+  return n > 0 ? n : null;
+}
+
+// Строка «дата филиал ПО. объект…» — второй абзац первого поста
+// (после шапки «N. …» и пустой строки), как в макете заказчика закрытия.
+function parseObjectLineFromDescription(desc) {
+  const parts = String(desc || "").split(/\n{2,}/);
+  return (parts[1] || "").trim();
 }
 
 function buildMaxPostText(raw = {}, { sequenceNumber } = {}) {
@@ -58,4 +90,55 @@ function buildMaxPostText(raw = {}, { sequenceNumber } = {}) {
   return [headerLine, body].filter(Boolean).join("\n\n");
 }
 
-module.exports = { buildMaxPostText, szoCount, severityEmoji };
+// Пост-закрытие/запитка (макет заказчика «Скрин закрытия.png»):
+// N. 🟢…(0) 🏭(0)\nДоп. информация: /<строка первого поста>/. В HH:MM электроснабжение… Причина - …
+// sequenceNumber/objectLine — из первого поста (description_MAX_operativnayObstanovka).
+function buildClosePostText(
+  raw = {},
+  { sequenceNumber, firstDescription, recoveryAt, reason } = {}
+) {
+  // Кружки той же важности, что и в первом посте, но зелёные; (0)(0) по макету.
+  // Количество берём из шапки первого поста; fallback — пересчёт из raw.
+  const greenCircles = "🟢".repeat(
+    parseCircleCountFromDescription(firstDescription) ||
+      severityEmoji(num(raw.POPULATION_COUNT), szoCount(raw)).replace(/[^🔴]/g, "").length ||
+      1
+  );
+  const number =
+    sequenceNumber != null && Number(sequenceNumber) > 0
+      ? String(sequenceNumber)
+      : parseSequenceFromDescription(firstDescription) ||
+        String(raw.F81_010_NUMBER ?? "").trim();
+
+  const headerLine = [
+    number ? `${number}.` : "",
+    greenCircles,
+    "🧑‍🧑‍🧒‍🧒(0)",
+    "🏭(0)",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const objectLine = parseObjectLineFromDescription(firstDescription);
+  const when = formatMskTime(recoveryAt || raw.F81_290_RECOVERYDATETIME);
+  const reasonText = String(reason || raw.REASON_OPER || "").trim();
+
+  const parts = [
+    objectLine ? `/${objectLine}/.` : null,
+    when ? `В ${when} электроснабжение потребителей восстановлено.` : null,
+    reasonText ? `Причина - ${reasonText}.` : null,
+  ].filter(Boolean);
+
+  const body = `Доп. информация: ${parts.join(" ")}`;
+  return [headerLine, body].filter(Boolean).join("\n");
+}
+
+module.exports = {
+  buildMaxPostText,
+  buildClosePostText,
+  parseSequenceFromDescription,
+  parseObjectLineFromDescription,
+  formatMskTime,
+  szoCount,
+  severityEmoji,
+};

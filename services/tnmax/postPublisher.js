@@ -5,7 +5,7 @@
 const axios = require("axios");
 const { sendToChannel, uploadFile } = require("./tnMaxChannel");
 const { generateTablesPdfs } = require("./pdf");
-const { buildMaxPostText } = require("./postTextTemplate");
+const { buildMaxPostText, buildClosePostText } = require("./postTextTemplate");
 
 const SEND_PAUSE_MS = 600; // лимит MAX: 2 сообщ/сек
 const RETRY_PAUSE_MS = 1200;
@@ -262,8 +262,66 @@ async function publishTnPost({ jwt, guid, raw, midDocId, urlStrapi }) {
   }
 }
 
+// Пост-закрытие/запитка: один текстовый пост, без PDF, mid не сохраняем.
+// Ссылка на первый пост — через link {type: "reply", mid}; при 4xx/5xx от MAX
+// повторяем без link (доки не раскрывают схему NewMessageLink — эмпирика).
+async function publishClosePost({ guid, raw, firstDescription, firstMid }) {
+  let postText;
+  try {
+    postText = buildClosePostText(raw, {
+      firstDescription,
+      recoveryAt: raw.F81_290_RECOVERYDATETIME,
+      reason: raw.REASON_OPER,
+    });
+  } catch (te) {
+    console.warn(`[tnmax] Шаблон закрытия не собрался (guid=${guid}):`, te?.message);
+    return { ok: false, message: `шаблон закрытия не собрался: ${te?.message}` };
+  }
+  if (!postText) {
+    return { ok: false, message: "пустой текст поста закрытия" };
+  }
+
+  const payload = { text: postText };
+  if (firstMid) payload.link = { type: "reply", mid: firstMid };
+
+  let result = null;
+  try {
+    result = await sendWithRetry(payload, "закрытие", [], []);
+  } catch (le) {
+    if (payload.link) {
+      console.warn(
+        `[tnmax] Ответ-ссылка не принята (guid=${guid}), повторяю без link:`,
+        le?.response?.status || le?.message
+      );
+      delete payload.link;
+      try {
+        result = await sendWithRetry(payload, "закрытие (без link)", [], []);
+      } catch (e2) {
+        return {
+          ok: false,
+          message: `пост закрытия не отправлен: ${e2?.response?.data?.message || e2?.message}`,
+        };
+      }
+    } else {
+      return {
+        ok: false,
+        message: `пост закрытия не отправлен: ${le?.response?.data?.message || le?.message}`,
+      };
+    }
+  }
+
+  const mid = result?.message?.body?.mid || "-";
+  const url = result?.message?.url || "-";
+  console.log(`[tnmax] ✓ пост закрытия guid=${guid} mid=${mid} url=${url}`);
+  return {
+    ok: true,
+    message: `закрытие guid=${guid} mid=${mid} url=${url}${payload.link ? " (ответ на первый пост)" : ""}`,
+  };
+}
+
 module.exports = {
   publishTnPost,
+  publishClosePost,
   savePostMeta,
   calcSequenceNumber,
   operationalWindowStart,
