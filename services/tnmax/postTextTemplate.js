@@ -123,14 +123,15 @@ function buildClosePostText(
   const when = formatMskTime(recoveryAt || raw.F81_290_RECOVERYDATETIME);
   const reasonText = String(reason || raw.REASON_OPER || "").trim();
 
-  const parts = [
+  // Макет заказчика (уточнение 2026-10-15): каждая часть на своей строке
+  const lines = [
+    "Доп. информация:",
     objectLine ? `/${objectLine}/.` : null,
     when ? `В ${when} электроснабжение потребителей восстановлено.` : null,
     reasonText ? `Причина - ${reasonText}.` : null,
   ].filter(Boolean);
 
-  const body = `Доп. информация: ${parts.join(" ")}`;
-  return [headerLine, body].filter(Boolean).join("\n");
+  return [headerLine, ...lines].filter(Boolean).join("\n");
 }
 
 module.exports = {

@@ -21,6 +21,7 @@ async function sendToChannel({
   attachments,
   notify,
   disable_link_preview,
+  link,
 } = {}) {
   const { token, chatId } = getConfig();
 
@@ -33,6 +34,13 @@ async function sendToChannel({
   if (format) body.format = format;
   if (Array.isArray(attachments) && attachments.length) body.attachments = attachments;
   if (typeof notify === "boolean") body.notify = notify;
+  // Ответ/пересылка на исходное сообщение: {type: "reply"|"forward", mid}
+  if (link && link.mid) {
+    body.link = {
+      type: link.type === "forward" ? "forward" : "reply",
+      mid: String(link.mid),
+    };
+  }
 
   const params = { chat_id: chatId };
   if (typeof disable_link_preview === "boolean") {

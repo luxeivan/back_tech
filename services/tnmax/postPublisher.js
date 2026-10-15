@@ -282,7 +282,10 @@ async function publishClosePost({ guid, raw, firstDescription, firstMid }) {
   }
 
   const payload = { text: postText };
-  if (firstMid) payload.link = { type: "reply", mid: firstMid };
+  if (firstMid) {
+    payload.link = { type: "reply", mid: firstMid };
+    console.log(`[tnmax] пост закрытия: ссылка-ответ на mid=${firstMid}`);
+  }
 
   let result = null;
   try {
