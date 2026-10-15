@@ -77,7 +77,60 @@ async function generateTablesPngs({ jwt }) {
   return images;
 }
 
+// PDF-файлы для поста в MAX-канале (по одному file-вложению на сообщение — лимит API).
+async function generateTablesPdfs({ jwt }) {
+  if (!jwt) throw new Error("Нет JWT: авторизуйтесь");
+
+  const [openTnRows, filialRows, pesItems, destinations] = await Promise.all([
+    fetchOpenTnRows(jwt),
+    fetchTnFilialyRows(jwt),
+    fetchPesItems(jwt),
+    fetchPesDestinations(jwt),
+  ]);
+
+  const list = (Array.isArray(openTnRows) ? openTnRows : []).filter(isOperationalDashboardRow);
+  let tnDoc;
+  if (!list.length) {
+    tnDoc = makeEmptyDocDefinition();
+  } else {
+    const resourceByBranch = new Map(
+      buildOperationalBranchRows(list, filialRows, null).map((row) => [row.branch, row])
+    );
+    const filials = buildHierarchy(list, resourceByBranch);
+    tnDoc = filials.length ? makeEmergencyDocDefinition(filials) : makeEmptyDocDefinition();
+  }
+
+  const pesCountMaps = buildPesDashboardCountMaps(
+    Array.isArray(pesItems) ? pesItems : [],
+    Array.isArray(destinations) ? destinations : [],
+    filialRows
+  );
+  const branchRows = buildOperationalBranchRows(openTnRows, filialRows, pesCountMaps);
+  const ooDataSource = [buildOperationalBranchSummary(branchRows), ...branchRows];
+  const ooDoc = makeOoDocDefinition(
+    ooDataSource.length
+      ? ooDataSource
+      : [
+          {
+            key: "empty",
+            branch: "Нет данных",
+            ...OPERATIONAL_BRANCH_COLUMNS.slice(1).reduce((acc, col) => {
+              acc[col.dataIndex] = "";
+              return acc;
+            }, {}),
+          },
+        ]
+  );
+
+  const [tnPdf, ooPdf] = await Promise.all([docToPdfBuffer(tnDoc), docToPdfBuffer(ooDoc)]);
+  return [
+    { name: "tn-table.pdf", buffer: tnPdf },
+    { name: "oo-table.pdf", buffer: ooPdf },
+  ];
+}
+
 module.exports = {
   generateTablesPngs,
+  generateTablesPdfs,
   MAX_IMAGES_LIMIT,
 };

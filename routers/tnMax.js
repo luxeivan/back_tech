@@ -3,7 +3,12 @@
 // DELETE /services/tnmax/messages/:mid — удаляет пост; ?guid=... чистит поле в Strapi.
 const express = require("express");
 const axios = require("axios");
-const { getConfig, sendToChannel, deleteMessage } = require("../services/tnmax/tnMaxChannel");
+const {
+  getConfig,
+  sendToChannel,
+  deleteStoredMids,
+  parseMids,
+} = require("../services/tnmax/tnMaxChannel");
 const { getJwt } = require("../services/modus/strapi");
 
 const router = express.Router();
@@ -76,23 +81,29 @@ router.post("/send", async (req, res) => {
 });
 
 router.delete("/messages/:mid", async (req, res) => {
-  const mid = String(req.params.mid ?? "").trim();
+  // mid: один или несколько через запятую (текст + 2 PDF = 3 сообщения), URL-encoded
+  const midParam = String(req.params.mid ?? "").trim();
   const guid = String(req.query.guid ?? "").trim() || null;
 
-  if (!mid) {
+  if (!midParam) {
+    return res.status(400).json({ ok: false, message: "mid обязателен (в пути запроса)" });
+  }
+  const mids = parseMids(midParam);
+  if (!mids.length) {
     return res.status(400).json({ ok: false, message: "mid обязателен (в пути запроса)" });
   }
 
   const startedAt = Date.now();
-  console.log(`[tnmax] → удаление из MAX: mid=${mid}${guid ? `, guid=${guid}` : ""}`);
+  console.log(`[tnmax] → удаление из MAX: mid=${mids.join(",")}${guid ? `, guid=${guid}` : ""}`);
 
   try {
-    const result = await deleteMessage(mid);
+    const { deleted, failed } = await deleteStoredMids(mids.join(","));
     const ms = Date.now() - startedAt;
-    console.log(`[tnmax] ✓ удалено: mid=${mid}, ${ms}ms`);
 
     let strapiCleared = null;
+    let remaining = null;
     if (guid) {
+      remaining = failed.map((f) => f.mid).join(",") || null;
       try {
         const jwt = await getJwt();
         const urlStrapi = String(process.env.URL_STRAPI || "").replace(/\/$/, "");
@@ -105,10 +116,10 @@ router.delete("/messages/:mid", async (req, res) => {
         if (doc) {
           await axios.put(
             `${urlStrapi}/api/teh-narusheniyas/${doc.documentId || doc.id}`,
-            { data: { mid_MAX_operativnayObstanovka: null } },
+            { data: { mid_MAX_operativnayObstanovka: remaining } },
             { headers: { Authorization: `Bearer ${jwt}` }, timeout: 15000 }
           );
-          strapiCleared = true;
+          strapiCleared = !remaining;
         } else {
           strapiCleared = false;
         }
@@ -120,13 +131,31 @@ router.delete("/messages/:mid", async (req, res) => {
       }
     }
 
-    res.json({ ok: true, mid, guid, strapi_cleared: strapiCleared, result });
+    if (failed.length) {
+      console.error(
+        `[tnmax] ✗ частичное удаление: OK=${deleted.join(",") || "—"}, FAIL=${failed
+          .map((f) => `${f.mid} (${f.error})`)
+          .join("; ")}, ${ms}ms`
+      );
+      return res.status(502).json({
+        ok: false,
+        mid: mids.join(","),
+        deleted,
+        failed,
+        guid,
+        strapi_cleared: strapiCleared,
+        message: "Часть сообщений не удалена",
+      });
+    }
+
+    console.log(`[tnmax] ✓ удалено: mid=${deleted.join(",")}, ${ms}ms`);
+    res.json({ ok: true, mid: deleted.join(","), guid, strapi_cleared: strapiCleared });
   } catch (e) {
     const ms = Date.now() - startedAt;
     const status = e?.response?.status || "нет ответа";
     const maxData = e?.response?.data || null;
     console.error(
-      `[tnmax] ✗ FAIL удаление: mid=${mid}, MAX HTTP ${status}` +
+      `[tnmax] ✗ FAIL удаление: mid=${midParam}, MAX HTTP ${status}` +
         `, ${maxData ? JSON.stringify(maxData) : e?.message}` +
         `, ${ms}ms`
     );

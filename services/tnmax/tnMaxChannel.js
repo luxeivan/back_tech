@@ -69,6 +69,31 @@ async function deleteMessage(mid) {
   return data;
 }
 
+// mid-поле хранит один или несколько mid через запятую (текст + 2 PDF = 3 сообщения).
+function parseMids(stored) {
+  return String(stored || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+// Удаление всех mid из поля с паузой 600 мс (лимит MAX: 2 удаления/сек в чат).
+async function deleteStoredMids(stored) {
+  const mids = parseMids(stored);
+  const deleted = [];
+  const failed = [];
+  for (let i = 0; i < mids.length; i += 1) {
+    if (i > 0) await new Promise((r) => setTimeout(r, 600));
+    try {
+      await deleteMessage(mids[i]);
+      deleted.push(mids[i]);
+    } catch (e) {
+      failed.push({ mid: mids[i], error: e?.response?.data?.message || e?.message });
+    }
+  }
+  return { mids, deleted, failed };
+}
+
 // Загрузка изображения в MAX: POST /uploads?type=image → multipart → mediafile token.
 async function uploadImage(buffer, filename = "image.png") {
   const { token } = getConfig();
@@ -100,10 +125,42 @@ async function uploadImage(buffer, filename = "image.png") {
   return mediaToken;
 }
 
+// Загрузка файла в MAX: POST /uploads?type=file → multipart → {fileId, token}.
+async function uploadFile(buffer, filename = "file.pdf") {
+  const { token } = getConfig();
+  if (!token) throw new Error("Не задан TN_MAX_BOT_OO");
+
+  const { data: up } = await axios.post(`${apiBase()}/uploads?type=file`, null, {
+    headers: { Authorization: token, Accept: "application/json" },
+    timeout: 15000,
+  });
+
+  const form = new FormData();
+  form.append("data", buffer, { filename, contentType: "application/pdf" });
+
+  const { data } = await axios.post(up.url, form, {
+    headers: { Authorization: token, ...form.getHeaders() },
+    timeout: 120000,
+    maxBodyLength: 100 * 1024 * 1024,
+  });
+
+  const fileToken = data?.token;
+  if (!fileToken) {
+    throw new Error(`MAX upload file не вернул токен: ${JSON.stringify(data)}`);
+  }
+  console.log(
+    `[tnmax] file uploaded: ${filename}, ${buffer.length} байт, fileId=${data?.fileId || "-"}, token=${String(fileToken).slice(0, 16)}…`
+  );
+  return fileToken;
+}
+
 module.exports = {
   apiBase,
   getConfig,
   sendToChannel,
   deleteMessage,
+  parseMids,
+  deleteStoredMids,
   uploadImage,
+  uploadFile,
 };

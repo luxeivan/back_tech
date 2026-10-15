@@ -17,8 +17,13 @@ const {
 } = require("../services/modus/addresses");
 const { getJwt, fetchTnDescriptionById } = require("../services/modus/strapi");
 const { getAutoSendState } = require("../services/modus/autoSend");
-const { sendToChannel, deleteMessage, uploadImage } = require("../services/tnmax/tnMaxChannel");
-const { generateTablesPngs } = require("../services/tnmax/pdf");
+const {
+  sendToChannel,
+  deleteStoredMids,
+  uploadImage,
+  uploadFile,
+} = require("../services/tnmax/tnMaxChannel");
+const { generateTablesPngs, generateTablesPdfs } = require("../services/tnmax/pdf");
 const { buildMaxPostText } = require("../services/tnmax/postTextTemplate");
 const { logAuditEvent } = require("../services/auditLogger");
 require("dotenv").config();
@@ -785,18 +790,29 @@ router.put("/", async (req, res) => {
             islg.skip(st55, "mid не сохранён — пост в MAX не отправлялся");
           } else {
             try {
-              await deleteMessage(storedMid);
+              // mid-поле: один mid или несколько через запятую (текст + 2 PDF)
+              const { mids, deleted, failed } = await deleteStoredMids(storedMid);
+              const remaining = failed.map((f) => f.mid).join(",") || null;
               try {
                 await axios.put(
                   `${urlStrapi}/api/teh-narusheniyas/${documentId}`,
-                  { data: { mid_MAX_operativnayObstanovka: null } },
+                  { data: { mid_MAX_operativnayObstanovka: remaining } },
                   { headers: { Authorization: `Bearer ${jwt}` }, timeout: 15000 }
                 );
-                islg.success(st55, `mid=${storedMid} удалён из MAX, поле очищено`);
+                if (!failed.length) {
+                  islg.success(st55, `mid=${deleted.join(",")} удалён из MAX, поле очищено`);
+                } else {
+                  islg.fail(
+                    st55,
+                    `удалены: ${deleted.join(",") || "—"}; не удалены: ${failed
+                      .map((f) => `${f.mid} (${f.error})`)
+                      .join("; ")}; в поле оставлены: ${remaining}`
+                  );
+                }
               } catch (ce) {
                 islg.success(
                   st55,
-                  `mid=${storedMid} удалён из MAX, но поле не очищено: ${ce?.response?.status || ce?.message}`
+                  `mid=${deleted.join(",")} удалён из MAX, но поле не очищено: ${ce?.response?.status || ce?.message}`
                 );
               }
             } catch (e) {
@@ -1748,33 +1764,15 @@ router.post("/", async (req, res) => {
           }
 
           // Этап 8 — Автоотправка в MAX (тестовый канал, только аварийные):
-          // 2 таблицы картинками + guid текстом; при сбое таблиц — только guid
+          // v3: 3 сообщения — текст, PDF#1, PDF#2 (MAX: max 1 file-вложение на сообщение).
+          // mid-поле: "mid1,mid2,mid3" через запятую; гашение (Этап 5.5 / DELETE-ручка) парсит запятые.
+          // ROLLBACK (пост «2 PNG + текст одним mid» — картинки сверху, текст снизу):
+          //   если заказчик вернётся, раскомментировать блок «старый формат» ниже и закомментировать новый.
           if (isEmergency) {
-            const st8 = islg.start(8, "Автоотправка в MAX (таблицы + guid)");
+            const st8 = islg.start(8, "Автоотправка в MAX (текст + 2 PDF)");
             if (!guid) {
               islg.skip(st8, "GUID отсутствует");
             } else {
-              let attachments = [];
-              let tablesNote = "";
-              try {
-                const pngs = await generateTablesPngs({ jwt });
-                console.log(
-                  `[tnmax] Таблицы сформированы для guid=${guid}: ${pngs.length} PNG (${pngs.map((p) => `${p.name}:${p.buffer.length}б`).join(", ")}), загружаю в MAX...`
-                );
-                for (const png of pngs) {
-                  const mediaToken = await uploadImage(png.buffer, png.name);
-                  attachments.push({ type: "image", payload: { token: mediaToken } });
-                }
-                tablesNote = ` таблиц=${attachments.length}`;
-              } catch (te) {
-                attachments = [];
-                tablesNote = ` таблицы НЕ отправлены: ${te?.message}`;
-                console.warn(
-                  `[tnmax] Таблицы не сформированы для guid=${guid}:`,
-                  te?.message
-                );
-              }
-
               let postText = guid;
               try {
                 postText = buildMaxPostText({ ...(item?.data || {}), ...item }) || guid;
@@ -1782,11 +1780,93 @@ router.post("/", async (req, res) => {
                 console.warn(`[tnmax] Шаблон текста не собрался (guid=${guid}), отправляю guid:`, te?.message);
               }
 
+              // ── СТАРЫЙ ФОРМАТ (ROLLBACK — не удалять): 2 PNG + текст ОДНИМ сообщением ──
+              // let attachments = [];
+              // let tablesNote = "";
+              // try {
+              //   const pngs = await generateTablesPngs({ jwt });
+              //   console.log(
+              //     `[tnmax] Таблицы сформированы для guid=${guid}: ${pngs.length} PNG (${pngs.map((p) => `${p.name}:${p.buffer.length}б`).join(", ")}), загружаю в MAX...`
+              //   );
+              //   for (const png of pngs) {
+              //     const mediaToken = await uploadImage(png.buffer, png.name);
+              //     attachments.push({ type: "image", payload: { token: mediaToken } });
+              //   }
+              //   tablesNote = ` таблиц=${attachments.length}`;
+              // } catch (te) {
+              //   attachments = [];
+              //   tablesNote = ` таблицы НЕ отправлены: ${te?.message}`;
+              //   console.warn(
+              //     `[tnmax] Таблицы не сформированы для guid=${guid}:`,
+              //     te?.message
+              //   );
+              // }
+              // try {
+              //   let maxResult = null;
+              //   for (let attempt = 1; attempt <= 3; attempt++) {
+              //     try {
+              //       maxResult = await sendToChannel({ text: postText, attachments });
+              //       break;
+              //     } catch (se) {
+              //       const code = se?.response?.data?.code;
+              //       if (code === "attachment.not.ready" && attempt < 3) {
+              //         await new Promise((r) => setTimeout(r, 1200));
+              //         continue;
+              //       }
+              //       throw se;
+              //     }
+              //   }
+              //   const mid = maxResult?.message?.body?.mid || "";
+              //   const url = maxResult?.message?.url || "-";
+              //   let saveError = null;
+              //   if (mid) {
+              //     try {
+              //       const midDocId = created?.documentId || createdId;
+              //       await axios.put(
+              //         `${urlStrapi}/api/teh-narusheniyas/${midDocId}`,
+              //         { data: { mid_MAX_operativnayObstanovka: mid } },
+              //         { headers: { Authorization: `Bearer ${jwt}` }, timeout: 15000 }
+              //       );
+              //     } catch (se) {
+              //       saveError = se?.response?.status || se?.message;
+              //     }
+              //   }
+              //   if (saveError) {
+              //     islg.fail(st8, `отправлено (mid=${mid}), но mid не сохранён в Strapi: ${saveError}`);
+              //   } else {
+              //     islg.success(
+              //       st8,
+              //       `guid=${guid} mid=${mid || "-"} url=${url}${tablesNote}` +
+              //         (mid ? "; mid сохранён в Strapi" : "; mid отсутствует в ответе MAX")
+              //     );
+              //   }
+              // } catch (e) {
+              //   islg.fail(st8, e?.response?.data?.message || e?.message);
+              // }
+              // ── КОНЕЦ СТАРОГО ФОРМАТА ──
+
+              // ── НОВЫЙ ФОРМАТ: текст → PDF#1 → PDF#2 (3 отдельных сообщения) ──
+              let pdfs = [];
+              let tablesNote = "";
               try {
-                let maxResult = null;
+                pdfs = await generateTablesPdfs({ jwt });
+                console.log(
+                  `[tnmax] PDF сформированы для guid=${guid}: ${pdfs.map((p) => `${p.name}:${p.buffer.length}б`).join(", ")}, загружаю в MAX...`
+                );
+              } catch (te) {
+                pdfs = [];
+                tablesNote = ` таблицы НЕ отправлены: ${te?.message}`;
+                console.warn(`[tnmax] PDF не сформированы для guid=${guid}:`, te?.message);
+              }
+
+              const sentMids = [];
+              const sentUrls = [];
+
+              const sendWithRetry = async (payload, label) => {
+                let result = null;
                 for (let attempt = 1; attempt <= 3; attempt++) {
                   try {
-                    maxResult = await sendToChannel({ text: postText, attachments });
+                    result = await sendToChannel(payload);
                     break;
                   } catch (se) {
                     const code = se?.response?.data?.code;
@@ -1797,17 +1877,46 @@ router.post("/", async (req, res) => {
                     throw se;
                   }
                 }
+                const mid = result?.message?.body?.mid || "";
+                if (mid) sentMids.push(mid);
+                if (result?.message?.url) sentUrls.push(result.message.url);
+                console.log(
+                  `[tnmax] ✓ ${label}: mid=${mid || "-"} url=${result?.message?.url || "-"}`
+                );
+                return result;
+              };
 
-                const mid = maxResult?.message?.body?.mid || "";
-                const url = maxResult?.message?.url || "-";
+              try {
+                // 1) Текст (рич-шаблон, fallback guid)
+                await sendWithRetry({ text: postText }, "текст");
+                await new Promise((r) => setTimeout(r, 600));
+
+                // 2–3) PDF-файлы — по одному file-вложению на сообщение (лимит MAX)
+                for (let i = 0; i < pdfs.length; i += 1) {
+                  const pdf = pdfs[i];
+                  try {
+                    const fileToken = await uploadFile(pdf.buffer, pdf.name);
+                    await sendWithRetry(
+                      { attachments: [{ type: "file", payload: { token: fileToken } }] },
+                      pdf.name
+                    );
+                  } catch (fe) {
+                    tablesNote += ` ${pdf.name} НЕ отправлен: ${fe?.response?.data?.message || fe?.message};`;
+                    console.warn(`[tnmax] ${pdf.name} не отправлен (guid=${guid}):`, fe?.message);
+                  }
+                  if (i < pdfs.length - 1) await new Promise((r) => setTimeout(r, 600));
+                }
+
+                const midField = sentMids.join(",");
+                const url = sentUrls[0] || "-";
 
                 let saveError = null;
-                if (mid) {
+                if (midField) {
                   try {
                     const midDocId = created?.documentId || createdId;
                     await axios.put(
                       `${urlStrapi}/api/teh-narusheniyas/${midDocId}`,
-                      { data: { mid_MAX_operativnayObstanovka: mid } },
+                      { data: { mid_MAX_operativnayObstanovka: midField } },
                       { headers: { Authorization: `Bearer ${jwt}` }, timeout: 15000 }
                     );
                   } catch (se) {
@@ -1818,17 +1927,31 @@ router.post("/", async (req, res) => {
                 if (saveError) {
                   islg.fail(
                     st8,
-                    `отправлено (mid=${mid}), но mid не сохранён в Strapi: ${saveError}`
+                    `отправлено (mid=${midField || "-"}), но mid не сохранён в Strapi: ${saveError}`
                   );
                 } else {
                   islg.success(
                     st8,
-                    `guid=${guid} mid=${mid || "-"} url=${url}${tablesNote}` +
-                      (mid ? "; mid сохранён в Strapi" : "; mid отсутствует в ответе MAX")
+                    `guid=${guid} mid=${midField || "-"} url=${url} сообщений=${sentMids.length}${tablesNote}` +
+                      (midField ? "; mid сохранён в Strapi" : "; mid отсутствует в ответе MAX")
                   );
                 }
               } catch (e) {
-                islg.fail(st8, e?.response?.data?.message || e?.message);
+                // Текст мог уйти до падения PDF — сохраним хотя бы его mid
+                if (sentMids.length) {
+                  try {
+                    const midDocId = created?.documentId || createdId;
+                    await axios.put(
+                      `${urlStrapi}/api/teh-narusheniyas/${midDocId}`,
+                      { data: { mid_MAX_operativnayObstanovka: sentMids.join(",") } },
+                      { headers: { Authorization: `Bearer ${jwt}` }, timeout: 15000 }
+                    );
+                  } catch (_) { /* mid уже потеряны — логируем ниже через fail */ }
+                }
+                islg.fail(
+                  st8,
+                  `guid=${guid} mid=${sentMids.join(",") || "-"}: ${e?.response?.data?.message || e?.message}`
+                );
               }
             }
           }
