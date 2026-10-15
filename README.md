@@ -1,129 +1,71 @@
 # back_tech
 
-Бэкенд для оперативного мониторинга и управления электросетевым хозяйством — API для дашбордов, ЕДДС, ПЭС-модуля, аудита, SSE-событий и интеграций с внешними системами.
+BFF/API для системы управления технологическими нарушениями (ТН). МОДУС шлёт аварии/плановые → мы пишем в Strapi → раздаём фронтам (SSE) и уводим в ЕДДС, MAX-каналы, МосЭнергоСбыт, сайт.
 
 ## Стек
 
-| Слой | Технологии |
-|------|-----------|
-| Runtime | Node.js |
-| Framework | Express 5 |
-| HTTP-клиент | Axios |
-| Парсинг тел | body-parser |
-| Утилиты | Day.js, xlsx |
-| Dev-режим | Nodemon |
-| Конфиг | dotenv |
-| Контейнеризация | Docker + Docker Compose |
-
-## Установка
-
-```bash
-npm install
-```
+Node.js · Express 5 · Axios · Strapi (как БД, только REST) · SSE для realtime · Docker (только локально)
 
 ## Запуск
 
 ```bash
-npm run dev      # dev-режим (nodemon, авто-рестарт)
-npm start        # production (node app.js)
+npm install
+npm run dev    # nodemon
+npm start      # node app.js
 ```
 
-Сервер стартует на `PORT` (по умолчанию 3110).
+Порт — из `PORT` в `.env` (в проде 3110).
 
-## Переменные окружения (.env)
+## .env
 
-Создайте `.env` в корне проекта. Минимальный набор:
+| Группа | Переменные |
+|--------|-----------|
+| Ядро | `PORT`, `SECRET_FOR_MODUS`, `URL_STRAPI`, `LOGIN_STRAPI`, `PASSWORD_STRAPI` |
+| ЕДДС | `EDDS_URL`, `EDDS_URL_PUT`, `EDDS_TOKEN`, `EDDS_NEW_BASE_URL` |
+| МосЭнергоСбыт | `MES_MODE`, `MES_LOGIN`, `MES_PASSWORD`, `MES_TEST_*`/`MES_PROD_*` |
+| MAX ОО (канал «Оперативная обстановка») | `TN_MAX_BOT_OO`, `MAX_CHAT_ID_OO`, `MAX_CHANEL_OO`, `TN_MAX_API_BASE` |
+| MAX И / ПЭС | `TN_MAX_BOT_I`, `MAX_CHANEL_I`, `PES_MAX_BOT_TOKEN`, `PES_MAX_BOT_ENABLED`, `MAX_WEBHOOK_*` |
+| ПРОЧЕЕ | `T3_*`, `DADATA_TOKEN`, `AUDIT_LOGGER_ENABLED`, `LOGIN_STRAPI`/`PASSWORD_STRAPI` |
 
-| Переменная | Описание |
-|-----------|----------|
-| `PORT` | Порт сервера (default: 5000, в .env: 3110) |
-| `SECRET_FOR_MODUS` | Секрет для верификации запросов Модус |
-| `URL_STRAPI` | URL CMS Strapi для хранения данных |
-| `LOGIN_STRAPI` / `PASSWORD_STRAPI` | Логин/пароль Strapi |
-| `EDDS_TOKEN` | Токен ЕДДС v2 |
-| `EDDS_NEW_BASE_URL` | Базовый URL ЕДДС v2 API |
-| `MES_MODE` | Режим МосЭнергоСбыт (test/prod) |
-| `MES_LOGIN` / `MES_PASSWORD` | Логин/пароль МосЭнергоСбыт |
-| `MES_TEST_AUTH_URL` / `MES_PROD_AUTH_URL` | URL авторизации СУВК |
-| `MES_TEST_LOAD_URL` / `MES_PROD_LOAD_URL` | URL загрузки СУВК |
-| `T3_BASE` / `T3_USER` / `T3_TOKEN` | API T3 (ПЭС) |
-| `PES_MAX_BOT_TOKEN` | Токен MAX-бота (ПЭС) |
-| `PES_MAX_BOT_ENABLED` | Включить MAX-бота (0/1) |
-| `DADATA_TOKEN` | Токен Dadata (геокодирование) |
-| `AUDIT_LOGGER_ENABLED` | Включить логгер аудита (0/1) |
+`.env` содержит прод-секреты и не коммитится в дистрибутивах (см. `.dockerignore`).
 
-## Структура проекта
+## Структура
 
 ```
-back_tech/
-├── app.js                  # точка входа, Express-сервер, маршрутизация
-├── routers/                # API-роутеры
-│   ├── modus.js            # Модус — приём/передача данных об авариях
-│   ├── edds.js / eddsnew.js# ЕДДС v1/v2 — аварийные заявки
-│   ├── mes.js (+ mes/)     # МосЭнергоСбыт / СУВК — уведомления потребителям
-│   ├── pes.js              # ПЭС — основные эндпоинты
-│   ├── pesModule.js        # ПЭС-модуль (детали модулей)
-│   ├── pesMax.js           # ПЭС MAX-бот
-│   ├── minenergo.js        # Минэнерго
-│   ├── disconnected.js     # Отключённые потребители
-│   ├── ai.js               # AI-интеграция
-│   ├── audit.js            # Журнал аудита
-│   ├── weather.js          # Погода
-│   ├── webhooks.js         # Webhook-эндпоинты
-│   ├── dadata.js           # Геокодирование через Dadata
-│   ├── siteEmergencyOutages.js  # Аварийные отключения (сайт)
-│   ├── sitePlannedOutages.js    # Плановые отключения (сайт)
-│   ├── integrationMappings.js   # Маппинги интеграций
-│   └── operationalDashboard.js  # Оперативный дашборд (статистика)
-├── services/               # Бизнес-логика
-│   ├── modus/              # Обработка данных Модус (EDDS-пейлоады, Strapi)
-│   ├── edds/               # Логика ЕДДС (геолокация аварий)
-│   ├── mes/                # Авторизация/загрузка СУВК
-│   ├── pes/                # ПЭС-логика
-│   │   ├── pesModuleData.js
-│   │   ├── pesStrapiStore.js
-│   │   ├── pesModuleSeed.js
-│   │   ├── tg/             # Telegram-бот ПЭС
-│   │   └── max/            # MAX-бот ПЭС (handlers, transport, subscriptions)
-│   ├── auth.js             # Авторизация
-│   ├── sse.js              # Server-Sent Events (realtime)
-│   ├── auditLogger.js      # Логгер аудита (writing to Strapi)
-│   ├── autoDescription.js  # Генерация описаний
-│   ├── operationalDashboardStats.js  # Сбор статистики дашборда
-│   └── weather.js          # Логика погоды
-├── scripts/                # Утилиты и миграции данных
-├── diagnostic-scripts/     # Диагностические скрипты
-├── import_data/            # Импорт данных (Excel/JSON)
-├── data/                   # Локальные state-файлы (боты, подписки)
-├── Dockerfile
-├── docker-compose.yml
-└── nodemon.json
+app.js              точка входа, монтирование роутеров
+routers/            API: modus, edds/eddsnew, mes, pes*, tnmax, autosend,
+                    site*, audit, weather, ai, webhooks, operationalDashboard…
+services/
+  modus/            маппинг МОДУС, payload ЕДДС, автоотправка
+  tnmax/            посты в MAX-канал ОО: postPublisher (Этап 8/8.5),
+                    postTextTemplate (шаблоны текста), pdf/ (таблицы → PDF/PNG), tnMaxChannel (HTTP-клиент)
+  autoDescription.js  шаблон описания ТН (ЕДДС/модалка/MAX)
+  pes/              ПЭС-модуль, max/ (webhook-бот)
+  sse.js, auditLogger.js, auth.js, weather.js…
+scripts/            разовые утилиты (запуск вручную: node scripts/…)
+diagnostic-scripts/ разовая диагностика Strapi
 ```
 
-## Ключевые API-маршруты
+## Маршруты
 
-| Префикс | Назначение |
-|---------|-----------|
-| `/services/modus` | Приём данных от Модус |
-| `/services/edds` / `/services/eddsnew` | ЕДДС v1/v2 — аварийные заявки |
-| `/services/mes` | СУВК / МосЭнергоСбыт — уведомления |
-| `/services/pes` | ПЭС — основные данные |
-| `/services/pes/module` | ПЭС-модуль |
-| `/services/pes/max` | ПЭС MAX-бот |
-| `/services/disconnected` | Отключённые потребители |
-| `/services/minenergo` | Минэнерго |
-| `/services/ai` | AI-интеграция |
-| `/services/audit` | Журнал аудита |
-| `/services/weather` | Погода |
-| `/services/event` | SSE (GET — подписка, POST — broadcast) |
-| `/services/webhooks` | Webhook-эндпоинты |
-| `/services/operational-dashboard` | Оперативный дашборд |
-| `/services/integration-mappings` | Маппинги интеграций |
-| `/services/site/emergency-outages` | Аварийные отключения |
-| `/services/site/planned-outages` | Плановые отключения |
+| Префикс | Что |
+|---------|-----|
+| `/services/modus` | приём от МОДУСа (POST аварий / PUT обновления) |
+| `/services/edds`, `/services/eddsnew` | отправка в ЕДДС (v1 curl / v2 JSON) |
+| `/services/tnmax` | MAX-канал ОО: `POST /send`, `DELETE /messages/:mid` |
+| `/services/autosend` | свитч автоотправки ТН в ЕДДС |
+| `/services/mes` | МосЭнергоСбыт / СУВК |
+| `/services/pes`, `/services/pes/module`, `/services/pes/max` | ПЭС |
+| `/services/event` | SSE (GET подписка / POST broadcast) |
+| `/services/site/*` | данные для публичного сайта |
+| `/services/audit`, `/weather`, `/ai`, `/webhooks`, `/disconnected`, `/minenergo`, `/operational-dashboard`, `/integration-mappings` | прочее |
 
-## Docker
+Swagger: `/api-docs` (спека `/api-docs.json`).
+
+## Docker (только локально)
 
 ```bash
-docker compose up --build
+docker compose up -d --build
 ```
+
+На проде Docker нет: `apt install poppler-utils`, `npm install`, запуск `node app.js` напрямую.

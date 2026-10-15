@@ -8,8 +8,6 @@
   "ext": "js,json",
   "ignore": [
     "data/*",
-    "import_data/*",
     "node_modules/*"
   ]
 }
-
