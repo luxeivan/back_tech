@@ -7,6 +7,8 @@ services:
       - "3110:3110"
     env_file:
       - .env
+    environment:
+      NODE_EXTRA_CA_CERTS: /app/certs/ca-bundle.pem
     volumes:
       - ./data:/app/data
       - ./import_data:/app/import_data

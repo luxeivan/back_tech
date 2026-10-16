@@ -1,4 +1,5 @@
 .env
+certs/
 node_modules/
 data/pesBotSubscriptions.json
 data/pesBotState.json
