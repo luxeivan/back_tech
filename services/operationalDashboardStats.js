@@ -192,12 +192,15 @@ const getOperationalStatsPeriod = () => {
   };
 };
 
+// Тихий успех (Стас, 2026-10-16: «не несут полезной информации, засоряют терминал») —
+// печатаем только ошибки пересчёта, весь остальной шум (страницы, overrides, «сохранена») молчит.
 const log = (message, details) => {
+  if (!String(message).includes("Ошибка")) return;
   if (details === undefined) {
-    console.log(`[dashboard-oo-stats] ${message}`);
+    console.error(`[dashboard-oo-stats] ${message}`);
     return;
   }
-  console.log(`[dashboard-oo-stats] ${message}`, details);
+  console.error(`[dashboard-oo-stats] ${message}`, details);
 };
 
 const mapItem = (item) => {
