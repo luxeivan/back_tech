@@ -19,9 +19,12 @@ function szoCount(raw) {
   return SZO_ALL_FIELDS.reduce((sum, field) => sum + num(raw[field]), 0);
 }
 
+// Кружки важности НА ОТКРЫТИИ — всегда красные (юзер, 2026-10-15: «при открытии
+// только красные»); зелёные — только в посте-закрытии.
+// 🔴 = население ≤1000 вкл. И нет СЗО; 🔴🔴 = 1000–5000 и/или СЗО≤5; 🔴🔴🔴 = >5000 и/или СЗО>5
 function severityEmoji(population, szo) {
   if (szo > 5 || population > 5000) return "🔴🔴🔴";
-  if (szo === 0 && population <= 1000) return "🟢";
+  if (szo === 0 && population <= 1000) return "🔴";
   return "🔴🔴";
 }
 
