@@ -11,7 +11,7 @@ function safeRemove(id) {
 
 function broadcast(payload) {
   const data = `data: ${JSON.stringify(payload)}\n\n`;
-  console.log("Data", data);
+  console.log(`[sse] ${payload?.type || "?"} id=${payload?.id ?? "-"} → клиентов=${clients.size}`);
   for (const [id, c] of clients) {
     try {
       c.res.write("event: message\n");

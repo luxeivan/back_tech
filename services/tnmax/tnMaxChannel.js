@@ -1,25 +1,11 @@
 // Минимальный клиент MAX для тестового канала ОО.
 const axios = require("axios");
 const FormData = require("form-data");
-const fs = require("fs");
 
 // platform-api2.max.ru требует сертификат Минцифры в trust store — локально его нет,
 // поэтому по умолчанию старый домен (как у pes/max). Переопределение: TN_MAX_API_BASE.
 function apiBase() {
   return String(process.env.TN_MAX_API_BASE || "https://platform-api.max.ru").replace(/\/$/, "");
-}
-
-// Лог перед каждым вызовом MAX API: какой домен и есть ли файл сертов Минцифры.
-// Доказательство в консоли: домен platform-api2 + `✓ OK 200` = серты работают
-// (без них соединение с api2 падает с UNABLE_TO_GET_ISSUER_CERT_LOCALLY).
-function logTarget(method, path) {
-  const ca = String(process.env.NODE_EXTRA_CA_CERTS || "").trim();
-  const caStatus = !ca
-    ? "NODE_EXTRA_CA_CERTS не задан"
-    : fs.existsSync(ca)
-      ? `есть (${ca})`
-      : `НЕ НАЙДЕН (${ca})`;
-  console.log(`[tnmax] → ${method} ${apiBase()}${path} | серты Минцифры: ${caStatus}`);
 }
 
 function getConfig() {
@@ -61,7 +47,6 @@ async function sendToChannel({
     params.disable_link_preview = disable_link_preview;
   }
 
-  logTarget("POST", "/messages");
   const { data } = await axios.post(`${apiBase()}/messages`, body, {
     headers: {
       Authorization: token,
@@ -80,7 +65,6 @@ async function deleteMessage(mid) {
   if (!token) throw new Error("Не задан TN_MAX_BOT_OO");
   if (!mid) throw new Error("mid обязателен");
 
-  logTarget("DELETE", "/messages");
   const { data } = await axios.delete(`${apiBase()}/messages`, {
     headers: {
       Authorization: token,
@@ -123,7 +107,6 @@ async function uploadImage(buffer, filename = "image.png") {
   const { token } = getConfig();
   if (!token) throw new Error("Не задан TN_MAX_BOT_OO");
 
-  logTarget("POST", "/uploads?type=image");
   const { data: up } = await axios.post(`${apiBase()}/uploads?type=image`, null, {
     headers: { Authorization: token, Accept: "application/json" },
     timeout: 15000,
@@ -155,7 +138,6 @@ async function uploadFile(buffer, filename = "file.pdf") {
   const { token } = getConfig();
   if (!token) throw new Error("Не задан TN_MAX_BOT_OO");
 
-  logTarget("POST", "/uploads?type=file");
   const { data: up } = await axios.post(`${apiBase()}/uploads?type=file`, null, {
     headers: { Authorization: token, Accept: "application/json" },
     timeout: 15000,
@@ -183,7 +165,6 @@ async function uploadFile(buffer, filename = "file.pdf") {
 module.exports = {
   apiBase,
   getConfig,
-  logTarget,
   sendToChannel,
   deleteMessage,
   parseMids,

@@ -211,18 +211,20 @@ function logEddsV2AsyncError(prefix, e) {
 }
 
 // ── Поэтапное логирование (Этап N — Название) ───────────────────────────────
+// Тихий успех, громкий провал: успешные/пропущенные этапы не печатаются
+// (нет новостей = новости); при ошибке — немедленный ✗ и компактный ИТОГ
+// со всеми этапами, чтобы видеть контекст «где затупили».
 function createStageLogger(prefix, sharedStages) {
   const stages = sharedStages || [];
   return {
     start(num, name) {
-      const stage = { num, name, status: "pending", error: null };
+      const stage = { num, name, status: "pending", error: null, detail: null };
       stages.push(stage);
-      console.log(`[${prefix}] Этап ${num} — ${name}...`);
       return stage;
     },
     success(stage, detail) {
       stage.status = "success";
-      console.log(`[${prefix}] Этап ${stage.num} — ${stage.name} ✓${detail ? " " + detail : ""}`);
+      stage.detail = detail || null;
     },
     fail(stage, error) {
       stage.status = "error";
@@ -231,27 +233,23 @@ function createStageLogger(prefix, sharedStages) {
     },
     skip(stage, reason) {
       stage.status = "skipped";
-      console.log(`[${prefix}] Этап ${stage.num} — ${stage.name} ⊘ ${reason || "пропущен"}`);
+      stage.detail = reason || null;
     },
     summary() {
+      const errors = stages.filter((s) => s.status === "error");
+      if (!errors.length) return;
       const line = "═".repeat(60);
-      console.log(`\n${line}`);
-      console.log(`  ИТОГ [${prefix}]`);
-      console.log(line);
+      console.error(`\n${line}`);
+      console.error(`  ИТОГ [${prefix}] — ЕСТЬ ОШИБКИ`);
+      console.error(line);
       for (const s of stages) {
         const icon = s.status === "success" ? "✓" : s.status === "error" ? "✗" : s.status === "skipped" ? "⊘" : "…";
-        const tail = s.error ? ` — ${s.error}` : "";
-        const msg = `  Этап ${s.num} — ${s.name} ${icon}${tail}`;
-        if (s.status === "error") console.error(msg);
-        else console.log(msg);
+        const extra = s.error ? ` — ${s.error}` : s.detail ? ` (${s.detail})` : "";
+        console.error(`  Этап ${s.num} — ${s.name} ${icon}${extra}`);
       }
-      const errors = stages.filter((s) => s.status === "error");
-      if (errors.length) {
-        console.error(`  ⚠ ОШИБКА: ${errors.map((e) => `Этап ${e.num} (${e.name})`).join(", ")}`);
-      } else {
-        console.log(`  ✅ Все этапы пройдены`);
-      }
-      console.log(`${line}\n`);
+      console.error(
+        `  ⚠ ОШИБКА: ${errors.map((e) => `Этап ${e.num} (${e.name})`).join(", ")}\n${line}\n`
+      );
     },
   };
 }
