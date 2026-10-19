@@ -120,8 +120,10 @@ async function sendWithRetry(payload, label, sentMids, sentUrls, target) {
 // { ok, message } — ok=false → islg.fail, ok=true → islg.success.
 async function publishTnPost({ jwt, guid, raw, midDocId, urlStrapi }) {
   let postText = guid;
+  // sequenceNumber нужен и ветке группы И ниже — вне try-блока (иначе ReferenceError).
+  let sequenceNumber = null;
   try {
-    const sequenceNumber = await calcSequenceNumber({ jwt, urlStrapi });
+    sequenceNumber = await calcSequenceNumber({ jwt, urlStrapi });
     postText = buildMaxPostText(raw, { sequenceNumber }) || guid;
   } catch (te) {
     console.warn(`[tnmax] Шаблон текста не собрался (guid=${guid}), отправляю guid:`, te?.message);
@@ -227,11 +229,12 @@ async function publishTnPost({ jwt, guid, raw, midDocId, urlStrapi }) {
     // Малая ТН (≤1000 чел., нет СЗО) без ПЭС — в группу И не шлём (юзер, 2026-10-19).
     let incidentMid = "";
     let incidentNote = "";
+    let incidentText = "";
     if (skipIncidentFirstPost(raw)) {
       incidentNote = "; группа И: пропущено (малая ТН без ПЭС — для инцидентов неактуально)";
     } else {
       try {
-        const incidentText = buildMaxPostText(raw, { sequenceNumber, incident: true }) || guid;
+        incidentText = buildMaxPostText(raw, { sequenceNumber, incident: true }) || guid;
         const incidentPayload =
           incidentText === guid
             ? { text: guid }
@@ -252,7 +255,7 @@ async function publishTnPost({ jwt, guid, raw, midDocId, urlStrapi }) {
       mids: midField,
       postText,
       incidentMids: incidentMid || null,
-      incidentPostText: incidentMid ? postText : null,
+      incidentPostText: incidentMid ? incidentText : null,
     });
     if (incidentMidError) {
       incidentNote += `; mid группы И не сохранён: ${incidentMidError}`;
