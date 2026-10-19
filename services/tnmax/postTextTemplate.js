@@ -21,11 +21,20 @@ function szoCount(raw) {
 
 // Кружки важности НА ОТКРЫТИИ — всегда красные (юзер, 2026-10-15: «при открытии
 // только красные»); зелёные — только в посте-закрытии.
-// 🔴 = население ≤1000 вкл. И нет СЗО; 🔴🔴 = 1000–5000 и/или СЗО≤5; 🔴🔴🔴 = >5000 и/или СЗО>5
-function severityEmoji(population, szo) {
+// ОО-канал: 🔴 = население ≤1000 вкл. И нет СЗО; 🔴🔴 = 1000–5000 и/или СЗО≤5; 🔴🔴🔴 = >5000 и/или СЗО>5
+// Группа И (incident): один 🔴 — только если направлена ПЭС (PES_COUNT>0), без привязки к населению/СЗО;
+// 2–3 кружка — по тем же правилам, что и в ОО.
+function severityEmoji(population, szo, { incident, pes } = {}) {
   if (szo > 5 || population > 5000) return "🔴🔴🔴";
+  if (incident) return num(pes) > 0 ? "🔴" : "🔴🔴";
   if (szo === 0 && population <= 1000) return "🔴";
   return "🔴🔴";
+}
+
+// Первый пост в группу И НЕ отправляем: малая ТН (население ≤1000, нет СЗО) без ПЭС —
+// для «серьёзных людей» инцидентного канала такие ТН неактуальны (юзер, 2026-10-19).
+function skipIncidentFirstPost(raw) {
+  return szoCount(raw) === 0 && num(raw.POPULATION_COUNT) <= 1000 && num(raw.PES_COUNT) === 0;
 }
 
 // HH:MM по МСК (UTC+3, без DST)
@@ -92,9 +101,10 @@ function boldifyForMax(plain) {
   return html;
 }
 
-function buildMaxPostText(raw = {}, { sequenceNumber } = {}) {
+function buildMaxPostText(raw = {}, { sequenceNumber, incident } = {}) {
   // sequenceNumber — порядковый номер аварийки с 08:00 МСК (см. calcSequenceNumber в postPublisher);
   // fallback на номер ТН из МОДУСа, если нумерация не посчиталась
+  // incident=true — вариант для группы И: один 🔴 только если направлена ПЭС (см. severityEmoji)
   const number =
     sequenceNumber != null && Number(sequenceNumber) > 0
       ? String(sequenceNumber)
@@ -105,7 +115,7 @@ function buildMaxPostText(raw = {}, { sequenceNumber } = {}) {
 
   const headerLine = [
     number ? `${number}.` : "",
-    severityEmoji(population, szo),
+    severityEmoji(population, szo, { incident, pes: raw.PES_COUNT }),
     `🧑‍🧑‍🧒‍🧒(${population})`,
     `🏭(${szo})`,
   ]
@@ -181,4 +191,5 @@ module.exports = {
   formatMskTime,
   szoCount,
   severityEmoji,
+  skipIncidentFirstPost,
 };

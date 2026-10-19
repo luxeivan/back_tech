@@ -5,7 +5,7 @@
 const axios = require("axios");
 const { sendToChannel, uploadFile } = require("./tnMaxChannel");
 const { generateTablesPdfs } = require("./pdf");
-const { buildMaxPostText, buildClosePostText, boldifyForMax } = require("./postTextTemplate");
+const { buildMaxPostText, buildClosePostText, boldifyForMax, skipIncidentFirstPost } = require("./postTextTemplate");
 
 const SEND_PAUSE_MS = 600; // лимит MAX: 2 сообщ/сек
 const RETRY_PAUSE_MS = 1200;
@@ -224,15 +224,25 @@ async function publishTnPost({ jwt, guid, raw, midDocId, urlStrapi }) {
     }
 
     // ── Группа И: зеркало первого поста (только текст, без PDF) ──
+    // Малая ТН (≤1000 чел., нет СЗО) без ПЭС — в группу И не шлём (юзер, 2026-10-19).
     let incidentMid = "";
     let incidentNote = "";
-    try {
-      const incidentResult = await sendWithRetry(textPayload, "группа И: текст", [], [], "i");
-      incidentMid = incidentResult?.message?.body?.mid || "";
-      incidentNote = incidentMid ? `; группа И mid=${incidentMid}` : "; группа И: mid отсутствует";
-    } catch (ie) {
-      incidentNote = `; группа И: НЕ отправлен — ${ie?.response?.data?.message || ie?.message}`;
-      console.warn(`[tnmax] Группа И: текст не отправлен (guid=${guid}):`, ie?.response?.status || ie?.message);
+    if (skipIncidentFirstPost(raw)) {
+      incidentNote = "; группа И: пропущено (малая ТН без ПЭС — для инцидентов неактуально)";
+    } else {
+      try {
+        const incidentText = buildMaxPostText(raw, { sequenceNumber, incident: true }) || guid;
+        const incidentPayload =
+          incidentText === guid
+            ? { text: guid }
+            : { text: boldifyForMax(incidentText), format: "html" };
+        const incidentResult = await sendWithRetry(incidentPayload, "группа И: текст", [], [], "i");
+        incidentMid = incidentResult?.message?.body?.mid || "";
+        incidentNote = incidentMid ? `; группа И mid=${incidentMid}` : "; группа И: mid отсутствует";
+      } catch (ie) {
+        incidentNote = `; группа И: НЕ отправлен — ${ie?.response?.data?.message || ie?.message}`;
+        console.warn(`[tnmax] Группа И: текст не отправлен (guid=${guid}):`, ie?.response?.status || ie?.message);
+      }
     }
 
     const midField = sentMids.join(",");
@@ -348,26 +358,32 @@ async function publishClosePost({ guid, raw, firstDescription, firstMid, firstIn
   console.log(`[tnmax] ✓ пост закрытия guid=${guid} mid=${mid} url=${url}`);
 
   // ── Группа И: зеркало поста-закрытия (только текст) ──
+  // Если первый пост в группу И не отправлялся (малая ТН без ПЭС / ошибка) —
+  // закрытие тоже не шлём: reply не на что, контекста нет.
   let incidentNote = "";
-  const incidentPayload = { text: postText };
-  if (firstIncidentMid) incidentPayload.link = { type: "reply", mid: firstIncidentMid };
-  try {
-    let incidentResult = null;
+  if (!firstIncidentMid) {
+    incidentNote = "; группа И: пропущено (первый пост в группу И не отправлялся)";
+  } else {
+    const incidentPayload = { text: postText };
+    incidentPayload.link = { type: "reply", mid: firstIncidentMid };
     try {
-      incidentResult = await sendWithRetry(incidentPayload, "группа И: закрытие", [], [], "i");
-    } catch (le2) {
-      if (incidentPayload.link) {
-        delete incidentPayload.link;
-        incidentResult = await sendWithRetry(incidentPayload, "группа И: закрытие (без link)", [], [], "i");
-      } else {
-        throw le2;
+      let incidentResult = null;
+      try {
+        incidentResult = await sendWithRetry(incidentPayload, "группа И: закрытие", [], [], "i");
+      } catch (le2) {
+        if (incidentPayload.link) {
+          delete incidentPayload.link;
+          incidentResult = await sendWithRetry(incidentPayload, "группа И: закрытие (без link)", [], [], "i");
+        } else {
+          throw le2;
+        }
       }
+      const incidentMid = incidentResult?.message?.body?.mid || "-";
+      incidentNote = `; группа И mid=${incidentMid}`;
+    } catch (ie) {
+      incidentNote = `; группа И: НЕ отправлен — ${ie?.response?.data?.message || ie?.message}`;
+      console.warn(`[tnmax] Группа И: пост закрытия не отправлен (guid=${guid}):`, ie?.response?.status || ie?.message);
     }
-    const incidentMid = incidentResult?.message?.body?.mid || "-";
-    incidentNote = `; группа И mid=${incidentMid}`;
-  } catch (ie) {
-    incidentNote = `; группа И: НЕ отправлен — ${ie?.response?.data?.message || ie?.message}`;
-    console.warn(`[tnmax] Группа И: пост закрытия не отправлен (guid=${guid}):`, ie?.response?.status || ie?.message);
   }
 
   return {
