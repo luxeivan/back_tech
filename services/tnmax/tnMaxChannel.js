@@ -1,4 +1,4 @@
-// Минимальный клиент MAX для тестового канала ОО.
+// Минимальный клиент MAX: канал ОО (таргет oo) + тестовая группа И (таргет i).
 const axios = require("axios");
 const FormData = require("form-data");
 
@@ -8,11 +8,25 @@ function apiBase() {
   return String(process.env.TN_MAX_API_BASE || "https://platform-api.max.ru").replace(/\/$/, "");
 }
 
-function getConfig() {
-  const token = String(process.env.TN_MAX_BOT_OO || "").trim();
-  const channelLink = String(process.env.MAX_CHANEL_OO || "").trim();
-  const chatId = Number(String(process.env.MAX_CHAT_ID_OO || "").trim()) || 0;
-  return { token, channelLink, chatId };
+// chat_id группы: MAX_GROUP_I может быть числом или ссылкой https://web.max.ru/-801… (число в конце = chat_id).
+function parseChatId(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return 0;
+  if (/^-?\d+$/.test(s)) return Number(s);
+  const m = s.match(/(-?\d+)\/?$/);
+  return m ? Number(m[1]) : 0;
+}
+
+const TARGETS = {
+  oo: { envToken: "TN_MAX_BOT_OO", envChat: "MAX_CHAT_ID_OO" },
+  i: { envToken: "TN_MAX_BOT_I", envChat: "MAX_GROUP_I" },
+};
+
+function getConfig(target = "oo") {
+  const t = TARGETS[target] || TARGETS.oo;
+  const token = String(process.env[t.envToken] || "").trim();
+  const chatId = parseChatId(process.env[t.envChat]);
+  return { token, chatId, target: TARGETS[target] ? target : "oo", envToken: t.envToken, envChat: t.envChat };
 }
 
 async function sendToChannel({
@@ -22,13 +36,12 @@ async function sendToChannel({
   notify,
   disable_link_preview,
   link,
+  target,
 } = {}) {
-  const { token, chatId } = getConfig();
+  const { token, chatId, envToken, envChat } = getConfig(target);
 
-  if (!token) throw new Error("Не задан TN_MAX_BOT_OO");
-  if (!chatId) {
-    throw new Error("Не задан MAX_CHAT_ID_OO (chat_id берётся из события bot_added, не из ссылки)");
-  }
+  if (!token) throw new Error(`Не задан ${envToken}`);
+  if (!chatId) throw new Error(`Не задан chat_id (${envChat})`);
 
   const body = { text };
   if (format) body.format = format;
@@ -59,10 +72,10 @@ async function sendToChannel({
   return data;
 }
 
-async function deleteMessage(mid) {
-  const { token } = getConfig();
+async function deleteMessage(mid, target) {
+  const { token, envToken } = getConfig(target);
 
-  if (!token) throw new Error("Не задан TN_MAX_BOT_OO");
+  if (!token) throw new Error(`Не задан ${envToken}`);
   if (!mid) throw new Error("mid обязателен");
 
   const { data } = await axios.delete(`${apiBase()}/messages`, {
@@ -86,14 +99,14 @@ function parseMids(stored) {
 }
 
 // Удаление всех mid из поля с паузой 600 мс (лимит MAX: 2 удаления/сек в чат).
-async function deleteStoredMids(stored) {
+async function deleteStoredMids(stored, target) {
   const mids = parseMids(stored);
   const deleted = [];
   const failed = [];
   for (let i = 0; i < mids.length; i += 1) {
     if (i > 0) await new Promise((r) => setTimeout(r, 600));
     try {
-      await deleteMessage(mids[i]);
+      await deleteMessage(mids[i], target);
       deleted.push(mids[i]);
     } catch (e) {
       failed.push({ mid: mids[i], error: e?.response?.data?.message || e?.message });

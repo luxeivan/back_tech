@@ -778,45 +778,84 @@ router.put("/", async (req, res) => {
           return acc;
         }
 
-        // Этап 5.5 — Удаление ошибочной ТН из MAX (номер=-1 → пост гасим)
+        // Этап 5.5 — Удаление ошибочной ТН из MAX (номер=-1 → пост гасим: канал ОО + группа И)
         if (Number(mapped.number) === -1) {
           const st55 = islg.start(5.5, "Удаление ошибочной ТН из MAX (номер=-1)");
           const storedMid =
             found?.mid_MAX_operativnayObstanovka ||
             currentAttrs?.mid_MAX_operativnayObstanovka ||
             null;
-          if (!storedMid) {
+          const storedIncidentMid =
+            found?.mid_MAX_incident || currentAttrs?.mid_MAX_incident || null;
+          if (!storedMid && !storedIncidentMid) {
             islg.skip(st55, "mid не сохранён — пост в MAX не отправлялся");
           } else {
-            try {
-              // mid-поле: один mid или несколько через запятую (текст + 2 PDF)
-              const { mids, deleted, failed } = await deleteStoredMids(storedMid);
-              const remaining = failed.map((f) => f.mid).join(",") || null;
+            const notes = [];
+            let hadError = false;
+            // Канал ОО — основной: его ошибка валит этап
+            if (storedMid) {
               try {
-                await axios.put(
-                  `${urlStrapi}/api/teh-narusheniyas/${documentId}`,
-                  { data: { mid_MAX_operativnayObstanovka: remaining } },
-                  { headers: { Authorization: `Bearer ${jwt}` }, timeout: 15000 }
-                );
-                if (!failed.length) {
-                  islg.success(st55, `mid=${deleted.join(",")} удалён из MAX, поле очищено`);
-                } else {
-                  islg.fail(
-                    st55,
-                    `удалены: ${deleted.join(",") || "—"}; не удалены: ${failed
-                      .map((f) => `${f.mid} (${f.error})`)
-                      .join("; ")}; в поле оставлены: ${remaining}`
+                // mid-поле: один mid или несколько через запятую (текст + 2 PDF)
+                const { deleted, failed } = await deleteStoredMids(storedMid);
+                const remaining = failed.map((f) => f.mid).join(",") || null;
+                try {
+                  await axios.put(
+                    `${urlStrapi}/api/teh-narusheniyas/${documentId}`,
+                    { data: { mid_MAX_operativnayObstanovka: remaining } },
+                    { headers: { Authorization: `Bearer ${jwt}` }, timeout: 15000 }
+                  );
+                  if (!failed.length) {
+                    notes.push(`канал ОО: mid=${deleted.join(",")} удалён, поле очищено`);
+                  } else {
+                    hadError = true;
+                    notes.push(
+                      `канал ОО: удалены ${deleted.join(",") || "—"}; не удалены: ${failed
+                        .map((f) => `${f.mid} (${f.error})`)
+                        .join("; ")}; в поле оставлены: ${remaining}`
+                    );
+                  }
+                } catch (ce) {
+                  notes.push(
+                    `канал ОО: mid=${deleted.join(",")} удалён, но поле не очищено: ${ce?.response?.status || ce?.message}`
                   );
                 }
-              } catch (ce) {
-                islg.success(
-                  st55,
-                  `mid=${deleted.join(",")} удалён из MAX, но поле не очищено: ${ce?.response?.status || ce?.message}`
-                );
+              } catch (e) {
+                hadError = true;
+                notes.push(`канал ОО: ${e?.response?.data?.message || e?.message}`);
               }
-            } catch (e) {
-              islg.fail(st55, e?.response?.data?.message || e?.message);
             }
+            // Группа И — зеркало: ошибка НЕ валит этап
+            if (storedIncidentMid) {
+              try {
+                const { deleted, failed } = await deleteStoredMids(storedIncidentMid, "i");
+                const remaining = failed.map((f) => f.mid).join(",") || null;
+                try {
+                  await axios.put(
+                    `${urlStrapi}/api/teh-narusheniyas/${documentId}`,
+                    { data: { mid_MAX_incident: remaining } },
+                    { headers: { Authorization: `Bearer ${jwt}` }, timeout: 15000 }
+                  );
+                  if (!failed.length) {
+                    notes.push(`группа И: mid=${deleted.join(",")} удалён, поле очищено`);
+                  } else {
+                    notes.push(
+                      `группа И: удалены ${deleted.join(",") || "—"}; не удалены: ${failed
+                        .map((f) => `${f.mid} (${f.error})`)
+                        .join("; ")}; в поле оставлены: ${remaining}`
+                    );
+                  }
+                } catch (ce) {
+                  notes.push(
+                    `группа И: mid=${deleted.join(",")} удалён, но поле не очищено: ${ce?.response?.status || ce?.message}`
+                  );
+                }
+              } catch (e) {
+                notes.push(`группа И: ${e?.response?.data?.message || e?.message}`);
+              }
+            }
+            const detail = notes.join("; ");
+            if (hadError) islg.fail(st55, detail);
+            else islg.success(st55, detail);
           }
         }
 
@@ -940,6 +979,8 @@ router.put("/", async (req, res) => {
               currentAttrs?.description_MAX_operativnayObstanovka || null;
             const firstMidRaw = currentAttrs?.mid_MAX_operativnayObstanovka || "";
             const firstMid = String(firstMidRaw).split(",")[0].trim() || null;
+            const firstIncidentMidRaw = currentAttrs?.mid_MAX_incident || "";
+            const firstIncidentMid = String(firstIncidentMidRaw).split(",")[0].trim() || null;
             const recoveryAt =
               rawItem?.F81_290_RECOVERYDATETIME ||
               mapped?.recoveryFactDateTime ||
@@ -954,6 +995,7 @@ router.put("/", async (req, res) => {
                 raw: rawItem,
                 firstDescription,
                 firstMid,
+                firstIncidentMid,
               });
               if (result.ok) islg.success(st85, result.message);
               else islg.fail(st85, result.message);

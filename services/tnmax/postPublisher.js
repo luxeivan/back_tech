@@ -62,9 +62,10 @@ async function calcSequenceNumber({ jwt, urlStrapi, now = new Date() }) {
 
 // Сохранение mid-поля и текста поста в Strapi ОТДЕЛЬНЫМИ PUT (mid первым):
 // падение записи длинного текста не должно терять mid.
-// Внимание: description_MAX_operativnayObstanovka обязан быть Text (long) в Strapi —
+// incidentMids/incidentPostText — mid и текст для тестовой группы И (mid_MAX_incident / description_MAX_incident).
+// Внимание: оба description-поля обязаны быть Text (long) в Strapi —
 // short (VARCHAR 255) даёт 500 на 256-м символе.
-async function savePostMeta({ jwt, urlStrapi, midDocId, mids, postText }) {
+async function savePostMeta({ jwt, urlStrapi, midDocId, mids, postText, incidentMids, incidentPostText }) {
   const put = async (data) => {
     try {
       await axios.put(`${urlStrapi}/api/teh-narusheniyas/${midDocId}`, { data }, {
@@ -83,17 +84,21 @@ async function savePostMeta({ jwt, urlStrapi, midDocId, mids, postText }) {
 
   let midError = null;
   if (mids) midError = await put({ mid_MAX_operativnayObstanovka: mids });
+  let incidentMidError = null;
+  if (incidentMids) incidentMidError = await put({ mid_MAX_incident: incidentMids });
   let textError = null;
   if (postText) textError = await put({ description_MAX_operativnayObstanovka: postText });
+  let incidentTextError = null;
+  if (incidentPostText) incidentTextError = await put({ description_MAX_incident: incidentPostText });
 
-  return { midError, textError };
+  return { midError, incidentMidError, textError, incidentTextError };
 }
 
-async function sendWithRetry(payload, label, sentMids, sentUrls) {
+async function sendWithRetry(payload, label, sentMids, sentUrls, target) {
   let result = null;
   for (let attempt = 1; attempt <= MAX_SEND_ATTEMPTS; attempt += 1) {
     try {
-      result = await sendToChannel(payload);
+      result = await sendToChannel({ ...payload, target });
       break;
     } catch (se) {
       const code = se?.response?.data?.code;
@@ -218,11 +223,33 @@ async function publishTnPost({ jwt, guid, raw, midDocId, urlStrapi }) {
       if (i < pdfs.length - 1) await new Promise((r) => setTimeout(r, SEND_PAUSE_MS));
     }
 
+    // ── Группа И: зеркало первого поста (только текст, без PDF) ──
+    let incidentMid = "";
+    let incidentNote = "";
+    try {
+      const incidentResult = await sendWithRetry(textPayload, "группа И: текст", [], [], "i");
+      incidentMid = incidentResult?.message?.body?.mid || "";
+      incidentNote = incidentMid ? `; группа И mid=${incidentMid}` : "; группа И: mid отсутствует";
+    } catch (ie) {
+      incidentNote = `; группа И: НЕ отправлен — ${ie?.response?.data?.message || ie?.message}`;
+      console.warn(`[tnmax] Группа И: текст не отправлен (guid=${guid}):`, ie?.response?.status || ie?.message);
+    }
+
     const midField = sentMids.join(",");
     const url = sentUrls[0] || "-";
-    const { midError, textError } = await savePostMeta({
-      jwt, urlStrapi, midDocId, mids: midField, postText,
+    const { midError, incidentMidError, textError, incidentTextError } = await savePostMeta({
+      jwt, urlStrapi, midDocId,
+      mids: midField,
+      postText,
+      incidentMids: incidentMid || null,
+      incidentPostText: incidentMid ? postText : null,
     });
+    if (incidentMidError) {
+      incidentNote += `; mid группы И не сохранён: ${incidentMidError}`;
+    }
+    if (incidentTextError) {
+      incidentNote += `; текст группы И не сохранён: ${incidentTextError}`;
+    }
 
     const savedNote = midError
       ? `mid НЕ сохранён: ${midError}`
@@ -238,19 +265,19 @@ async function publishTnPost({ jwt, guid, raw, midDocId, urlStrapi }) {
     if (midError) {
       return {
         ok: false,
-        message: `отправлено (mid=${midField || "-"}), но ${savedNote}${textNote}`,
+        message: `отправлено (mid=${midField || "-"}), но ${savedNote}${textNote}${incidentNote}`,
       };
     }
     if (textError) {
       // mid есть — это главное для гашения; текст добьём после правки типа поля
       return {
         ok: true,
-        message: `guid=${guid} mid=${midField || "-"} url=${url} сообщений=${sentMids.length}${tablesNote}; ${savedNote}${textNote}`,
+        message: `guid=${guid} mid=${midField || "-"} url=${url} сообщений=${sentMids.length}${tablesNote}; ${savedNote}${textNote}${incidentNote}`,
       };
     }
     return {
       ok: true,
-      message: `guid=${guid} mid=${midField || "-"} url=${url} сообщений=${sentMids.length}${tablesNote}; ${savedNote}${textNote}`,
+      message: `guid=${guid} mid=${midField || "-"} url=${url} сообщений=${sentMids.length}${tablesNote}; ${savedNote}${textNote}${incidentNote}`,
     };
   } catch (e) {
     // Текст мог уйти до падения PDF — сохраним хотя бы его mid + текст
@@ -267,7 +294,8 @@ async function publishTnPost({ jwt, guid, raw, midDocId, urlStrapi }) {
 // Пост-закрытие/запитка: один текстовый пост, без PDF, mid не сохраняем.
 // Ссылка на первый пост — через link {type: "reply", mid}; при 4xx/5xx от MAX
 // повторяем без link (доки не раскрывают схему NewMessageLink — эмпирика).
-async function publishClosePost({ guid, raw, firstDescription, firstMid }) {
+// firstIncidentMid — mid первого поста в группе И (для reply там; из mid_MAX_incident).
+async function publishClosePost({ guid, raw, firstDescription, firstMid, firstIncidentMid }) {
   let postText;
   try {
     postText = buildClosePostText(raw, {
@@ -318,9 +346,33 @@ async function publishClosePost({ guid, raw, firstDescription, firstMid }) {
   const mid = result?.message?.body?.mid || "-";
   const url = result?.message?.url || "-";
   console.log(`[tnmax] ✓ пост закрытия guid=${guid} mid=${mid} url=${url}`);
+
+  // ── Группа И: зеркало поста-закрытия (только текст) ──
+  let incidentNote = "";
+  const incidentPayload = { text: postText };
+  if (firstIncidentMid) incidentPayload.link = { type: "reply", mid: firstIncidentMid };
+  try {
+    let incidentResult = null;
+    try {
+      incidentResult = await sendWithRetry(incidentPayload, "группа И: закрытие", [], [], "i");
+    } catch (le2) {
+      if (incidentPayload.link) {
+        delete incidentPayload.link;
+        incidentResult = await sendWithRetry(incidentPayload, "группа И: закрытие (без link)", [], [], "i");
+      } else {
+        throw le2;
+      }
+    }
+    const incidentMid = incidentResult?.message?.body?.mid || "-";
+    incidentNote = `; группа И mid=${incidentMid}`;
+  } catch (ie) {
+    incidentNote = `; группа И: НЕ отправлен — ${ie?.response?.data?.message || ie?.message}`;
+    console.warn(`[tnmax] Группа И: пост закрытия не отправлен (guid=${guid}):`, ie?.response?.status || ie?.message);
+  }
+
   return {
     ok: true,
-    message: `закрытие guid=${guid} mid=${mid} url=${url}${payload.link ? " (ответ на первый пост)" : ""}`,
+    message: `закрытие guid=${guid} mid=${mid} url=${url}${payload.link ? " (ответ на первый пост)" : ""}${incidentNote}`,
   };
 }
 
