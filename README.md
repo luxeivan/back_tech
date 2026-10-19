@@ -24,7 +24,7 @@ npm start      # node app.js
 | ЕДДС | `EDDS_URL`, `EDDS_URL_PUT`, `EDDS_TOKEN`, `EDDS_NEW_BASE_URL` |
 | МосЭнергоСбыт | `MES_MODE`, `MES_LOGIN`, `MES_PASSWORD`, `MES_TEST_*`/`MES_PROD_*` |
 | MAX ОО (канал «Оперативная обстановка») | `TN_MAX_BOT_OO`, `MAX_CHAT_ID_OO`, `MAX_CHANEL_OO`, `TN_MAX_API_BASE` |
-| MAX И / ПЭС | `TN_MAX_BOT_I`, `MAX_GROUP_I`, `MAX_CHANEL_I`, `PES_MAX_BOT_TOKEN`, `PES_MAX_BOT_ENABLED`, `MAX_WEBHOOK_*` |
+| MAX И / ПЭС | `TN_MAX_BOT_I`, `MAX_CHAT_ID_I`, `MAX_GROUP_I`, `MAX_CHANEL_I`, `PES_MAX_BOT_TOKEN`, `PES_MAX_BOT_ENABLED`, `MAX_WEBHOOK_*` |
 | ПРОЧЕЕ | `T3_*`, `DADATA_TOKEN`, `AUDIT_LOGGER_ENABLED`, `LOGIN_STRAPI`/`PASSWORD_STRAPI` |
 
 `.env` содержит прод-секреты и не коммитится в дистрибутивах (см. `.dockerignore`).

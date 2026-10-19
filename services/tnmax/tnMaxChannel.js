@@ -8,7 +8,7 @@ function apiBase() {
   return String(process.env.TN_MAX_API_BASE || "https://platform-api.max.ru").replace(/\/$/, "");
 }
 
-// chat_id группы: MAX_GROUP_I может быть числом или ссылкой https://web.max.ru/-801… (число в конце = chat_id).
+// chat_id принимает число или ссылку вида https://web.max.ru/-801… (число в конце = chat_id).
 function parseChatId(raw) {
   const s = String(raw || "").trim();
   if (!s) return 0;
@@ -19,13 +19,15 @@ function parseChatId(raw) {
 
 const TARGETS = {
   oo: { envToken: "TN_MAX_BOT_OO", envChat: "MAX_CHAT_ID_OO" },
-  i: { envToken: "TN_MAX_BOT_I", envChat: "MAX_GROUP_I" },
+  i: { envToken: "TN_MAX_BOT_I", envChat: "MAX_CHAT_ID_I", envChatFallback: "MAX_GROUP_I" },
 };
 
 function getConfig(target = "oo") {
   const t = TARGETS[target] || TARGETS.oo;
   const token = String(process.env[t.envToken] || "").trim();
-  const chatId = parseChatId(process.env[t.envChat]);
+  const chatId =
+    parseChatId(process.env[t.envChat]) ||
+    (t.envChatFallback ? parseChatId(process.env[t.envChatFallback]) : 0);
   return { token, chatId, target: TARGETS[target] ? target : "oo", envToken: t.envToken, envChat: t.envChat };
 }
 
