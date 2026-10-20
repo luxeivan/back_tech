@@ -275,22 +275,48 @@ async function publishTnPost({ jwt, guid, raw, midDocId, urlStrapi }) {
         : ", текст сохранён"
       : "";
 
+    // ── ТН пришла одним POST уже в финальном статусе (репликация МОДУСа каждые
+    // 5 минут: короткая ТН целиком попадает в одну сессию) — отправляем пост-
+    // закрытия сразу за первым постом. Согласовано с заказчиком (20.10.2026).
+    const finalStatus = String(raw?.STATUS_NAME || "").trim().toLowerCase();
+    let closeNote = "";
+    if (["закрыта", "запитана"].includes(finalStatus)) {
+      try {
+        const closeResult = await publishClosePost({
+          guid,
+          raw,
+          firstDescription: postText === guid ? null : postText,
+          firstMid: sentMids[0] || null,
+          firstIncidentMid: incidentMid || null,
+        });
+        closeNote = closeResult.ok
+          ? `; ТН пришла уже «${finalStatus}» — пост-закрытия отправлен`
+          : `; ТН пришла уже «${finalStatus}», но пост-закрытия НЕ отправлен: ${closeResult.message}`;
+        if (!closeResult.ok) {
+          console.warn(`[tnmax] ТН уже «${finalStatus}», пост-закрытия не отправлен (guid=${guid}): ${closeResult.message}`);
+        }
+      } catch (ce) {
+        closeNote = `; ТН пришла уже «${finalStatus}», пост-закрытия упал: ${ce?.message}`;
+        console.warn(`[tnmax] Пост-закрытия для ТН, пришедшей уже «${finalStatus}», упал (guid=${guid}):`, ce?.message);
+      }
+    }
+
     if (midError) {
       return {
         ok: false,
-        message: `отправлено (mid=${midField || "-"}), но ${savedNote}${textNote}${incidentNote}`,
+        message: `отправлено (mid=${midField || "-"}), но ${savedNote}${textNote}${incidentNote}${closeNote}`,
       };
     }
     if (textError) {
       // mid есть — это главное для гашения; текст добьём после правки типа поля
       return {
         ok: true,
-        message: `guid=${guid} mid=${midField || "-"} url=${url} сообщений=${sentMids.length}${tablesNote}; ${savedNote}${textNote}${incidentNote}`,
+        message: `guid=${guid} mid=${midField || "-"} url=${url} сообщений=${sentMids.length}${tablesNote}; ${savedNote}${textNote}${incidentNote}${closeNote}`,
       };
     }
     return {
       ok: true,
-      message: `guid=${guid} mid=${midField || "-"} url=${url} сообщений=${sentMids.length}${tablesNote}; ${savedNote}${textNote}${incidentNote}`,
+      message: `guid=${guid} mid=${midField || "-"} url=${url} сообщений=${sentMids.length}${tablesNote}; ${savedNote}${textNote}${incidentNote}${closeNote}`,
     };
   } catch (e) {
     // Текст мог уйти до падения PDF — сохраним хотя бы его mid + текст
