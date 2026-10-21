@@ -19,8 +19,9 @@ const SOAP_ACTION =
   "https://mosoblenergo.ru/ExchangeReports#ExchangeReports:GetReportData";
 const SOAP_NS = "https://mosoblenergo.ru/ExchangeReports";
 const REQUEST_TIMEOUT_MS = 90000;
-// Как у operationalDashboardStats — тот же ритм дашборда ОО.
-const REFRESH_MS = 4 * 60 * 60 * 1000;
+// Фиксированные «ныряния» в 1С по Москве (задача юзера 2026-10-21).
+const SYNC_HOURS_MSK = [9, 11, 13];
+const MSK_OFFSET_MS = 3 * 60 * 60 * 1000;
 
 const OSN_RESOURCE_COLUMNS = [
   "УЭЭ",
@@ -431,22 +432,73 @@ const syncFilialResourcesFrom1C = async ({ reason = "manual" } = {}) => {
 
 const getLastSyncResult = () => lastResult;
 
+const getMskNow = () => new Date(Date.now() + MSK_OFFSET_MS);
+
+// Unix-ms следующего запуска (один из SYNC_HOURS_MSK, время МСК без DST).
+const getMsUntilNextSync = () => {
+  const msk = getMskNow();
+  const dayStartUtcFields = Date.UTC(
+    msk.getUTCFullYear(),
+    msk.getUTCMonth(),
+    msk.getUTCDate(),
+  );
+
+  const candidates = SYNC_HOURS_MSK.map((hour) => {
+    // hour как «местное» МСК → абсолютный UTC = hour − 3
+    return dayStartUtcFields + (hour - 3) * 60 * 60 * 1000;
+  });
+
+  const nextToday = candidates.find((at) => at > Date.now());
+  if (nextToday !== undefined) {
+    return Math.max(1000, nextToday - Date.now());
+  }
+
+  // Все часы сегодня уже прошли — завтра в первое окно.
+  const tomorrowFirst =
+    dayStartUtcFields + 24 * 60 * 60 * 1000 + (SYNC_HOURS_MSK[0] - 3) * 60 * 60 * 1000;
+  return Math.max(1000, tomorrowFirst - Date.now());
+};
+
+const formatMskClock = (date) =>
+  new Intl.DateTimeFormat("ru-RU", {
+    timeZone: "Europe/Moscow",
+    hour: "2-digit",
+    minute: "2-digit",
+    day: "2-digit",
+    month: "2-digit",
+  }).format(date);
+
 let refreshTimer = null;
+
+const scheduleNextFilialResourcesSync = () => {
+  const delayMs = getMsUntilNextSync();
+  const fireAt = new Date(Date.now() + delayMs);
+  log(
+    `Следующая синхронизация 1С: ${formatMskClock(fireAt)} МСК (через ${Math.round(delayMs / 60000)} мин)`,
+  );
+
+  refreshTimer = setTimeout(() => {
+    syncFilialResourcesFrom1C({ reason: "schedule" })
+      .catch((error) => {
+        log("Ошибка плановой синхронизации ресурсов 1С", error?.message);
+      })
+      .finally(() => {
+        scheduleNextFilialResourcesSync();
+      });
+  }, delayMs);
+};
 
 const startFilialResourcesScheduler = () => {
   if (refreshTimer) return;
 
-  log(`Планировщик ресурсов 1С включён: каждые ${Math.round(REFRESH_MS / 60000)} мин`);
+  const hoursLabel = SYNC_HOURS_MSK.map((h) => `${String(h).padStart(2, "0")}:00`).join(", ");
+  log(`Планировщик ресурсов 1С: ${hoursLabel} МСК (плюс один прогон при старте)`);
 
   syncFilialResourcesFrom1C({ reason: "startup" }).catch((error) => {
     log("Ошибка стартовой синхронизации ресурсов 1С", error?.message);
   });
 
-  refreshTimer = setInterval(() => {
-    syncFilialResourcesFrom1C({ reason: "interval" }).catch((error) => {
-      log("Ошибка интервальной синхронизации ресурсов 1С", error?.message);
-    });
-  }, REFRESH_MS);
+  scheduleNextFilialResourcesSync();
 };
 
 module.exports = {
