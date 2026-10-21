@@ -18,9 +18,13 @@ const weatherRoutes = require("./routers/weather");
 const operationalDashboardRoutes = require("./routers/operationalDashboard");
 const autosendRoutes = require("./routers/autosend");
 const tnMaxRoutes = require("./routers/tnMax");
+const onecRoutes = require("./routers/onec");
 const {
   startOperationalDashboardStatsScheduler,
 } = require("./services/operationalDashboardStats");
+const {
+  startFilialResourcesScheduler,
+} = require("./services/onec/resourceReport");
 
 const webhooks = require("./routers/webhooks");
 const { sseHandler, broadcast } = require("./services/sse");
@@ -67,6 +71,7 @@ app.use("/services/weather", weatherRoutes);
 app.use("/services/operational-dashboard", operationalDashboardRoutes);
 app.use("/services/autosend", autosendRoutes);
 app.use("/services/tnmax", tnMaxRoutes);
+app.use("/services/onec", onecRoutes);
 
 app.use("/services/webhooks", webhooks);
 app.get("/services/event", sseHandler);
@@ -84,6 +89,7 @@ app.listen(port, () => {
   console.log(`Приложение запущено на ${port} порту и каким-то чудом работает в 2026 году`);
   console.log("[pes-max-bot] MAX работает через webhook");
   startOperationalDashboardStatsScheduler();
+  startFilialResourcesScheduler();
 });
 
 //ПРОВЕРКА123
