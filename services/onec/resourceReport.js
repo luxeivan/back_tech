@@ -4,8 +4,14 @@
 // vmr резолвится только на прод-сервере (запись в /etc/hosts).
 
 const axios = require("axios");
+const https = require("https");
 require("dotenv").config();
 const { getJwt } = require("../modus/strapi");
+
+// vmr — внутренняя публикация 1С с cert'ом корпоративного CA (CA-PKI-MOESK),
+// в trust store Node/root его нет → без rejectUnauthorized: false падает
+// «unable to verify the first certificate». Трафик идёт только по внутреннему контуру.
+const onecHttpsAgent = new https.Agent({ rejectUnauthorized: false });
 
 const REPORT_ID = "ДополнительныйОтчет.РесурсыДляВыполненияАВР.Плоская";
 const RECIPIENT = "KPI";
@@ -205,6 +211,7 @@ const fetchReportFromBase = async ({ url, login, password, periodDate }) => {
       SOAPAction: SOAP_ACTION,
     },
     timeout: REQUEST_TIMEOUT_MS,
+    httpsAgent: onecHttpsAgent,
     transitional: { clarifyTimeoutError: true },
   });
 
