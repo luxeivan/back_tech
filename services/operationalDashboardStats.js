@@ -8,7 +8,10 @@ const STATS_CODE = `tech_violations_${OPERATIONAL_CHART_YEAR}`;
 // Локальная лазейка для проверки периода: null = живой месяц.
 // Например, 8 имитирует август и считает январь-июль.
 const DEBUG_CURRENT_MONTH_FOR_PERIOD = null;
-const REFRESH_MS = 4 * 60 * 60 * 1000;
+// График — накопительно за предыдущие месяцы года → хватает ночного пересчёта
+// 1-го числа (закрытый месяц уже полный). Раньше был интервал 4 часа (30bd1dc).
+const STATS_SYNC_HOUR_MSK = 3;
+const MSK_OFFSET_MS = 3 * 60 * 60 * 1000;
 const PAGE_SIZE = 100;
 const FETCH_CONCURRENCY = 4;
 const REQUEST_TIMEOUT_MS = 120000;
@@ -190,6 +193,18 @@ const getOperationalStatsPeriod = () => {
     periodLabel: `за ${periodMonth} ${periodMonth === 1 ? "месяц" : periodMonth >= 2 && periodMonth <= 4 ? "месяца" : "месяцев"}`,
     debugCurrentMonth: DEBUG_CURRENT_MONTH_FOR_PERIOD,
   };
+};
+
+// Ближайший ночной пересчёт: 1-го числа в STATS_SYNC_HOUR_MSK (МСК, без DST).
+const getNextMonthlyStatsRunAt = () => {
+  const msk = new Date(Date.now() + MSK_OFFSET_MS);
+  const dayStart = Date.UTC(msk.getUTCFullYear(), msk.getUTCMonth(), msk.getUTCDate());
+  // hour МСК → абсолютный UTC-момент = dayStart + (hour − 3)
+  const todayAt = dayStart + (STATS_SYNC_HOUR_MSK - 3) * 60 * 60 * 1000;
+  if (todayAt > Date.now()) return new Date(todayAt);
+
+  const nextMonthStart = Date.UTC(msk.getUTCFullYear(), msk.getUTCMonth() + 1, 1);
+  return new Date(nextMonthStart + (STATS_SYNC_HOUR_MSK - 3) * 60 * 60 * 1000);
 };
 
 // Тихий успех (Стас, 2026-10-16: «не несут полезной информации, засоряют терминал») —
@@ -566,7 +581,7 @@ const buildStatsPayload = ({ rows, fetchMeta, startedAt, districtToPoMap = null 
   });
 
   const calculatedAt = new Date().toISOString();
-  const nextCalculatedAt = new Date(Date.now() + REFRESH_MS).toISOString();
+  const nextCalculatedAt = getNextMonthlyStatsRunAt().toISOString();
   const chartRows = BRANCHES.map((branch) => ({
     SC_FILIAL: branch,
     OWN_SCNAME: branch,
@@ -612,7 +627,8 @@ const buildStatsPayload = ({ rows, fetchMeta, startedAt, districtToPoMap = null 
         .map(([name, count]) => ({ name, count })),
       calculatedAt,
       nextCalculatedAt,
-      refreshMs: REFRESH_MS,
+      refreshMs: null,
+      monthlySyncHourMsk: STATS_SYNC_HOUR_MSK,
       ms: Date.now() - startedAt,
       source: STATS_COLLECTION,
     },
@@ -737,25 +753,35 @@ const getOperationalDashboardStatsPayload = async () => {
 const startOperationalDashboardStatsScheduler = () => {
   if (refreshTimer) return;
 
-  log(`Планировщик включен: ${Math.round(REFRESH_MS / 60000)} мин.`);
+  const nextAt = getNextMonthlyStatsRunAt();
+  log(
+    `Планировщик статистики ОО: ночной пересчёт 1-го числа в 0${STATS_SYNC_HOUR_MSK}:00 МСК; следующий ~ ${nextAt.toISOString()} (плюс прогон при старте)`,
+  );
 
+  // Стартовый пересчёт — после рестарта/деплоя, чтобы payload не отставал.
   refreshOperationalDashboardStats({ reason: "startup" }).catch((error) => {
     log("Ошибка стартового пересчета", error?.response?.data || error?.message);
   });
 
-  refreshTimer = setInterval(() => {
-    refreshOperationalDashboardStats({ reason: "interval" }).catch((error) => {
-      log(
-        "Ошибка интервального пересчета",
-        error?.response?.data || error?.message,
-      );
-    });
-  }, REFRESH_MS);
+  const scheduleNext = () => {
+    const delayMs = Math.max(1000, getNextMonthlyStatsRunAt().getTime() - Date.now());
+    refreshTimer = setTimeout(() => {
+      refreshOperationalDashboardStats({ reason: "monthly" }).catch((error) => {
+        log(
+          "Ошибка месячного пересчета",
+          error?.response?.data || error?.message,
+        );
+      }).finally(() => {
+        scheduleNext();
+      });
+    }, delayMs);
+  };
+
+  scheduleNext();
 };
 
 module.exports = {
   OPERATIONAL_CHART_YEAR,
-  REFRESH_MS,
   STATS_CODE,
   getOperationalDashboardStatsPayload,
   refreshOperationalDashboardStats,
