@@ -99,6 +99,9 @@ const addRowToTotals = (totals, row) => {
   totals.brigades += toNumber(pick(row, "BRIGADECOUNT"));
   totals.staff += toNumber(pick(row, "EMPLOYEECOUNT"));
   totals.vehicles += toNumber(pick(row, "SPECIALTECHNIQUECOUNT"));
+  // Столбец «ПЭС»: источник — PES_COUNT из ТН (как на фронте, operationalDistrictsPanel.utils.js).
+  // При переданном pesCountMaps (старый формат — модуль ПЭС) значение перезаписывается ниже.
+  totals.pes += toNumber(pick(row, "PES_COUNT"));
 };
 
 const getFilialMainResource = (row) =>
@@ -380,9 +383,13 @@ const buildOperationalBranchRows = (rows, filialRows = [], pesCountMaps = null) 
     });
 
   const ordered = sourceBranches.map((branch) => branchMap.get(branch)).filter(Boolean);
-  ordered.forEach((row) => {
-    row.pes = toNumber(pesCountMaps?.byBranchKey?.get(normalizePesBranchKey(row.branch)));
-  });
+  // Старый формат (модуль ПЭС): перезаписываем pes из pesCountMaps, если он передан.
+  // Иначе остаётся значение, накопленное из PES_COUNT ТН в addRowToTotals.
+  if (pesCountMaps) {
+    ordered.forEach((row) => {
+      row.pes = toNumber(pesCountMaps?.byBranchKey?.get(normalizePesBranchKey(row.branch)));
+    });
+  }
   return ordered;
 };
 

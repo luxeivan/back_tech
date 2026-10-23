@@ -4,7 +4,8 @@ const assert = require("assert");
 const { execFileSync } = require("child_process");
 const {
   isOperationalDashboardRow,
-  buildPesDashboardCountMaps,
+  // [ПЭС-столбец отключён] Старый формат (модуль ПЭС) — раскомментировать при возврате:
+  // buildPesDashboardCountMaps,
   buildOperationalBranchRows,
   buildOperationalBranchSummary,
 } = require("./branchRows");
@@ -47,11 +48,13 @@ const mkTn = (over) => ({
   LINENN_ALL: 6,
   TP_ALL: 40,
   RPSN_ALL: 15,
+  // Столбец ПЭС теперь берётся из PES_COUNT ТН (как на фронте).
+  PES_COUNT: 0,
   ...over,
 });
 
 const tnRows = [
-  mkTn({}),
+  mkTn({ PES_COUNT: 1 }),
   mkTn({
     SC_FILIAL: "Коломенский филиал",
     SC_PO: "Коломна ПО",
@@ -59,6 +62,7 @@ const tnRows = [
     DISPCENTER_NAME_: "Коломна",
     POPULATION_COUNT: 2500,
     createDateTime: "2026-10-02T08:30:00.000+03:00",
+    PES_COUNT: 1,
   }),
   mkTn({
     SC_FILIAL: "Раменский",
@@ -67,6 +71,7 @@ const tnRows = [
     DISPCENTER_NAME_: "Раменское",
     POPULATION_COUNT: 700,
     createDateTime: "2026-10-03T15:45:00.000+03:00",
+    PES_COUNT: 0,
   }),
   // Не должна попасть: закрытая ТН.
   mkTn({ isActive: false, SC_FILIAL: "Мытищинский", POPULATION_COUNT: 50 }),
@@ -109,16 +114,17 @@ const filialRows = [
   },
 ];
 
-// Мок ПЭС-элементов/складов (только активные статусы учитываются).
-const pesItems = [
-  { id: "e1", status: "connected", branch: "Домодедовский", po: "Домодедово ПО", district: "г.о. Домодедово", destination: { id: "d1", type: "assembly" } },
-  { id: "e2", status: "en_route", branch: "Коломенский", po: "Коломна ПО", district: "г.о. Коломна", destination: { id: "d2", type: "assembly" } },
-  { id: "e3", status: "cancelled", branch: "Раменский", po: "Раменское ПО", district: "г.о. Раменское", destination: { id: "d3", type: "assembly" } },
-];
-const destinations = [
-  { id: "d1", branch: "Домодедовский", po: "Домодедово ПО", district: "г.о. Домодедово", address: "городской округ Домодедово, ул. Ленина" },
-  { id: "d2", branch: "Коломенский", po: "Коломна ПО", district: "г.о. Коломна", address: "г. Коломна, пр. Ленина" },
-];
+// [ПЭС-столбец отключён] Моки ПЭС-элементов/складов — для старого формата (модуль ПЭС).
+// При возврате раскомментировать вместе с buildPesDashboardCountMaps.
+// const pesItems = [
+//   { id: "e1", status: "connected", branch: "Домодедовский", po: "Домодедово ПО", district: "г.о. Домодедово", destination: { id: "d1", type: "assembly" } },
+//   { id: "e2", status: "en_route", branch: "Коломенский", po: "Коломна ПО", district: "г.о. Коломна", destination: { id: "d2", type: "assembly" } },
+//   { id: "e3", status: "cancelled", branch: "Раменский", po: "Раменское ПО", district: "г.о. Раменское", destination: { id: "d3", type: "assembly" } },
+// ];
+// const destinations = [
+//   { id: "d1", branch: "Домодедовский", po: "Домодедово ПО", district: "г.о. Домодедово", address: "городской округ Домодедово, ул. Ленина" },
+//   { id: "d2", branch: "Коломенский", po: "Коломна ПО", district: "г.о. Коломна", address: "г. Коломна, пр. Ленина" },
+// ];
 
 async function main() {
   // --- PDF #1: иерархия аварийных ТН ---
@@ -135,14 +141,15 @@ async function main() {
   const tnDoc = filials.length ? makeEmergencyDocDefinition(filials) : makeEmptyDocDefinition();
 
   // --- PDF #2: ОО все филиалы ---
-  const pesCountMaps = buildPesDashboardCountMaps(pesItems, destinations, filialRows);
-  const branchRows = buildOperationalBranchRows(tnRows, filialRows, pesCountMaps);
+  // [ПЭС-столбец отключён] Старый формат (модуль ПЭС) — раскомментировать:
+  // const pesCountMaps = buildPesDashboardCountMaps(pesItems, destinations, filialRows);
+  const branchRows = buildOperationalBranchRows(tnRows, filialRows, null);
   assert.strictEqual(branchRows.length, 3, "строк веток ОО = 3");
-  // Два активных ПЭС: Домодедовский и Коломенский.
+  // Столбец ПЭС — из PES_COUNT ТН (мок: Домодедовский=1, Коломенский=1, Раменский=0).
   const pesByBranch = Object.fromEntries(branchRows.map((r) => [r.branch, r.pes]));
-  assert.strictEqual(pesByBranch["Домодедовский"], 1, "ПЭС Домодедовский = 1");
-  assert.strictEqual(pesByBranch["Коломенский"], 1, "ПЭС Коломенский = 1");
-  assert.strictEqual(pesByBranch["Раменский"], 0, "ПЭС Раменский = 0 (cancelled)");
+  assert.strictEqual(pesByBranch["Домодедовский"], 1, "ПЭС Домодедовский = 1 (PES_COUNT ТН)");
+  assert.strictEqual(pesByBranch["Коломенский"], 1, "ПЭС Коломенский = 1 (PES_COUNT ТН)");
+  assert.strictEqual(pesByBranch["Раменский"], 0, "ПЭС Раменский = 0 (PES_COUNT ТН)");
 
   const ooDataSource = [buildOperationalBranchSummary(branchRows), ...branchRows];
   const ooDoc = makeOoDocDefinition(ooDataSource);

@@ -1,7 +1,12 @@
 // Генерация 2 таблиц (PNG) для поста в MAX-канал: аварийные ТН + ОО все филиалы.
-const { fetchOpenTnRows, fetchPesItems, fetchPesDestinations } = require("./fetchers");
+// [ПЭС-столбец отключён] fetchPesItems/fetchPesDestinations больше не нужны — столбец ПЭС
+// берётся из PES_COUNT ТН (как на фронте). Для возврата к модулю ПЭС раскомментировать.
+// const { fetchOpenTnRows, fetchPesItems, fetchPesDestinations } = require("./fetchers");
+const { fetchOpenTnRows } = require("./fetchers");
 const { fetchTnFilialyRows } = require("./filialy");
-const { isOperationalDashboardRow, buildPesDashboardCountMaps, buildOperationalBranchRows, buildOperationalBranchSummary } = require("./branchRows");
+// [ПЭС-столбец отключён] buildPesDashboardCountMaps закомментирован.
+// const { isOperationalDashboardRow, buildPesDashboardCountMaps, buildOperationalBranchRows, buildOperationalBranchSummary } = require("./branchRows");
+const { isOperationalDashboardRow, buildOperationalBranchRows, buildOperationalBranchSummary } = require("./branchRows");
 const {
   buildHierarchy,
   makeEmergencyDocDefinition,
@@ -21,11 +26,10 @@ function pagesWithPrefix(pngs, baseName) {
 async function generateTablesPngs({ jwt }) {
   if (!jwt) throw new Error("Нет JWT: авторизуйтесь");
 
-  const [openTnRows, filialRows, pesItems, destinations] = await Promise.all([
+  // [ПЭС-столбец отключён] fetchPesItems/fetchPesDestinations убраны — столбец ПЭС из PES_COUNT ТН.
+  const [openTnRows, filialRows] = await Promise.all([
     fetchOpenTnRows(jwt),
     fetchTnFilialyRows(jwt),
-    fetchPesItems(jwt),
-    fetchPesDestinations(jwt),
   ]);
 
   // PDF #1: иерархия аварийных ТН (Филиал → ПО → ГО).
@@ -42,13 +46,14 @@ async function generateTablesPngs({ jwt }) {
     tnDoc = filials.length ? makeEmergencyDocDefinition(filials) : makeEmptyDocDefinition();
   }
 
-  // PDF #2: таблица «ОО все филиалы» (summary + строки веток с ПЭС-счётчиками).
-  const pesCountMaps = buildPesDashboardCountMaps(
-    Array.isArray(pesItems) ? pesItems : [],
-    Array.isArray(destinations) ? destinations : [],
-    filialRows
-  );
-  const branchRows = buildOperationalBranchRows(openTnRows, filialRows, pesCountMaps);
+  // PDF #2: таблица «ОО все филиалы» (summary + строки веток, столбец ПЭС — из PES_COUNT ТН).
+  // [ПЭС-столбец отключён] Старый формат (модуль ПЭС) — раскомментировать:
+  // const pesCountMaps = buildPesDashboardCountMaps(
+  //   Array.isArray(pesItems) ? pesItems : [],
+  //   Array.isArray(destinations) ? destinations : [],
+  //   filialRows
+  // );
+  const branchRows = buildOperationalBranchRows(openTnRows, filialRows, null);
   const ooDataSource = [buildOperationalBranchSummary(branchRows), ...branchRows];
   const ooDoc = makeOoDocDefinition(
     ooDataSource.length
@@ -92,11 +97,10 @@ function mskExportFilename(now = new Date()) {
 async function generateTablesPdfs({ jwt }) {
   if (!jwt) throw new Error("Нет JWT: авторизуйтесь");
 
-  const [openTnRows, filialRows, pesItems, destinations] = await Promise.all([
+  // [ПЭС-столбец отключён] fetchPesItems/fetchPesDestinations убраны — столбец ПЭС из PES_COUNT ТН.
+  const [openTnRows, filialRows] = await Promise.all([
     fetchOpenTnRows(jwt),
     fetchTnFilialyRows(jwt),
-    fetchPesItems(jwt),
-    fetchPesDestinations(jwt),
   ]);
 
   const list = (Array.isArray(openTnRows) ? openTnRows : []).filter(isOperationalDashboardRow);
@@ -111,12 +115,13 @@ async function generateTablesPdfs({ jwt }) {
     tnDoc = filials.length ? makeEmergencyDocDefinition(filials) : makeEmptyDocDefinition();
   }
 
-  const pesCountMaps = buildPesDashboardCountMaps(
-    Array.isArray(pesItems) ? pesItems : [],
-    Array.isArray(destinations) ? destinations : [],
-    filialRows
-  );
-  const branchRows = buildOperationalBranchRows(openTnRows, filialRows, pesCountMaps);
+  // [ПЭС-столбец отключён] Старый формат (модуль ПЭС) — раскомментировать:
+  // const pesCountMaps = buildPesDashboardCountMaps(
+  //   Array.isArray(pesItems) ? pesItems : [],
+  //   Array.isArray(destinations) ? destinations : [],
+  //   filialRows
+  // );
+  const branchRows = buildOperationalBranchRows(openTnRows, filialRows, null);
   const ooDataSource = [buildOperationalBranchSummary(branchRows), ...branchRows];
   const ooDoc = makeOoDocDefinition(
     ooDataSource.length
