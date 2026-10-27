@@ -312,13 +312,14 @@ function isDuplicateEddsV1Error(resp) {
 }
 
 // Self-POST в /services/edds (тот же роутер, что и ручная отправка) —
-// возвращает { delivered, ok, claimId, error }.
-async function deliverEddsV1SelfPost({ jwt, payload, guid, req, logLabel }) {
+// возвращает { delivered, ok, claimId, error }. src — маркер для журнала
+// (autosend-create / autosend-update), без него запись считается ручной.
+async function deliverEddsV1SelfPost({ jwt, payload, guid, req, logLabel, src }) {
   const explicitSelf = String(process.env.SELF_EDDS_URL || "").trim();
   const port = Number(process.env.PORT || process.env.BACK_PORT || 3110);
   const protocol = req?.protocol || "http";
   const host = req?.get?.("host") || `127.0.0.1:${port}`;
-  const qs = "debug=1";
+  const qs = src ? `debug=1&src=${encodeURIComponent(src)}` : "debug=1";
   const candidates = [
     explicitSelf && `${explicitSelf}?${qs}`,
     `http://127.0.0.1:${port}/services/edds?${qs}`,
@@ -1067,7 +1068,7 @@ router.put("/", async (req, res) => {
           );
           const protocol = req.protocol || "http";
           const host = req.get("host");
-          const qs = "debug=1";
+          const qs = "debug=1&src=autosend-update";
           const candidates = [
             explicitSelf && `${explicitSelf}?${qs}`,
             `http://127.0.0.1:${port}/services/edds?${qs}`,
@@ -1607,6 +1608,7 @@ router.post("/", async (req, res) => {
                         guid: guidForLog,
                         req,
                         logLabel,
+                        src: "autosend-create",
                       });
                       if (result.ok) {
                         try {

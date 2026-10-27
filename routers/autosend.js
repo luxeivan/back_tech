@@ -9,6 +9,7 @@ const {
   setAutoSendState,
 } = require("../services/modus/autoSend");
 const { logAuditFromReq } = require("../services/auditLogger");
+const { appendJournalLine } = require("../services/journal");
 
 const router = express.Router();
 
@@ -51,6 +52,12 @@ router.put("/", async (req, res) => {
   const enabled = Boolean(req?.body?.enabled);
   try {
     await setAutoSendState(enabled);
+    const who = user.username || user.email || "—";
+    const role = user.view_role ? ` (${user.view_role})` : "";
+    appendJournalLine({
+      target: "Автоотправка",
+      message: `${enabled ? "Включена" : "Выключена"} — ${who}${role}`,
+    }).catch(() => {});
     logAuditFromReq(req, {
       page: "/services/autosend",
       action: "autosend_toggle",
