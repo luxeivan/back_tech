@@ -319,7 +319,7 @@ function buildAutoDescription(raw = {}, { includeHousesAddresses = true, socialO
   const population = num(raw.POPULATION_COUNT);
   const abonents = num(raw.POINTALL || raw.ENOBJ_COUNT);
 
-  const { fullStr, sectStr } = buildSzoSummaryNew(raw);
+  const { fullStr } = buildSzoSummaryNew(raw);
   const district = s(raw.DISTRICT);
 
   const outageLines = [
@@ -330,7 +330,6 @@ function buildAutoDescription(raw = {}, { includeHousesAddresses = true, socialO
     `Чел: ${population}`,
     `Абонентов: ${abonents}`,
     `СЗО полностью: ${fullStr}`,
-    sectStr !== "0" ? `СЗО по одной секции: ${sectStr}` : null,
     district ? `Городской округ: ${district}` : null,
   ].filter(Boolean);
 
