@@ -1,4 +1,4 @@
-const { buildAutoDescription } = require("../autoDescription");
+const { buildAutoDescription, buildSzoSummaryNew } = require("../autoDescription");
 
 const SZO_ALL_FIELDS = [
   "CLINICS_ALL",
@@ -78,6 +78,7 @@ const BOLD_LABELS = [
   "Чел:",
   "Абонентов:",
   "СЗО полностью:",
+  "СЗО по одному вводу:",
   "Направлено ПЭС:",
   "Задействовано:",
   "Прогнозируемое время включения",
@@ -127,8 +128,12 @@ function buildMaxPostText(raw = {}, { sequenceNumber, incident } = {}) {
     socialObjectsBlocks: true,
   })
     .replace(/^АО «Мособлэнерго»\s*/, "")
-    // Строка «СЗО по одной секции: …» в MAX-посте не нужна (2026-10-15)
-    .replace(/^СЗО по одной секции:.*\n?/m, "")
+    // Строка «СЗО по одному вводу: …» — после «СЗО полностью», всегда (даже 0),
+    // цифра — сумма полей *_SECTION (как прежняя «СЗО по одной секции», юзер 2026-10-28)
+    .replace(
+      /^(СЗО полностью:.*)$/m,
+      `$1\nСЗО по одному вводу: ${buildSzoSummaryNew(raw).sectStr}`
+    )
     // Пустая строка перед первым блоком СЗО — как в макете заказчика
     .replace(
       /(^|\n)(?!\n)(Поликлиники|Больницы|Школы|Детские сады|Котельные|ЦТП|КНС|ВЗУ|ВНС|СНТ):/m,

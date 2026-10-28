@@ -374,4 +374,4 @@ function buildAutoDescription(raw = {}, { includeHousesAddresses = true, socialO
   return [header, outageLines.join("\n"), tail].filter(Boolean).join("\n\n");
 }
 
-module.exports = { buildAutoDescription };
+module.exports = { buildAutoDescription, buildSzoSummaryNew };
