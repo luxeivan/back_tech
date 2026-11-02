@@ -283,6 +283,7 @@ async function publishTnPost({ jwt, guid, raw, midDocId, urlStrapi }) {
     if (["закрыта", "запитана"].includes(finalStatus)) {
       try {
         const closeResult = await publishClosePost({
+          jwt,
           guid,
           raw,
           firstDescription: postText === guid ? null : postText,
@@ -330,11 +331,12 @@ async function publishTnPost({ jwt, guid, raw, midDocId, urlStrapi }) {
   }
 }
 
-// Пост-закрытие/запитка: один текстовый пост, без PDF, mid не сохраняем.
+// Пост-закрытие/запитка: текст (reply на первый пост) + 2 актуальных PDF в канал ОО.
+// mid не сохраняем. Группа И — только текст, без PDF.
 // Ссылка на первый пост — через link {type: "reply", mid}; при 4xx/5xx от MAX
 // повторяем без link (доки не раскрывают схему NewMessageLink — эмпирика).
 // firstIncidentMid — mid первого поста в группе И (для reply там; из mid_MAX_incident).
-async function publishClosePost({ guid, raw, firstDescription, firstMid, firstIncidentMid }) {
+async function publishClosePost({ jwt, guid, raw, firstDescription, firstMid, firstIncidentMid }) {
   let postText;
   try {
     postText = buildClosePostText(raw, {
@@ -348,6 +350,20 @@ async function publishClosePost({ guid, raw, firstDescription, firstMid, firstIn
   }
   if (!postText) {
     return { ok: false, message: "пустой текст поста закрытия" };
+  }
+
+  // Актуальные таблицы на момент закрытия (как на открытии — Этап 8)
+  let pdfs = [];
+  let tablesNote = "";
+  try {
+    pdfs = await generateTablesPdfs({ jwt });
+    console.log(
+      `[tnmax] PDF для закрытия сформированы (guid=${guid}): ${pdfs.map((p) => `${p.name}:${p.buffer.length}б`).join(", ")}`
+    );
+  } catch (te) {
+    pdfs = [];
+    tablesNote = ` таблицы НЕ отправлены: ${te?.message}`;
+    console.warn(`[tnmax] PDF для закрытия не сформированы (guid=${guid}):`, te?.message);
   }
 
   const payload = { text: postText };
@@ -386,6 +402,24 @@ async function publishClosePost({ guid, raw, firstDescription, firstMid, firstIn
   const url = result?.message?.url || "-";
   console.log(`[tnmax] ✓ пост закрытия guid=${guid} mid=${mid} url=${url}`);
 
+  // 2 PDF следом за текстом закрытия (только канал ОО; лимит — 1 file на сообщение)
+  for (let i = 0; i < pdfs.length; i += 1) {
+    const pdf = pdfs[i];
+    try {
+      const fileToken = await uploadFile(pdf.buffer, pdf.name);
+      await sendWithRetry(
+        { attachments: [{ type: "file", payload: { token: fileToken } }] },
+        `закрытие: ${pdf.name}`,
+        [],
+        []
+      );
+    } catch (fe) {
+      tablesNote += ` ${pdf.name} НЕ отправлен: ${fe?.response?.data?.message || fe?.message};`;
+      console.warn(`[tnmax] Закрытие: ${pdf.name} не отправлен (guid=${guid}):`, fe?.message);
+    }
+    if (i < pdfs.length - 1) await new Promise((r) => setTimeout(r, SEND_PAUSE_MS));
+  }
+
   // ── Группа И: зеркало поста-закрытия (только текст) ──
   // Если первый пост в группу И не отправлялся (малая ТН без ПЭС / ошибка) —
   // закрытие тоже не шлём: reply не на что, контекста нет.
@@ -417,7 +451,7 @@ async function publishClosePost({ guid, raw, firstDescription, firstMid, firstIn
 
   return {
     ok: true,
-    message: `закрытие guid=${guid} mid=${mid} url=${url}${payload.link ? " (ответ на первый пост)" : ""}${incidentNote}`,
+    message: `закрытие guid=${guid} mid=${mid} url=${url} pdf=${pdfs.length}${payload.link ? " (ответ на первый пост)" : ""}${tablesNote}${incidentNote}`,
   };
 }
 

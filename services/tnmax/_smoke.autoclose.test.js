@@ -73,13 +73,19 @@ async function runCase(label, status, expectClose) {
     head: String(m.text).replace(/\s+/g, " ").slice(0, 90),
     reply: m.link?.mid || null,
   }));
-  const files = sent.filter((m) => m.attachments?.[0]?.type === "file").length;
+  const files = sent.filter((m) => m.attachments?.[0]?.type === "file");
   console.log(`\n=== ${label}: STATUS_NAME="${status}" → ok=${result.ok}`);
   console.log("message:", result.message);
-  console.log("files:", files);
+  console.log("files:", files.length);
   texts.forEach((t, i) => console.log(`text[${i}] target=${t.target} reply=${t.reply || "-"} | ${t.head}`));
   const closes = texts.filter((t) => t.head.includes("Доп. информация"));
-  assert.strictEqual(files, 2, "должны уйти 2 PDF");
+  // Открытие: 2 PDF; закрытие: +2 актуальных PDF (только канал ОО, без target/i)
+  const expectFiles = expectClose ? 4 : 2;
+  assert.strictEqual(files.length, expectFiles, `должны уйти ${expectFiles} PDF`);
+  assert.ok(
+    files.every((m) => !m.target || m.target === "oo"),
+    "PDF — только канал ОО"
+  );
   if (expectClose) {
     assert.strictEqual(closes.length, 2, "закрытие: ОО + группа И");
     assert.ok(closes.every((c) => c.reply), "закрытие должно быть reply на первый пост");

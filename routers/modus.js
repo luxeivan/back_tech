@@ -996,6 +996,7 @@ router.put("/", async (req, res) => {
               islg.skip(st85, "нет F81_290_RECOVERYDATETIME (время восстановления)");
             } else {
               const result = await publishClosePost({
+                jwt,
                 guid: mapped.guid,
                 raw: rawItem,
                 firstDescription,
