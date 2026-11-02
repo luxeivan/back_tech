@@ -433,16 +433,27 @@ async function getUnits() {
 
   let rows = [];
   try {
-    rows = await fetchAll(ENDPOINT_UNITS, [...baseFields, "po", "prioritet"], token);
+    rows = await fetchAll(
+      ENDPOINT_UNITS,
+      [...baseFields, "po", "prioritet", "driverPhone", "rezerv"],
+      token
+    );
   } catch (e) {
     const status = Number(e?.response?.status || 0);
     if (status !== 400) throw e;
+    // Откат по одному шагу: сначала без новых полей, потом без prioritet и т.д.
     try {
-      rows = await fetchAll(ENDPOINT_UNITS, [...baseFields, "po"], token);
+      rows = await fetchAll(ENDPOINT_UNITS, [...baseFields, "po", "prioritet"], token);
     } catch (e2) {
       const status2 = Number(e2?.response?.status || 0);
       if (status2 !== 400) throw e2;
-      rows = await fetchAll(ENDPOINT_UNITS, baseFields, token);
+      try {
+        rows = await fetchAll(ENDPOINT_UNITS, [...baseFields, "po"], token);
+      } catch (e3) {
+        const status3 = Number(e3?.response?.status || 0);
+        if (status3 !== 400) throw e3;
+        rows = await fetchAll(ENDPOINT_UNITS, baseFields, token);
+      }
     }
   }
   cache.units = { ts: now, rows };
@@ -581,11 +592,13 @@ async function loadPesItems() {
         ),
         po: norm(u.po) || meta.po,
         prioritet: toBool(u.prioritet),
+        rezerv: toBool(u.rezerv),
         powerKw: toNum(u.power_kw_nominal) ?? toNum(u.power_kw_max) ?? null,
         model: norm(u.generator_model),
         status: "ready",
         baseAddress: norm(u.base_address),
         dispatcherPhone: meta.dispatcherPhone,
+        driverPhone: norm(u.driverPhone),
         sourceCode: norm(u.code),
         district: norm(u.district),
       };
