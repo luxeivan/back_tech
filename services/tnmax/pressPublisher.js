@@ -1,9 +1,9 @@
 // Публикация в MAX-канал press «Мособлэнерго24» (Этап 9 POST МОДУСа).
 // Плановые: текст по живому примеру канала + картинка округа (tn-okruga.img_plan).
 // Внеплановые: текст по шаблону пресс-службы, без картинки.
-// mid НЕ сохраняется (нет Strapi-поля) — при необходимости добавить позже для гашения.
+// После отправки mid → mid_MAX_press, текст → description_MAX_press (поля Text/long).
 const axios = require("axios");
-const { sendToChannel, uploadImage } = require("./tnMaxChannel");
+const { sendToChannel, uploadImage, deleteStoredMids } = require("./tnMaxChannel");
 const {
   buildPressPlannedText,
   buildPressEmergencyText,
@@ -79,8 +79,34 @@ async function fetchDistrictImage({ jwt, urlStrapi, district }) {
   return { buffer: Buffer.from(resp.data), filename };
 }
 
+// Сохранение mid и текста поста отдельными PUT (mid первым — падение записи
+// длинного текста не должно терять mid). Как savePostMeta в postPublisher.
+async function savePressMeta({ jwt, urlStrapi, midDocId, mids, postText }) {
+  const put = async (data) => {
+    try {
+      await axios.put(`${urlStrapi}/api/teh-narusheniyas/${midDocId}`, { data }, {
+        headers: { Authorization: `Bearer ${jwt}` },
+        timeout: 15000,
+      });
+      return null;
+    } catch (se) {
+      const body = se?.response?.data ? JSON.stringify(se.response.data).slice(0, 200) : se?.message;
+      console.error(
+        `[press] Strapi PUT failed (fields=${Object.keys(data).join(",")}, doc=${midDocId}): HTTP ${se?.response?.status} ${body}`
+      );
+      return se?.response?.status || se?.message;
+    }
+  };
+
+  let midError = null;
+  if (mids) midError = await put({ mid_MAX_press: mids });
+  let textError = null;
+  if (postText) textError = await put({ description_MAX_press: postText });
+  return { midError, textError };
+}
+
 // Публикация. { ok, message } — для stage-логера Этапа 9.
-async function publishPressPost({ jwt, guid, raw, urlStrapi }) {
+async function publishPressPost({ jwt, guid, raw, urlStrapi, midDocId }) {
   const data = raw?.data && typeof raw.data === "object" ? raw.data : {};
   const baseType = Number(raw?.BASE_TYPE ?? data.BASE_TYPE);
   const statusName = String(raw?.STATUS_NAME ?? data.STATUS_NAME ?? "").trim().toLowerCase();
@@ -138,13 +164,85 @@ async function publishPressPost({ jwt, guid, raw, urlStrapi }) {
     };
   }
 
+  // Сохранение mid/текста в Strapi (для последующего редактирования/удаления)
+  let saveNote = "";
+  if (midDocId && sentMids.length) {
+    const { midError, textError } = await savePressMeta({
+      jwt,
+      urlStrapi,
+      midDocId,
+      mids: sentMids.join(","),
+      postText,
+    });
+    if (midError) {
+      return {
+        ok: false,
+        message: `отправлено (mid=${sentMids.join(",")}), но mid НЕ сохранён: ${midError}${imageNote}`,
+      };
+    }
+    saveNote = textError
+      ? `, текст НЕ сохранён: ${textError} (поле должно быть Text/long)`
+      : ", mid+текст сохранены";
+  } else if (!midDocId) {
+    saveNote = "; midDocId не передан — mid не сохранён";
+  }
+
   return {
     ok: true,
     message:
       `${isPlanned ? "плановая" : "внеплановая"} guid=${guid} mid=${sentMids.join(",")}` +
       `${chunks.length > 1 ? ` сообщений=${chunks.length}` : ""}` +
-      `${image && sentMids.length ? " +картинка" : ""}${imageNote}`,
+      `${image && sentMids.length ? " +картинка" : ""}${saveNote}${imageNote}`,
   };
 }
 
-module.exports = { publishPressPost };
+// Удаление поста press из канала + очистка mid_MAX_press.
+// tnId — documentId/id записи; storedMid — если уже прочитан вызывающим.
+async function deletePressPost({ jwt, urlStrapi, tnId, storedMid }) {
+  if (!tnId && !storedMid) return { ok: false, message: "нет tnId и storedMid" };
+
+  let mid = storedMid || null;
+  if (!mid) {
+    try {
+      const r = await axios.get(`${urlStrapi}/api/teh-narusheniyas/${tnId}`, {
+        headers: { Authorization: `Bearer ${jwt}` },
+        timeout: 15000,
+      });
+      mid = r?.data?.data?.mid_MAX_press || null;
+    } catch (e) {
+      return { ok: false, message: `не удалось прочитать mid: ${e?.response?.status || e?.message}` };
+    }
+  }
+  if (!mid) return { ok: true, message: "mid не сохранён — нечего удалять" };
+
+  const { deleted, failed } = await deleteStoredMids(mid, "press");
+  const remaining = failed.map((f) => f.mid).join(",") || null;
+
+  if (tnId) {
+    try {
+      await axios.put(
+        `${urlStrapi}/api/teh-narusheniyas/${tnId}`,
+        { data: { mid_MAX_press: remaining } },
+        { headers: { Authorization: `Bearer ${jwt}` }, timeout: 15000 }
+      );
+    } catch (ce) {
+      return {
+        ok: false,
+        message: `mid=${deleted.join(",") || "-"} удалён, но поле не очищено: ${ce?.response?.status || ce?.message}`,
+      };
+    }
+  }
+
+  if (failed.length) {
+    return {
+      ok: false,
+      message:
+        `удалены ${deleted.join(",") || "—"}; не удалены: ${failed
+          .map((f) => `${f.mid} (${f.error})`)
+          .join("; ")}; в поле оставлено: ${remaining}`,
+    };
+  }
+  return { ok: true, message: `mid=${deleted.join(",")} удалён, поле очищено` };
+}
+
+module.exports = { publishPressPost, deletePressPost };

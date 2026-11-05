@@ -19,7 +19,7 @@ const { getJwt, fetchTnDescriptionById } = require("../services/modus/strapi");
 const { getAutoSendState } = require("../services/modus/autoSend");
 const { deleteStoredMids } = require("../services/tnmax/tnMaxChannel");
 const { publishTnPost, publishClosePost } = require("../services/tnmax/postPublisher");
-const { publishPressPost } = require("../services/tnmax/pressPublisher");
+const { publishPressPost, deletePressPost } = require("../services/tnmax/pressPublisher");
 const { logAuditEvent } = require("../services/auditLogger");
 require("dotenv").config();
 
@@ -780,7 +780,7 @@ router.put("/", async (req, res) => {
           return acc;
         }
 
-        // Этап 5.5 — Удаление ошибочной ТН из MAX (номер=-1 → пост гасим: канал ОО + группа И)
+        // Этап 5.5 — Удаление ошибочной ТН из MAX (номер=-1 → пост гасим: канал ОО + группа И + press)
         if (Number(mapped.number) === -1) {
           const st55 = islg.start(5.5, "Удаление ошибочной ТН из MAX (номер=-1)");
           const storedMid =
@@ -789,7 +789,9 @@ router.put("/", async (req, res) => {
             null;
           const storedIncidentMid =
             found?.mid_MAX_incident || currentAttrs?.mid_MAX_incident || null;
-          if (!storedMid && !storedIncidentMid) {
+          const storedPressMid =
+            found?.mid_MAX_press || currentAttrs?.mid_MAX_press || null;
+          if (!storedMid && !storedIncidentMid && !storedPressMid) {
             islg.skip(st55, "mid не сохранён — пост в MAX не отправлялся");
           } else {
             const notes = [];
@@ -853,6 +855,25 @@ router.put("/", async (req, res) => {
                 }
               } catch (e) {
                 notes.push(`группа И: ${e?.response?.data?.message || e?.message}`);
+              }
+            }
+            // Канал press — публичный: ошибка валит этап (как ОО)
+            if (storedPressMid) {
+              try {
+                const pr = await deletePressPost({
+                  jwt,
+                  urlStrapi,
+                  tnId: documentId,
+                  storedMid: storedPressMid,
+                });
+                if (pr.ok) notes.push(`press: ${pr.message}`);
+                else {
+                  hadError = true;
+                  notes.push(`press: ${pr.message}`);
+                }
+              } catch (e) {
+                hadError = true;
+                notes.push(`press: ${e?.response?.data?.message || e?.message}`);
               }
             }
             const detail = notes.join("; ");
@@ -1006,6 +1027,28 @@ router.put("/", async (req, res) => {
               });
               if (result.ok) islg.success(st85, result.message);
               else islg.fail(st85, result.message);
+            }
+
+            // Этап 8.6 — Гашение поста press после завершения работ (ТЗ: удаление
+            // сообщений о внеплановых отключениях). Условия isOpenToClose те же.
+            const st86 = islg.start(8.6, "Гашение поста press (внеплановая закрыта)");
+            const storedPressMid =
+              currentAttrs?.mid_MAX_press || found?.mid_MAX_press || null;
+            if (!storedPressMid) {
+              islg.skip(st86, "mid не сохранён — пост в press не отправлялся");
+            } else {
+              try {
+                const pr = await deletePressPost({
+                  jwt,
+                  urlStrapi,
+                  tnId: documentId,
+                  storedMid: storedPressMid,
+                });
+                if (pr.ok) islg.success(st86, pr.message);
+                else islg.fail(st86, pr.message);
+              } catch (de) {
+                islg.fail(st86, de?.response?.data?.message || de?.message);
+              }
             }
           }
         }
@@ -1391,6 +1434,25 @@ router.put("/", async (req, res) => {
         // Этап 12 — Удаление «удалённых» из Strapi (только для плановых)
         if (isPlanned && nextStatus === "удалена") {
           const st12 = islg.start(12, "Удаление плановой ТН из Strapi (status=удалена)");
+          // Сначала гасим пост в press — mid живёт в удаляемой записи
+          try {
+            const storedPressMid =
+              currentAttrs?.mid_MAX_press || found?.mid_MAX_press || null;
+            if (storedPressMid) {
+              const pr = await deletePressPost({
+                jwt,
+                urlStrapi,
+                tnId: documentId,
+                storedMid: storedPressMid,
+              });
+              if (pr.ok) console.log(`[PUT] press гашение перед удалением: ${pr.message}`);
+              else console.warn(`[PUT] press НЕ погашен перед удалением: ${pr.message}`);
+            }
+          } catch (pe) {
+            console.warn(
+              `[PUT] press гашение упало (запись удаляем): ${pe?.response?.status || pe?.message}`
+            );
+          }
           try {
             await axios.delete(
               `${urlStrapi}/api/teh-narusheniyas/${documentId}`,
@@ -1681,6 +1743,7 @@ router.post("/", async (req, res) => {
                   guid,
                   raw: { ...(item?.data || {}), ...item },
                   urlStrapi,
+                  midDocId: created?.documentId || createdId,
                 });
                 if (result.ok) islg.success(st9, result.message);
                 else islg.fail(st9, result.message);
