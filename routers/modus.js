@@ -19,6 +19,7 @@ const { getJwt, fetchTnDescriptionById } = require("../services/modus/strapi");
 const { getAutoSendState } = require("../services/modus/autoSend");
 const { deleteStoredMids } = require("../services/tnmax/tnMaxChannel");
 const { publishTnPost, publishClosePost } = require("../services/tnmax/postPublisher");
+const { publishPressPost } = require("../services/tnmax/pressPublisher");
 const { logAuditEvent } = require("../services/auditLogger");
 require("dotenv").config();
 
@@ -1664,6 +1665,28 @@ router.post("/", async (req, res) => {
             } catch (e) {
               islg.fail(st5a, e?.message);
               console.warn("[autosend] Ошибка проверки флага автоотправки:", e?.message);
+            }
+          }
+
+          // Этап 5.9 — Пост в канал press «Мособлэнерго24» (плановые + внеплановые, без PDF).
+          // Выше Этапа 6: иначе ранний return планового ЕДДС (статус ≠ начата/закрыта) его не даст.
+          {
+            const st9 = islg.start(9, "Пост в MAX press (Мособлэнерго24)");
+            if (!guid) {
+              islg.skip(st9, "GUID отсутствует");
+            } else {
+              try {
+                const result = await publishPressPost({
+                  jwt,
+                  guid,
+                  raw: { ...(item?.data || {}), ...item },
+                  urlStrapi,
+                });
+                if (result.ok) islg.success(st9, result.message);
+                else islg.fail(st9, result.message);
+              } catch (pe) {
+                islg.fail(st9, pe?.message || String(pe));
+              }
             }
           }
 

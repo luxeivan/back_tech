@@ -1,4 +1,5 @@
-// Минимальный клиент MAX: канал ОО (таргет oo) + тестовая группа И (таргет i).
+// Минимальный клиент MAX: канал ОО (таргет oo), тестовая группа И (таргет i),
+// канал пресс-службы (таргет press).
 const axios = require("axios");
 const FormData = require("form-data");
 
@@ -20,6 +21,7 @@ function parseChatId(raw) {
 const TARGETS = {
   oo: { envToken: "TN_MAX_BOT_OO", envChat: "MAX_CHAT_ID_OO" },
   i: { envToken: "TN_MAX_BOT_I", envChat: "MAX_CHAT_ID_I", envChatFallback: "MAX_GROUP_I" },
+  press: { envToken: "TN_MAX_BOT_PRESS", envChat: "MAX_CHAT_ID_PRESS" },
 };
 
 function getConfig(target = "oo") {
@@ -118,9 +120,20 @@ async function deleteStoredMids(stored, target) {
 }
 
 // Загрузка изображения в MAX: POST /uploads?type=image → multipart → mediafile token.
-async function uploadImage(buffer, filename = "image.png") {
-  const { token } = getConfig();
-  if (!token) throw new Error("Не задан TN_MAX_BOT_OO");
+// target — таргет бота (по умолчанию oo); contentType выводится из расширения файла.
+const IMAGE_CONTENT_TYPES = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+};
+
+async function uploadImage(buffer, filename = "image.png", target) {
+  const { token } = getConfig(target);
+  if (!token) throw new Error("Не задан токен бота для uploads");
+  const ext = (filename.match(/\.[a-z0-9]+$/i)?.[0] || ".png").toLowerCase();
+  const contentType = IMAGE_CONTENT_TYPES[ext] || "image/png";
 
   const { data: up } = await axios.post(`${apiBase()}/uploads?type=image`, null, {
     headers: { Authorization: token, Accept: "application/json" },
@@ -128,7 +141,7 @@ async function uploadImage(buffer, filename = "image.png") {
   });
 
   const form = new FormData();
-  form.append("data", buffer, { filename, contentType: "image/png" });
+  form.append("data", buffer, { filename, contentType });
 
   const { data } = await axios.post(up.url, form, {
     headers: { Authorization: token, ...form.getHeaders() },
