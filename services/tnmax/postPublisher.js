@@ -341,7 +341,8 @@ async function publishClosePost({ jwt, guid, raw, firstDescription, firstMid, fi
   try {
     postText = buildClosePostText(raw, {
       firstDescription,
-      recoveryAt: raw.F81_290_RECOVERYDATETIME,
+      // Заказчик (06.11.2026): время закрытия из F81_070; фолбэк на F81_290
+      recoveryAt: raw.F81_070_RESTOR_SUPPLAYDATETIME || raw.F81_290_RECOVERYDATETIME,
       reason: raw.REASON_OPER,
     });
   } catch (te) {

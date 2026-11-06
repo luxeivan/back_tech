@@ -44,6 +44,7 @@ function mkRaw(over) {
     PES_COUNT: 0,
     F81_010_NUMBER: 777,
     F81_060_EVENTDATETIME: "2026-10-20T09:00:00.000+03:00",
+    F81_070_RESTOR_SUPPLAYDATETIME: "2026-10-20T09:07:00.000+03:00",
     F81_290_RECOVERYDATETIME: "2026-10-20T09:05:00.000+03:00",
     SC_FILIAL: "Тестовый филиал",
     SC_PO: "Тестовое ПО",
@@ -71,6 +72,7 @@ async function runCase(label, status, expectClose) {
   const texts = sent.filter((m) => m.text).map((m) => ({
     target: m.target || "oo",
     head: String(m.text).replace(/\s+/g, " ").slice(0, 90),
+    full: String(m.text),
     reply: m.link?.mid || null,
   }));
   const files = sent.filter((m) => m.attachments?.[0]?.type === "file");
@@ -89,6 +91,11 @@ async function runCase(label, status, expectClose) {
   if (expectClose) {
     assert.strictEqual(closes.length, 2, "закрытие: ОО + группа И");
     assert.ok(closes.every((c) => c.reply), "закрытие должно быть reply на первый пост");
+    // Время закрытия — из F81_070 (09:07), НЕ из F81_290 (09:05)
+    assert.ok(
+      closes.every((c) => c.full.includes("09:07") && !c.full.includes("09:05")),
+      "в закрытии должно быть время из F81_070 (09:07)"
+    );
   } else {
     assert.strictEqual(closes.length, 0, "закрытия быть не должно");
   }

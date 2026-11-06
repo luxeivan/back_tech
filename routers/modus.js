@@ -1009,13 +1009,15 @@ router.put("/", async (req, res) => {
             const firstIncidentMidRaw = currentAttrs?.mid_MAX_incident || "";
             const firstIncidentMid = String(firstIncidentMidRaw).split(",")[0].trim() || null;
             const recoveryAt =
+              rawItem?.F81_070_RESTOR_SUPPLAYDATETIME ||
               rawItem?.F81_290_RECOVERYDATETIME ||
+              mapped?.factRestoreDateTime ||
               mapped?.recoveryFactDateTime ||
               null;
             if (!firstDescription) {
               islg.skip(st85, "первый пост не отправлялся (нет description_MAX_operativnayObstanovka)");
             } else if (!recoveryAt) {
-              islg.skip(st85, "нет F81_290_RECOVERYDATETIME (время восстановления)");
+              islg.skip(st85, "нет F81_070/F81_290 (время восстановления)");
             } else {
               const result = await publishClosePost({
                 jwt,

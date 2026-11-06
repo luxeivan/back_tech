@@ -173,7 +173,10 @@ function buildClosePostText(
     .join(" ");
 
   const objectLine = parseObjectLineFromDescription(firstDescription);
-  const when = formatMskTime(recoveryAt || raw.F81_290_RECOVERYDATETIME);
+  // Заказчик (06.11.2026): время закрытия из F81_070; фолбэк на F81_290
+  const when = formatMskTime(
+    recoveryAt || raw.F81_070_RESTOR_SUPPLAYDATETIME || raw.F81_290_RECOVERYDATETIME
+  );
   const reasonText = String(reason || raw.REASON_OPER || "").trim();
 
   // Макет заказчика (уточнение 2026-10-15): каждая часть на своей строке
