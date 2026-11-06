@@ -25,6 +25,9 @@ const {
 const {
   startFilialResourcesScheduler,
 } = require("./services/onec/resourceReport");
+const {
+  startPressPlannedScheduler,
+} = require("./services/tnmax/pressPlannedScheduler");
 
 const webhooks = require("./routers/webhooks");
 const { sseHandler, broadcast } = require("./services/sse");
@@ -90,6 +93,7 @@ app.listen(port, () => {
   console.log("[pes-max-bot] MAX работает через webhook");
   startOperationalDashboardStatsScheduler();
   startFilialResourcesScheduler();
+  startPressPlannedScheduler();
 });
 
 //ПРОВЕРКА123

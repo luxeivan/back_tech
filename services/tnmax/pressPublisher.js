@@ -6,6 +6,7 @@ const axios = require("axios");
 const { sendToChannel, uploadImage, deleteStoredMids } = require("./tnMaxChannel");
 const {
   buildPressPlannedText,
+  buildPressPlannedGroupText,
   buildPressEmergencyText,
   normalizeDistrictKey,
   splitPressText,
@@ -36,11 +37,11 @@ async function sendWithRetry(payload, label, sentMids) {
   return result;
 }
 
-// Картинка округа: DISTRICT ТН → tn-okruga (name/source_name) → img_plan.
-// Ошибки — не валят пост (отправим текст без картинки).
-async function fetchDistrictImage({ jwt, urlStrapi, district }) {
+// Метаданные округа: first_line_shablon (заголовок) + картинка img_plan.
+// Ошибки картинки не валят результат — image будет null.
+async function fetchDistrictInfo({ jwt, urlStrapi, district }) {
   const key = normalizeDistrictKey(district);
-  if (!key) return null;
+  if (!key) return { firstLine: null, image: null };
 
   const { data } = await axios.get(`${urlStrapi}/api/tn-okruga`, {
     headers: { Authorization: `Bearer ${jwt}` },
@@ -48,6 +49,7 @@ async function fetchDistrictImage({ jwt, urlStrapi, district }) {
       "pagination[pageSize]": 100,
       "fields[0]": "name",
       "fields[1]": "source_name",
+      "fields[2]": "first_line_shablon",
       "populate[img_plan][fields][0]": "url",
       "populate[img_plan][fields][1]": "name",
       "populate[img_plan][fields][2]": "ext",
@@ -60,23 +62,34 @@ async function fetchDistrictImage({ jwt, urlStrapi, district }) {
       normalizeDistrictKey(r.name) === key ||
       normalizeDistrictKey(r.source_name) === key
   );
-  if (!hit?.img_plan?.url) {
+  if (!hit) return { firstLine: null, image: null };
+
+  const firstLine = hit.first_line_shablon || null;
+
+  if (!hit.img_plan?.url) {
     console.warn(`[press] нет img_plan для округа "${district}" (key=${key})`);
-    return null;
+    return { firstLine, image: null };
   }
 
-  const fileUrl = /^https?:/i.test(hit.img_plan.url)
-    ? hit.img_plan.url
-    : `${String(urlStrapi).replace(/\/$/, "")}${hit.img_plan.url}`;
-  const filename = hit.img_plan.name || `okrug${hit.img_plan.ext || ".png"}`;
-
-  const resp = await axios.get(fileUrl, {
-    responseType: "arraybuffer",
-    timeout: 30000,
-    headers: jwt ? { Authorization: `Bearer ${jwt}` } : undefined,
-  });
-  console.log(`[press] картинка округа: ${filename} (${resp.data.length} б)`);
-  return { buffer: Buffer.from(resp.data), filename };
+  try {
+    const fileUrl = /^https?:/i.test(hit.img_plan.url)
+      ? hit.img_plan.url
+      : `${String(urlStrapi).replace(/\/$/, "")}${hit.img_plan.url}`;
+    const filename = hit.img_plan.name || `okrug${hit.img_plan.ext || ".png"}`;
+    const resp = await axios.get(fileUrl, {
+      responseType: "arraybuffer",
+      timeout: 30000,
+      headers: jwt ? { Authorization: `Bearer ${jwt}` } : undefined,
+    });
+    console.log(`[press] картинка округа: ${filename} (${resp.data.length} б)`);
+    return { firstLine, image: { buffer: Buffer.from(resp.data), filename } };
+  } catch (ie) {
+    console.warn(
+      `[press] скачивание картинки округа не удалось (key=${key}):`,
+      ie?.response?.status || ie?.message
+    );
+    return { firstLine, image: null };
+  }
 }
 
 // Сохранение mid и текста поста отдельными PUT (mid первым — падение записи
@@ -129,11 +142,12 @@ async function publishPressPost({ jwt, guid, raw, urlStrapi, midDocId }) {
   let imageNote = "";
   if (isPlanned) {
     try {
-      image = await fetchDistrictImage({
+      const info = await fetchDistrictInfo({
         jwt,
         urlStrapi,
         district: data.DISTRICT || raw.DISTRICT || "",
       });
+      image = info.image;
     } catch (ie) {
       imageNote = `; картинка НЕ отправлена: ${ie?.response?.status || ie?.message}`;
       console.warn(`[press] ошибка картинки округа (guid=${guid}):`, ie?.response?.status || ie?.message);
@@ -245,4 +259,84 @@ async function deletePressPost({ jwt, urlStrapi, tnId, storedMid }) {
   return { ok: true, message: `mid=${deleted.join(",")} удалён, поле очищено` };
 }
 
-module.exports = { publishPressPost, deletePressPost };
+// Групповой пост плановых (округ + дата): один текст на всех, mid/текст → каждому участнику.
+// entries: [{ start: Date, end: Date|null, address, reason }]
+// members: [{ documentId, guid }] — кому сохраняем mid/текст.
+async function publishPressGroupPost({ jwt, urlStrapi, district, entries, members }) {
+  if (!entries?.length) return { ok: false, message: "пустая группа" };
+
+  let firstLine = null;
+  let image = null;
+  let imageNote = "";
+  try {
+    const info = await fetchDistrictInfo({ jwt, urlStrapi, district });
+    firstLine = info.firstLine;
+    image = info.image;
+  } catch (ie) {
+    imageNote = `; метаданные округа не получены: ${ie?.response?.status || ie?.message}`;
+    console.warn(`[press] ошибка метаданных округа "${district}":`, ie?.response?.status || ie?.message);
+  }
+
+  let postText;
+  try {
+    postText = buildPressPlannedGroupText(entries, { firstLine, district }) || "";
+  } catch (te) {
+    return { ok: false, message: `шаблон не собрался: ${te?.message}` };
+  }
+  if (!postText.trim()) return { ok: false, message: "пустой текст поста" };
+
+  const chunks = splitPressText(postText);
+  const sentMids = [];
+  try {
+    for (let i = 0; i < chunks.length; i += 1) {
+      const payload = { text: chunks[i] };
+      if (i === 0 && image) {
+        try {
+          const mediaToken = await uploadImage(image.buffer, image.filename, "press");
+          payload.attachments = [{ type: "image", payload: { token: mediaToken } }];
+        } catch (ue) {
+          imageNote = `; картинка НЕ отправлена: ${ue?.response?.data?.message || ue?.message}`;
+          console.warn(`[press] upload image failed (округ=${district}):`, ue?.message);
+        }
+      }
+      await sendWithRetry(payload, `группа ${district} чанк ${i + 1}/${chunks.length}`, sentMids);
+      if (i < chunks.length - 1) await new Promise((r) => setTimeout(r, SEND_PAUSE_MS));
+    }
+  } catch (se) {
+    return {
+      ok: false,
+      message: `mid=${sentMids.join(",") || "-"}: ${se?.response?.data?.message || se?.message}${imageNote}`,
+    };
+  }
+
+  // mid/текст — КАЖДОМУ участнику группы (дедуп по mid_MAX_press)
+  const mids = sentMids.join(",");
+  const saveErrors = [];
+  for (const m of members) {
+    if (!m.documentId) continue;
+    const { midError, textError } = await savePressMeta({
+      jwt,
+      urlStrapi,
+      midDocId: m.documentId,
+      mids,
+      postText,
+    });
+    if (midError) saveErrors.push(`${m.guid}: mid ${midError}`);
+    else if (textError) saveErrors.push(`${m.guid}: текст ${textError}`);
+  }
+
+  return {
+    ok: saveErrors.length === 0,
+    message:
+      `группа ${district}: ТН=${entries.length} mid=${mids}` +
+      `${chunks.length > 1 ? ` сообщений=${chunks.length}` : ""}` +
+      `${image && sentMids.length ? " +картинка" : ""}` +
+      `${saveErrors.length ? `; НЕ сохранено: ${saveErrors.join("; ")}` : "; mid/текст всем участникам"}` +
+      `${imageNote}`,
+    sentMids,
+    postText,
+    guids: entries.map((e) => e.guid).filter(Boolean),
+  };
+}
+
+module.exports = { publishPressPost, publishPressGroupPost, deletePressPost, fetchDistrictInfo };

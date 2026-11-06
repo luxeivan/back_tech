@@ -139,6 +139,49 @@ function buildPressPlannedText(raw = {}) {
   return lines.join("\n");
 }
 
+// ── Плановые: групповой пост (округ + дата, несколько ТН) ───────────────────
+// Заголовок: first_line_shablon из tn-okruga (индивидуальный на округ) + дата + хвост.
+// Строка: «📍 DD.MM.YYYY (HH:MM – HH:MM) адрес. причина.» — окно и причина свои у каждой ТН.
+function buildPressPlannedGroupText(entries = [], { firstLine, district } = {}) {
+  const starts = entries
+    .map((e) => e.start)
+    .filter(Boolean)
+    .sort((a, b) => a - b);
+  const titleDate = fmtDayMonthTitle(starts[0]);
+  const head =
+    String(firstLine || "").trimEnd() ||
+    `В муниципальном образовании ${districtTitle(district) || "—"}`;
+
+  const lines = [];
+  lines.push(
+    `${head}${titleDate ? ` ${titleDate}` : ""} возможны плановые отключения электроснабжения`
+  );
+  lines.push("");
+  lines.push(
+    "«Мособлэнерго» информирует о возможных плановых отключениях электроэнергии. На энергообъектах, обслуживаемых компанией, будут проводиться технические работы для повышения надежности электроснабжения потребителей. Для обеспечения безопасного выполнения работ отключение электричества планируется:"
+  );
+  lines.push("");
+
+  for (const e of entries) {
+    const when = fmtWindow(e.start, e.end);
+    const address = cleanAddressList(e.address);
+    const reason = String(e.reason || "").trim().replace(/\s+/g, " ");
+    let line = `📍 ${fmtDmy(e.start)}${when ? ` (${when})` : ""}`;
+    if (address) line += ` ${address}${lastCharIsPunct(address) ? "" : "."}`;
+    if (reason) line += ` ${reason}${lastCharIsPunct(reason) ? "" : "."}`;
+    lines.push(line);
+  }
+
+  lines.push("");
+  lines.push("Приносим извинения за доставленные неудобства!");
+  lines.push("");
+  lines.push(
+    "По вопросам отключений и качества электроснабжения просим обращаться на «Горячую линию» АО «Мособлэнерго» по телефону 8(495) 99-500-99."
+  );
+
+  return lines.join("\n");
+}
+
 // ── Внеплановые (аварийные) ────────────────────────────────────────────────
 function buildPressEmergencyText(raw = {}) {
   const data = raw.data && typeof raw.data === "object" ? raw.data : {};
@@ -208,6 +251,7 @@ function splitPressText(text, limit = 3900) {
 
 module.exports = {
   buildPressPlannedText,
+  buildPressPlannedGroupText,
   buildPressEmergencyText,
   normalizeDistrictKey,
   districtTitle,

@@ -1436,19 +1436,50 @@ router.put("/", async (req, res) => {
         // Этап 12 — Удаление «удалённых» из Strapi (только для плановых)
         if (isPlanned && nextStatus === "удалена") {
           const st12 = islg.start(12, "Удаление плановой ТН из Strapi (status=удалена)");
-          // Сначала гасим пост в press — mid живёт в удаляемой записи
+          // Сначала гасим пост в press — НО только если этот mid не общий
+          // с другими живыми участниками группового поста (гашение = потеря поста для них)
           try {
             const storedPressMid =
               currentAttrs?.mid_MAX_press || found?.mid_MAX_press || null;
             if (storedPressMid) {
-              const pr = await deletePressPost({
-                jwt,
-                urlStrapi,
-                tnId: documentId,
-                storedMid: storedPressMid,
-              });
-              if (pr.ok) console.log(`[PUT] press гашение перед удалением: ${pr.message}`);
-              else console.warn(`[PUT] press НЕ погашен перед удалением: ${pr.message}`);
+              const firstMid = String(storedPressMid).split(",")[0].trim();
+              let sharedWithAlive = false;
+              try {
+                const siblings = await axios.get(`${urlStrapi}/api/teh-narusheniyas`, {
+                  headers: { Authorization: `Bearer ${jwt}` },
+                  params: {
+                    "filters[mid_MAX_press][$containsi]": firstMid,
+                    "filters[guid][$ne]": mapped.guid,
+                    "pagination[pageSize]": 50,
+                    "fields[0]": "guid",
+                    "fields[1]": "STATUS_NAME",
+                  },
+                  timeout: 15000,
+                });
+                const alive = (siblings?.data?.data || []).filter(
+                  (s) => !["удалена", "отменена"].includes(String(s.STATUS_NAME || "").toLowerCase())
+                );
+                sharedWithAlive = alive.length > 0;
+                if (sharedWithAlive) {
+                  console.log(
+                    `[PUT] press mid общий с ${alive.length} живой(ыми) участником(ами) — не гасим, только удаляем ТН`
+                  );
+                }
+              } catch (qe) {
+                // не смогли проверить — НЕ рискуем гасить чужой общий пост
+                sharedWithAlive = true;
+                console.warn(`[PUT] press: не удалось проверить соседей по mid, пропускаем гашение: ${qe?.response?.status || qe?.message}`);
+              }
+              if (!sharedWithAlive) {
+                const pr = await deletePressPost({
+                  jwt,
+                  urlStrapi,
+                  tnId: documentId,
+                  storedMid: storedPressMid,
+                });
+                if (pr.ok) console.log(`[PUT] press гашение перед удалением: ${pr.message}`);
+                else console.warn(`[PUT] press НЕ погашен перед удалением: ${pr.message}`);
+              }
             }
           } catch (pe) {
             console.warn(
@@ -1732,12 +1763,14 @@ router.post("/", async (req, res) => {
             }
           }
 
-          // Этап 5.9 — Пост в канал press «Мособлэнерго24» (плановые + внеплановые, без PDF).
-          // Выше Этапа 6: иначе ранний return планового ЕДДС (статус ≠ начата/закрыта) его не даст.
+          // Этап 5.9 — Пост в канал press «Мособлэнерго24» (только аварийные).
+          // Плановые идут ТОЛЬКО из pressPlannedScheduler (T-3d, группировка по округу+дате).
           {
             const st9 = islg.start(9, "Пост в MAX press (Мособлэнерго24)");
             if (!guid) {
               islg.skip(st9, "GUID отсутствует");
+            } else if (!isEmergency) {
+              islg.skip(st9, "плановые — через планировщик pressPlannedScheduler (T-3d)");
             } else {
               try {
                 const result = await publishPressPost({
