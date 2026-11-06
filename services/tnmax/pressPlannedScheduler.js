@@ -1,29 +1,51 @@
-// Планировщик публикации плановых отключений в press «Мособлэнерго24» (ТЗ: за 3 дня).
-// Отвязан от ручки МОДУСа: фоновый тик сам находит созревшие группы (округ+дата)
-// и публикует один пост на группу. Публикация — только из этого модуля
-// (Этап 9 POST плановые больше не шлёт).
-//
-// Логика окна: публикуем ТН, у которых start ∈ (now, now+72h] — тогда
-// start−72h уже наступил (правило «за 3 дня»). ТН, пришедшая раньше чем за 3 сут,
-// ждёт в окне до наступления срока; опоздавшая (пришла <3 сут до старта) — публикуется сразу.
+// Планировщик плановых отключений в press «Мособлэнерго24».
+// Решение 06.11.2026 (Стас):
+//  - основной прогон — раз в сутки в 07:30 МСК (batch, без спама);
+//  - «за 3 дня» — календарное: дата старта (МСК) ≤ сегодня+3; публикация утром дня T-3;
+//  - опоздавшие (МОДУС прислал <3 сут до старта, часто за 1 сут) — триггер из
+//    Этапа 9 POST → debounce → прогон сразу, не дожидаясь 07:30.
+// Группировка (округ+дата), mid-дедуп, картинка округа — в pressPublisher.
 const axios = require("axios");
 require("dotenv").config();
 const { getJwt } = require("../modus/strapi");
 const { publishPressGroupPost } = require("./pressPublisher");
 const { normalizeDistrictKey } = require("./pressTextTemplate");
 
-const TICK_MS = 30 * 60 * 1000;
-const WINDOW_MS = 72 * 60 * 60 * 1000; // 72ч вперёд от now
+const RUN_AT_H_MSK = 7; // 07:30 МСК; в коде ниже сдвиг на +3h в UTC-поля,
+const RUN_AT_M_MSK = 30; // вычитание 3h возвращает реальный момент
+const DEBOUNCE_MS = 10 * 60 * 1000; // сборка пачки опоздавших ТН перед прогоном
 const PAGE_SIZE = 100;
 
-let timer = null;
+let dailyTimer = null;
+let debounceTimer = null;
+let runChain = Promise.resolve(); // сериализация прогонов (нет параллельных)
 
 const mskDateKey = (d) =>
   new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Moscow" }).format(d); // YYYY-MM-DD
 
+// Верхняя граница окна: конец календарного дня сегодня+3 (МСК).
+// Вместе с нижней границей «start > now» окно = множество due-групп.
+function windowUntilMsk() {
+  const now = new Date();
+  const msk = new Date(now.getTime() + 3 * 3600 * 1000);
+  return new Date(
+    Date.UTC(msk.getUTCFullYear(), msk.getUTCMonth(), msk.getUTCDate() + 4, 0, 0, 0) -
+      3 * 3600 * 1000
+  ); // 00:00 МСК следующего дня после today+3
+}
+
+// Due-правило: дата старта ≤ сегодня+3 (МСК). Календарно, не скользящие 72ч —
+// иначе при тике 07:30 дневной старт «за 3 дня» уходил бы только завтра утром.
+function isPressPlannedDue(startLike) {
+  const start = new Date(startLike);
+  if (Number.isNaN(start.getTime())) return false;
+  const limit = mskDateKey(new Date(Date.now() + 3 * 86400000));
+  return mskDateKey(start) <= limit;
+}
+
 async function fetchWindowTns(jwt, urlStrapi) {
   const now = new Date();
-  const until = new Date(now.getTime() + WINDOW_MS);
+  const until = windowUntilMsk();
   const rows = [];
   let page = 1;
   let pageCount = 1;
@@ -156,35 +178,70 @@ async function runPressPlannedOnce({ reason = "manual", dryRun = false, onlyDist
   return { ok: failed === 0, message };
 }
 
-// Тик каждые 30 мин + прогон при старте. Включается только env
-// PRESS_PLANNED_ENABLED=1 — иначе ручной запуск runPressPlannedOnce().
-function startPressPlannedScheduler() {
-  if (process.env.PRESS_PLANNED_ENABLED !== "1") {
-    console.log(
-      "[press-planned] планировщик выключен (PRESS_PLANNED_ENABLED=1) — " +
-        "ручной запуск: runPressPlannedOnce()"
+// Сериализация: прогон за прогоном, без параллельных запусков.
+function enqueueRun(reason) {
+  runChain = runChain
+    .then(() => runPressPlannedOnce({ reason }))
+    .catch((e) =>
+      console.warn("[press-planned] прогон упал:", e?.response?.status || e?.message)
     );
-    return;
-  }
-  if (timer) return;
-
-  const scheduleNext = () => {
-    timer = setTimeout(async () => {
-      try {
-        await runPressPlannedOnce({ reason: "tick" });
-      } catch (e) {
-        console.warn("[press-planned] ошибка тика:", e?.response?.status || e?.message);
-      } finally {
-        scheduleNext();
-      }
-    }, TICK_MS);
-  };
-
-  runPressPlannedOnce({ reason: "startup" }).catch((e) =>
-    console.warn("[press-planned] ошибка стартового прогона:", e?.message)
-  );
-  scheduleNext();
-  console.log("[press-planned] планировщик включён: тик каждые 30 мин, окно T-72h");
+  return runChain;
 }
 
-module.exports = { runPressPlannedOnce, startPressPlannedScheduler };
+// Триггер «опоздавшей» ТН из Этапа 9 POST: debounce 10 мин, чтобы собрать
+// пачку МОДУСа (один округ+дата прилетает десятками минут подряд).
+function schedulePressPlannedRun(reason = "late-planned-tn") {
+  if (debounceTimer) clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => {
+    debounceTimer = null;
+    console.log(`[press-planned] дебаунс истёк — запускаю прогон (${reason})`);
+    enqueueRun(reason);
+  }, DEBOUNCE_MS);
+  console.log(
+    `[press-planned] опоздавшая ТН — прогон через ${DEBOUNCE_MS / 60000} мин (${reason})`
+  );
+  return true;
+}
+
+// ms до следующих 07:30 МСК.
+function msUntilNextRun(now = Date.now()) {
+  const msk = new Date(now + 3 * 3600 * 1000);
+  let next =
+    Date.UTC(msk.getUTCFullYear(), msk.getUTCMonth(), msk.getUTCDate(), RUN_AT_H_MSK, RUN_AT_M_MSK, 0) -
+    3 * 3600 * 1000;
+  if (next <= now) {
+    const t = new Date(now + 3 * 3600 * 1000 + 86400000);
+    next =
+      Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate(), RUN_AT_H_MSK, RUN_AT_M_MSK, 0) -
+      3 * 3600 * 1000;
+  }
+  return next - now;
+}
+
+// Дневной прогон в 07:30 МСК, всегда активен (без env-флагов).
+// Без автозапуска при старте: первое включение не разлетается залпом по всем
+// due-группам — первый прогон в 07:30 (или ручной runPressPlannedOnce /
+// триггер опоздавшей ТН). Если процесс упал до 07:30 — прогон сдвинется
+// на следующие сутки (ручной запуск/триггер покрывают).
+function startPressPlannedScheduler() {
+  if (dailyTimer) return;
+
+  const scheduleNext = () => {
+    const delay = msUntilNextRun();
+    console.log(
+      `[press-planned] следующий дневной прогон через ${Math.round(delay / 60000)} мин (07:30 МСК)`
+    );
+    dailyTimer = setTimeout(async () => {
+      await enqueueRun("daily-0730");
+      scheduleNext();
+    }, delay);
+  };
+  scheduleNext();
+}
+
+module.exports = {
+  runPressPlannedOnce,
+  startPressPlannedScheduler,
+  schedulePressPlannedRun,
+  isPressPlannedDue,
+};

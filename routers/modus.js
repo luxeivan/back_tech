@@ -20,6 +20,10 @@ const { getAutoSendState } = require("../services/modus/autoSend");
 const { deleteStoredMids } = require("../services/tnmax/tnMaxChannel");
 const { publishTnPost, publishClosePost } = require("../services/tnmax/postPublisher");
 const { publishPressPost, deletePressPost } = require("../services/tnmax/pressPublisher");
+const {
+  schedulePressPlannedRun,
+  isPressPlannedDue,
+} = require("../services/tnmax/pressPlannedScheduler");
 const { logAuditEvent } = require("../services/auditLogger");
 require("dotenv").config();
 
@@ -1764,13 +1768,25 @@ router.post("/", async (req, res) => {
           }
 
           // Этап 5.9 — Пост в канал press «Мособлэнерго24» (только аварийные).
-          // Плановые идут ТОЛЬКО из pressPlannedScheduler (T-3d, группировка по округу+дате).
+          // Плановые идут ТОЛЬКО из pressPlannedScheduler: дневной прогон 07:30 МСК;
+          // опоздавшие (<3 сут до старта) — debounce-триггер сразу из этого этапа.
           {
             const st9 = islg.start(9, "Пост в MAX press (Мособлэнерго24)");
             if (!guid) {
               islg.skip(st9, "GUID отсутствует");
             } else if (!isEmergency) {
-              islg.skip(st9, "плановые — через планировщик pressPlannedScheduler (T-3d)");
+              const startIso =
+                item?.createDateTime || item?.data?.F81_060_EVENTDATETIME || null;
+              const due = startIso && isPressPlannedDue(startIso);
+              islg.skip(
+                st9,
+                due
+                  ? "плановая T-3d/опоздала — триггер pressPlannedScheduler"
+                  : "плановые — дневной прогон 07:30 МСК (pressPlannedScheduler)"
+              );
+              if (due) {
+                schedulePressPlannedRun("late-planned-tn");
+              }
             } else {
               try {
                 const result = await publishPressPost({
