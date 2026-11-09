@@ -61,9 +61,11 @@ function fmtWindow(start, end) {
 }
 
 // "Пушкинский г.о." / "Городской Округ Истра" → "пушкинский" / "истра"
+// ё→е: МОДУС шлёт «Щелково г.о.», в tn-okruga «Щёлково» (и наоборот)
 function normalizeDistrictKey(value) {
   return String(value || "")
     .toLowerCase()
+    .replace(/ё/g, "е")
     .replace(/г\s*\.\s*о\s*\.?/g, " ")
     .replace(/муниципальн\w*\s+округ/g, " ")
     .replace(/городской\s+округ/g, " ")
