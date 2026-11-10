@@ -117,7 +117,7 @@ function buildPressPlannedText(raw = {}) {
   const lines = [];
   const titleDate = fmtDayMonthTitle(start);
   lines.push(
-    `В муниципальном округе ${titleDistrict}${titleDate ? ` ${titleDate}` : ""} возможны плановые отключения электроэнергии`
+    `<b>В муниципальном округе ${escapeHtml(titleDistrict)}${titleDate ? ` ${titleDate}` : ""} возможны плановые отключения электроэнергии</b>`
   );
   lines.push("");
   lines.push(
@@ -127,7 +127,7 @@ function buildPressPlannedText(raw = {}) {
 
   const when = fmtWindow(start, end);
   if (address) {
-    lines.push(`📍 ${fmtDmy(start)}${when ? ` (${when})` : ""} ${address}${lastCharIsPunct(address) ? "" : "."} Отключение для безопасного проведения работ.`);
+    lines.push(`📍 ${fmtDmy(start)}${when ? ` (${when})` : ""} ${escapeHtml(address)}${lastCharIsPunct(address) ? "" : "."} Отключение для безопасного проведения работ.`);
   } else {
     lines.push(`📍 ${fmtDmy(start)}${when ? ` (${when})` : ""}. Отключение для безопасного проведения работ.`);
   }
@@ -156,7 +156,7 @@ function buildPressPlannedGroupText(entries = [], { firstLine, district } = {}) 
 
   const lines = [];
   lines.push(
-    `${head}${titleDate ? ` ${titleDate}` : ""} возможны плановые отключения электроснабжения`
+    `<b>${escapeHtml(head)}${titleDate ? ` ${titleDate}` : ""} возможны плановые отключения электроснабжения</b>`
   );
   lines.push("");
   lines.push(
@@ -169,8 +169,8 @@ function buildPressPlannedGroupText(entries = [], { firstLine, district } = {}) 
     const address = cleanAddressList(e.address);
     const reason = String(e.reason || "").trim().replace(/\s+/g, " ");
     let line = `📍 ${fmtDmy(e.start)}${when ? ` (${when})` : ""}`;
-    if (address) line += ` ${address}${lastCharIsPunct(address) ? "" : "."}`;
-    if (reason) line += ` ${reason}${lastCharIsPunct(reason) ? "" : "."}`;
+    if (address) line += ` ${escapeHtml(address)}${lastCharIsPunct(address) ? "" : "."}`;
+    if (reason) line += ` ${escapeHtml(reason)}${lastCharIsPunct(reason) ? "" : "."}`;
     lines.push(line);
   }
 
@@ -185,11 +185,22 @@ function buildPressPlannedGroupText(entries = [], { firstLine, district } = {}) 
 }
 
 // ── Внеплановые (аварийные) ────────────────────────────────────────────────
+// Возвращает HTML (format: "html" в MAX): лейблы в <b>, значения экранированы.
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 function buildPressEmergencyText(raw = {}) {
   const data = raw.data && typeof raw.data === "object" ? raw.data : {};
   const start = parseDate(raw.createDateTime || data.F81_060_EVENTDATETIME);
-  const plan = parseDate(raw.recoveryPlanDateTime || data.REPAIRDATETIME);
   const address = cleanAddressList(raw.addressList || data.ADDRESS_LIST);
+
+  // Прогноз = +2 часа от момента возникновения (ТЗ пресс-службы: не тянуть
+  // recoveryPlanDateTime из МОДУСа — оно уезжает и путает потребителя).
+  const plan = start ? new Date(start.getTime() + 2 * 3600 * 1000) : null;
 
   const planValue =
     !plan
@@ -199,19 +210,24 @@ function buildPressEmergencyText(raw = {}) {
         : `${fmtDmy(plan)} ${fmtHm(plan)}`;
 
   const lines = [];
-  lines.push("Уважаемый потребитель!");
-  lines.push("АО «Мособлэнерго» информирует о произошедшем внеплановом отключении электроэнергии");
+  lines.push("<b>Уважаемый потребитель!</b>");
+  lines.push(
+    `❗️❗️ ❗️❗️ АО «Мособлэнерго» информирует о произошедшем внеплановом отключении электроэнергии`
+  );
   lines.push("");
-  lines.push(`Дата: ${start ? fmtDmy(start) : "—"}`);
-  lines.push(`Время регистрации технологического нарушения: ${start ? fmtHm(start) : "—"}`);
-  lines.push(`Адрес: ${address || "—"}`);
-  lines.push(`Прогнозируемое время восстановления: ${planValue}`);
+  lines.push(`<b>Дата:</b> ${start ? fmtDmy(start) : "—"}`);
+  lines.push(
+    `<b>Время регистрации технологического нарушения:</b> ${start ? fmtHm(start) : "—"}`
+  );
+  lines.push(`<b>Адрес:</b> ${address ? escapeHtml(address) : "—"}`);
+  lines.push(`<b>Прогнозируемое время восстановления:</b> ${planValue}`);
   lines.push("");
   lines.push(
     "Мы предпринимаем все необходимые меры для скорейшего восстановления электроснабжения. Для проведения работ направлены оперативно-выездные бригады и необходимая спецтехника."
   );
   lines.push("Приносим извинения за доставленные неудобства!");
-  lines.push("С уважением, АО «Мособлэнерго»");
+  lines.push("");
+  lines.push("<b>С уважением, АО «Мособлэнерго»</b>");
 
   return lines.join("\n");
 }

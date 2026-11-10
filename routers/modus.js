@@ -1034,12 +1034,20 @@ router.put("/", async (req, res) => {
               if (result.ok) islg.success(st85, result.message);
               else islg.fail(st85, result.message);
             }
+          }
+        }
 
-            // Этап 8.6 — Гашение поста press после завершения работ (ТЗ: удаление
-            // сообщений о внеплановых отключениях). Условия isOpenToClose те же.
-            const st86 = islg.start(8.6, "Гашение поста press (внеплановая закрыта)");
-            const storedPressMid =
-              currentAttrs?.mid_MAX_press || found?.mid_MAX_press || null;
+        // Этап 8.6 — Гашение поста press (внеплановая: статус финальный).
+        // Вне isOpenToClose: гасим при ЛЮБОМ PUT, где статус
+        // закрыта/запитана/удалена и mid ещё висит (ловит и «удалена»,
+        // и повтор после упавшего предыдущего гашения).
+        {
+          const storedPressMid =
+            currentAttrs?.mid_MAX_press || found?.mid_MAX_press || null;
+          const pressFinal = nextBaseType === 0 && isFinalStatus(nextStatus);
+          // Тихо, если гасить нечего и статус не менялся — не засоряем журнал
+          if (pressFinal && (storedPressMid || statusChanged)) {
+            const st86 = islg.start(8.6, "Гашение поста press (внеплановая не открыта)");
             if (!storedPressMid) {
               islg.skip(st86, "mid не сохранён — пост в press не отправлялся");
             } else {

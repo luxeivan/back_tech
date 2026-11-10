@@ -128,6 +128,11 @@ async function publishPressPost({ jwt, guid, raw, urlStrapi, midDocId }) {
   if (isPlanned && ["отменена", "удалена"].includes(statusName)) {
     return { ok: true, message: `статус «${statusName}» — пропущено` };
   }
+  // Внеплановая: пост в канале только пока ТН открыта. Пришла уже
+  // закрытой/запитанной/удаленной — не публикуем (и гасить нечего).
+  if (!isPlanned && ["закрыта", "запитана", "удалена"].includes(statusName)) {
+    return { ok: true, message: `статус «${statusName}» — пропущено` };
+  }
 
   let postText;
   try {
@@ -158,7 +163,8 @@ async function publishPressPost({ jwt, guid, raw, urlStrapi, midDocId }) {
   const sentMids = [];
   try {
     for (let i = 0; i < chunks.length; i += 1) {
-      const payload = { text: chunks[i] };
+      // Все press-шаблоны — HTML (жирные лейблы/заголовки в <b>)
+      const payload = { text: chunks[i], format: "html" };
       if (i === 0 && image) {
         try {
           const mediaToken = await uploadImage(image.buffer, image.filename, "press");
@@ -289,7 +295,8 @@ async function publishPressGroupPost({ jwt, urlStrapi, district, entries, member
   const sentMids = [];
   try {
     for (let i = 0; i < chunks.length; i += 1) {
-      const payload = { text: chunks[i] };
+      // Групповой шаблон тоже HTML (заголовок в <b>)
+      const payload = { text: chunks[i], format: "html" };
       if (i === 0 && image) {
         try {
           const mediaToken = await uploadImage(image.buffer, image.filename, "press");
