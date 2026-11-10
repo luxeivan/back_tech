@@ -223,6 +223,7 @@ function mapPlannedItem(item) {
   const end = firstNonEmpty(raw?.REPAIRDATETIME, raw?.F81_070_RESTOR_SUPPLAYDATETIME, item?.recoveryPlanDateTime);
   const address = firstNonEmpty(raw?.ADDRESS_LIST, item?.addressList, raw?.HOUSE_LIST, districtName);
   const comment = firstNonEmpty(raw?.BRIGADE_ACTION, raw?.DESCRIPTION, item?.description);
+  const description = firstNonEmpty(raw?.DESCRIPTION, item?.raw_description);
   const objectName = firstNonEmpty(raw?.F81_041_ENERGOOBJECTNAME, item?.energoObject);
   const lat = Number(districtCenter?.lat) || 55.754475;
   const lon = Number(districtCenter?.lon) || 37.621869;
@@ -233,6 +234,7 @@ function mapPlannedItem(item) {
       begin,
       end,
       comment,
+      description,
       guid: firstNonEmpty(item?.guid, raw?.VIOLATION_GUID_STR, item?.documentId),
       number: firstNonEmpty(raw?.F81_010_NUMBER, item?.number),
       statusName: getPlannedStatus(item, raw),
