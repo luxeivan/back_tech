@@ -268,7 +268,7 @@ async function deletePressPost({ jwt, urlStrapi, tnId, storedMid }) {
 // Групповой пост плановых (округ + дата): один текст на всех, mid/текст → каждому участнику.
 // entries: [{ start: Date, end: Date|null, address, reason }]
 // members: [{ documentId, guid }] — кому сохраняем mid/текст.
-async function publishPressGroupPost({ jwt, urlStrapi, district, entries, members }) {
+async function publishPressGroupPost({ jwt, urlStrapi, district, entries, members, additional = false }) {
   if (!entries?.length) return { ok: false, message: "пустая группа" };
 
   let firstLine = null;
@@ -285,7 +285,7 @@ async function publishPressGroupPost({ jwt, urlStrapi, district, entries, member
 
   let postText;
   try {
-    postText = buildPressPlannedGroupText(entries, { firstLine, district }) || "";
+    postText = buildPressPlannedGroupText(entries, { firstLine, district, additional }) || "";
   } catch (te) {
     return { ok: false, message: `шаблон не собрался: ${te?.message}` };
   }
@@ -295,7 +295,7 @@ async function publishPressGroupPost({ jwt, urlStrapi, district, entries, member
   const sentMids = [];
   try {
     for (let i = 0; i < chunks.length; i += 1) {
-      // Групповой шаблон тоже HTML (заголовок в <b>)
+      // Групповой шаблон тоже HTML (заголовок <h2>, дата/причина в <b>)
       const payload = { text: chunks[i], format: "html" };
       if (i === 0 && image) {
         try {

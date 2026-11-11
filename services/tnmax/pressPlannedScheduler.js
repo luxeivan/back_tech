@@ -81,7 +81,8 @@ async function fetchWindowTns(jwt, urlStrapi) {
 }
 
 // Группировка: (округ, дата МСК старта). Участник уже опубликован (mid есть) —
-// вся группа пропускается (анти-спам приоритетнее полноты; решение 06.11.2026).
+// в пост не входит; если в группе ЕСТЬ новые участники — выходим постом-дополнением
+// (анти-спам приоритетнее полноты; решение 06.11.2026 + доп-посты 11.11.2026).
 function groupRows(rows) {
   const groups = new Map();
   for (const row of rows) {
@@ -118,12 +119,17 @@ async function runPressPlannedOnce({ reason = "manual", dryRun = false, onlyDist
   const notes = [];
 
   for (const g of groups) {
-    if (g.rows.some((r) => r.mid_MAX_press)) {
+    const publishedRows = g.rows.filter((r) => r.mid_MAX_press);
+    const freshRows = g.rows.filter((r) => !r.mid_MAX_press);
+    if (!freshRows.length) {
       skipped += 1;
-      continue; // уже публиковалась
+      continue; // группа уже опубликована, новых ТН нет
     }
+    // В группу прилетели новые ТН после первой публикации — выходим отдельным
+    // постом-дополнением с пометкой «ДОПОЛНИТЕЛЬНАЯ ИНФОРМАЦИЯ ПО ОТКЛЮЧЕНИЮ».
+    const additional = publishedRows.length > 0;
 
-    const entries = g.rows
+    const entries = freshRows
       .map((r) => {
         const data = r.data && typeof r.data === "object" ? r.data : {};
         return {
@@ -136,8 +142,10 @@ async function runPressPlannedOnce({ reason = "manual", dryRun = false, onlyDist
       })
       .sort((a, b) => a.start - b.start);
 
-    const members = g.rows.map((r) => ({ documentId: r.documentId, guid: r.guid }));
-    const label = `${g.district} (${mskDateKey(entries[0].start)}): ТН=${entries.length}`;
+    const members = freshRows.map((r) => ({ documentId: r.documentId, guid: r.guid }));
+    const label =
+      `${g.district} (${mskDateKey(entries[0].start)}): ТН=${entries.length}` +
+      `${additional ? " [доп]" : ""}`;
 
     if (dryRun) {
       published += 1;
@@ -153,6 +161,7 @@ async function runPressPlannedOnce({ reason = "manual", dryRun = false, onlyDist
         district: g.district,
         entries,
         members,
+        additional,
       });
       if (result.ok) {
         published += 1;

@@ -116,8 +116,9 @@ function buildPressPlannedText(raw = {}) {
 
   const lines = [];
   const titleDate = fmtDayMonthTitle(start);
+  // Заголовок крупно+жирно: MAX рендерит <h1>–<h4> одинаково (docs dev.max.ru).
   lines.push(
-    `<b>В муниципальном округе ${escapeHtml(titleDistrict)}${titleDate ? ` ${titleDate}` : ""} возможны плановые отключения электроэнергии</b>`
+    `<h2>В муниципальном округе ${escapeHtml(titleDistrict)}${titleDate ? ` ${titleDate}` : ""} возможны плановые отключения электроэнергии</h2>`
   );
   lines.push("");
   lines.push(
@@ -126,10 +127,12 @@ function buildPressPlannedText(raw = {}) {
   lines.push("");
 
   const when = fmtWindow(start, end);
+  // Дата и окно — жирным (спека заказчика 11.11.2026).
+  const whenBold = `<b>${fmtDmy(start)}${when ? ` (${when})` : ""}</b>`;
   if (address) {
-    lines.push(`📍 ${fmtDmy(start)}${when ? ` (${when})` : ""} ${escapeHtml(address)}${lastCharIsPunct(address) ? "" : "."} Отключение для безопасного проведения работ.`);
+    lines.push(`📍 ${whenBold} ${escapeHtml(address)}${lastCharIsPunct(address) ? "" : "."} Отключение для безопасного проведения работ.`);
   } else {
-    lines.push(`📍 ${fmtDmy(start)}${when ? ` (${when})` : ""}. Отключение для безопасного проведения работ.`);
+    lines.push(`📍 ${whenBold}. Отключение для безопасного проведения работ.`);
   }
   lines.push("");
   lines.push("Приносим извинения за доставленные неудобства!");
@@ -143,8 +146,11 @@ function buildPressPlannedText(raw = {}) {
 
 // ── Плановые: групповой пост (округ + дата, несколько ТН) ───────────────────
 // Заголовок: first_line_shablon из tn-okruga (индивидуальный на округ) + дата + хвост.
-// Строка: «📍 DD.MM.YYYY (HH:MM – HH:MM) адрес. причина.» — окно и причина свои у каждой ТН.
-function buildPressPlannedGroupText(entries = [], { firstLine, district } = {}) {
+// Строка: «📍 <b>DD.MM.YYYY (HH:MM – HH:MM)</b> адрес.» — окно своё у каждой ТН,
+// причина уходит отдельной жирной строкой внизу (спека заказчика 11.11.2026).
+// additional=true — пост-дополнение (в группу прилетели новые ТН после первой
+// публикации): первой строкой «ДОПОЛНИТЕЛЬНАЯ ИНФОРМАЦИЯ ПО ОТКЛЮЧЕНИЮ».
+function buildPressPlannedGroupText(entries = [], { firstLine, district, additional = false } = {}) {
   const starts = entries
     .map((e) => e.start)
     .filter(Boolean)
@@ -155,8 +161,13 @@ function buildPressPlannedGroupText(entries = [], { firstLine, district } = {}) 
     `В муниципальном образовании ${districtTitle(district) || "—"}`;
 
   const lines = [];
+  if (additional) {
+    lines.push("ДОПОЛНИТЕЛЬНАЯ ИНФОРМАЦИЯ ПО ОТКЛЮЧЕНИЮ");
+    lines.push("");
+  }
+  // Заголовок крупно+жирно: MAX рендерит <h1>–<h4> одинаково (docs dev.max.ru).
   lines.push(
-    `<b>${escapeHtml(head)}${titleDate ? ` ${titleDate}` : ""} возможны плановые отключения электроснабжения</b>`
+    `<h2>${escapeHtml(head)}${titleDate ? ` ${titleDate}` : ""} возможны плановые отключения электроснабжения</h2>`
   );
   lines.push("");
   lines.push(
@@ -167,11 +178,29 @@ function buildPressPlannedGroupText(entries = [], { firstLine, district } = {}) 
   for (const e of entries) {
     const when = fmtWindow(e.start, e.end);
     const address = cleanAddressList(e.address);
-    const reason = String(e.reason || "").trim().replace(/\s+/g, " ");
-    let line = `📍 ${fmtDmy(e.start)}${when ? ` (${when})` : ""}`;
+    // Дата и окно — жирным; адрес обычным.
+    let line = `📍 <b>${fmtDmy(e.start)}${when ? ` (${when})` : ""}</b>`;
     if (address) line += ` ${escapeHtml(address)}${lastCharIsPunct(address) ? "" : "."}`;
-    if (reason) line += ` ${escapeHtml(reason)}${lastCharIsPunct(reason) ? "" : "."}`;
     lines.push(line);
+  }
+
+  // Причина — внизу, отдельной строкой, вся жирная; уникальные через «; ».
+  const reasons = [];
+  const seenReasons = new Set();
+  for (const e of entries) {
+    const r = String(e.reason || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/[.\s]+$/, "");
+    if (!r) continue;
+    const key = r.toLowerCase();
+    if (seenReasons.has(key)) continue;
+    seenReasons.add(key);
+    reasons.push(escapeHtml(r));
+  }
+  if (reasons.length) {
+    lines.push("");
+    lines.push(`<b>Причина планового отключения- ${reasons.join("; ")}.</b>`);
   }
 
   lines.push("");
