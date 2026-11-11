@@ -35,6 +35,85 @@ const EDDS_URL = process.env.EDDS_URL;
 const EDDS_URL_PUT = process.env.EDDS_URL_PUT;
 const EDDS_TOKEN = process.env.EDDS_TOKEN;
 
+// ── Расширенный аудит приёма ТН из МОДУСа (PUT/POST → audit-events) ─────────
+// Тумблер: AUDIT_MODUS_TN_ENABLED=0 выключает ТОЛЬКО эти события (журнал
+// действий продолжает писать остальное). Переключение — в .env + рестарт.
+function modusTnAuditEnabled() {
+  const v = String(process.env.AUDIT_MODUS_TN_ENABLED ?? "1").trim().toLowerCase();
+  return !["0", "off", "false", "no"].includes(v);
+}
+
+const AUDIT_DIFF_MAX_FIELDS = 40;
+const AUDIT_DIFF_VALUE_LEN = 300;
+
+function auditDiffValue(v) {
+  if (v === undefined) return "—";
+  if (v === null) return "null";
+  let s;
+  if (typeof v === "object") {
+    try {
+      s = JSON.stringify(v);
+    } catch {
+      s = String(v);
+    }
+  } else {
+    s = String(v);
+  }
+  return s.length > AUDIT_DIFF_VALUE_LEN ? `${s.slice(0, AUDIT_DIFF_VALUE_LEN)}…` : s;
+}
+
+// [{field, from, to}] — верхнеуровневые поля patch + ключи data-блоба (было/стало).
+function buildAuditChanges({ patch, current, currentAttrs, currentRaw }) {
+  const changes = [];
+  const seen = new Set();
+  const push = (field, from, to) => {
+    if (changes.length >= AUDIT_DIFF_MAX_FIELDS || seen.has(field)) return;
+    seen.add(field);
+    changes.push({ field, from: auditDiffValue(from), to: auditDiffValue(to) });
+  };
+
+  Object.keys(patch || {}).forEach((key) => {
+    if (key === "data") return;
+    const from =
+      currentAttrs && key in currentAttrs ? currentAttrs[key] : current?.[key];
+    push(key, from, patch[key]);
+  });
+
+  if (patch?.data && typeof patch.data === "object") {
+    const before = currentRaw || {};
+    const after = patch.data;
+    const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+    keys.forEach((k) => {
+      const a = before[k];
+      const b = after[k];
+      const eq =
+        (typeof a === "object" && a !== null) || (typeof b === "object" && b !== null)
+          ? JSON.stringify(a) === JSON.stringify(b)
+          : a === b;
+      if (!eq) push(`data.${k}`, a, b);
+    });
+  }
+
+  return changes;
+}
+
+// Одна строка в audit-events на каждый приход МОДУСа (PUT/POST).
+// page "/" | "/planned" — чтобы попадать в разделы «Аварийные/Плановые» /logging.
+function logModusTnAudit({ action, isPlanned, guid, number, statusEvent = "info", details = {} }) {
+  if (!modusTnAuditEnabled()) return;
+  logAuditEvent({
+    username: "МОДУС",
+    role: "system",
+    source: "system",
+    action,
+    page: isPlanned ? "/planned" : "/",
+    entity: "tn",
+    entity_id: String(guid || ""),
+    status_event: statusEvent,
+    details: { number: number ?? "", guid: guid || "", ...details },
+  }).catch(() => {});
+}
+
 function parseJournalData(item) {
   const id = item.id;
   const documentId = item.documentId || item.documentID || item.document_id || null;
@@ -956,6 +1035,18 @@ router.put("/", async (req, res) => {
 
         if (Object.keys(patch).length === 0) {
           islg.skip(islg.start(7, "Запись в Strapi (PUT)"), "Изменений нет");
+          logModusTnAudit({
+            action: "tn_modus_put",
+            isPlanned,
+            guid: mapped.guid,
+            number: mapped.number,
+            details: {
+              status_from: prevStatus,
+              status_to: nextStatus,
+              changes: [],
+              note: "изменений нет",
+            },
+          });
           acc.push({
             success: true,
             index: index + 1,
@@ -974,6 +1065,18 @@ router.put("/", async (req, res) => {
           { headers: { Authorization: `Bearer ${jwt}` } }
         );
         islg.success(st7, `documentId=${documentId}`);
+
+        logModusTnAudit({
+          action: "tn_modus_put",
+          isPlanned,
+          guid: mapped.guid,
+          number: mapped.number,
+          details: {
+            status_from: prevStatus,
+            status_to: nextStatus,
+            changes: buildAuditChanges({ patch, current, currentAttrs, currentRaw }),
+          },
+        });
 
         // Этап 8 — SSE-уведомление
         const st8 = islg.start(8, "SSE-уведомление (tn-upsert)");
@@ -1534,6 +1637,14 @@ router.put("/", async (req, res) => {
           e?.message ||
           "Неизвестная ошибка";
         islg.fail(islg.start(99, "Обработка элемента"), msg);
+        logModusTnAudit({
+          action: "tn_modus_put",
+          isPlanned: parseBaseType(mapped?.BASE_TYPE) === 1,
+          guid: mapped.guid,
+          number: mapped.number,
+          statusEvent: "error",
+          details: { error: msg, changes: [] },
+        });
         acc.push({ success: false, index: index + 1, error: msg });
       }
 
@@ -1651,6 +1762,18 @@ router.post("/", async (req, res) => {
           const createdId = created?.id || created?.documentId;
           const createdAttrs = created?.attributes || {};
           islg.success(st3, `createdId=${createdId}`);
+
+          logModusTnAudit({
+            action: "tn_modus_create",
+            isPlanned: Number(item?.BASE_TYPE ?? item?.data?.BASE_TYPE) === 1,
+            guid: item?.guid || null,
+            number: item?.F81_010_NUMBER ?? "",
+            details: {
+              status_to: String(item?.STATUS_NAME || "").trim(),
+              changes: [],
+              note: "создана",
+            },
+          });
 
           // Этап 4 — Извлечение FIAS
           const st4 = islg.start(4, "Извлечение FIAS из ADDRESS_LIST");

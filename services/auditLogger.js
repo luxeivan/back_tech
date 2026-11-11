@@ -101,6 +101,8 @@ function humanAction(action) {
     autosend_toggle: "Переключил автоотправку аварийных ТН",
     send_edds_auto_ok: "Автоотправка ТН в ЕДДС (POST из МОДУС)",
     send_edds_auto_error: "Ошибка автоотправки ТН в ЕДДС (POST из МОДУС)",
+    tn_modus_put: "Пришёл PUT из МОДУСа",
+    tn_modus_create: "Создана ТН из МОДУСа (POST)",
   };
   return map[action] || action;
 }
@@ -129,6 +131,8 @@ const ALLOWED_ACTIONS = new Set([
   "autosend_toggle",
   "send_edds_auto_ok",
   "send_edds_auto_error",
+  "tn_modus_put",
+  "tn_modus_create",
 ]);
 
 function normalizeAction(action) {
@@ -695,6 +699,13 @@ function rowMatchesTn(row, tnType, tnValue) {
   const detailsText = detailsToString(row?.details_json ?? row?.details ?? "").toLowerCase();
 
   if (tnType === "number") {
+    // Если номер ТН известен (details.number) — сверяем только по нему:
+    // иначе «11» матчится по подстрокам дат/адресов в details.
+    const knownNumber = String(tnDetails(row).number || "").trim().replace(/\s+/g, "");
+    if (knownNumber) {
+      const compactNeedle = needle.replace(/\s+/g, "");
+      return knownNumber.includes(compactNeedle) || entityId === compactNeedle;
+    }
     const compactNeedle = needle.replace(/\s+/g, "");
     const compactDetails = detailsText.replace(/\s+/g, "");
     return (
@@ -707,6 +718,173 @@ function rowMatchesTn(row, tnType, tnValue) {
   }
 
   return entityId.includes(needle) || detailsText.includes(needle);
+}
+
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// documentId Strapi v5: 26 символов [a-z0-9]; НЕ путать с entity_id вида "tn-avtootpravkas".
+const DOC_ID_RE = /^[a-z0-9]{20,35}$/i;
+
+function tnDetails(row) {
+  const parsed = parseDetailsMaybeJson(row?.details_json ?? row?.details ?? "");
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+}
+
+// Кэш documentId → {number, guid, status}: одни и те же ТН фигурируют в десятках событий.
+const tnDocLookupCache = { map: new Map(), expiresAt: 0 };
+
+// Старые события хранят в entity_id documentId Strapi без number/guid в details —
+// без обогащения поиск по номеру/GUID для них не работает, а «старые» ТН в
+// журнале пока единственные. Batch-запрос к teh-narusheniyas по documentId.
+async function enrichTnRowsByDocumentId(rows) {
+  const candidates = new Set();
+  for (const row of rows) {
+    const details = tnDetails(row);
+    if (details.number && details.guid) continue;
+    const eid = String(row?.entity_id || "").trim();
+    if (DOC_ID_RE.test(eid)) candidates.add(eid);
+  }
+  if (!candidates.size) return rows;
+
+  const now = Date.now();
+  if (tnDocLookupCache.expiresAt < now) {
+    tnDocLookupCache.map.clear();
+    tnDocLookupCache.expiresAt = now + 5 * 60 * 1000;
+  }
+
+  const missing = [...candidates].filter((id) => !tnDocLookupCache.map.has(id));
+  if (missing.length) {
+    try {
+      const options = cfg();
+      const token = await getServiceJwt();
+      for (let i = 0; i < missing.length; i += 100) {
+        const chunk = missing.slice(i, i + 100);
+        const params = {
+          "pagination[pageSize]": 100,
+          "fields[0]": "documentId",
+          "fields[1]": "number",
+          "fields[2]": "guid",
+          "fields[3]": "STATUS_NAME",
+        };
+        chunk.forEach((id, idx) => {
+          params[`filters[documentId][$in][${idx}]`] = id;
+        });
+        const resp = await axios.get(`${options.strapiUrl}/api/teh-narusheniyas`, {
+          headers: { Authorization: `Bearer ${token}` },
+          params,
+          timeout: options.queryTimeoutMs,
+        });
+        const found = new Set();
+        for (const item of Array.isArray(resp?.data?.data) ? resp.data.data : []) {
+          const a = item.attributes || item;
+          const docId = String(a.documentId || "").trim();
+          if (!docId) continue;
+          found.add(docId);
+          tnDocLookupCache.map.set(docId, {
+            number: a.number != null ? String(a.number) : "",
+            guid: String(a.guid || "").trim(),
+            status: String(a.STATUS_NAME || "").trim(),
+          });
+        }
+        // documentId не найден (ТН удалена) — кэшируем пусто, чтобы не дёргать снова.
+        chunk.forEach((id) => {
+          if (!tnDocLookupCache.map.has(id)) tnDocLookupCache.map.set(id, null);
+        });
+      }
+    } catch (e) {
+      warnThrottled(
+        `[audit] обогащение ТН по documentId не удалось: ${e?.response?.status || e?.message}`
+      );
+      return rows;
+    }
+  }
+
+  for (const row of rows) {
+    const eid = String(row?.entity_id || "").trim();
+    if (!DOC_ID_RE.test(eid)) continue;
+    const hit = tnDocLookupCache.map.get(eid);
+    if (!hit) continue;
+    const details = { ...tnDetails(row) };
+    let changed = false;
+    if (!details.number && hit.number) {
+      details.number = hit.number;
+      changed = true;
+    }
+    if (!details.guid && hit.guid) {
+      details.guid = hit.guid;
+      changed = true;
+    }
+    if (!details.tn_status && hit.status) {
+      details.tn_status = hit.status;
+      changed = true;
+    }
+    if (changed) {
+      // rowMatchesTn читает details_json в первую очередь — достаточно его.
+      row.details_json = details;
+    }
+  }
+  return rows;
+}
+
+// Ключ группы: guid из details → guid в entity_id → сам entity_id (documentId/номер).
+function tnGroupKey(row) {
+  const details = tnDetails(row);
+  const guidFromDetails = String(details.guid || "").trim();
+  const entityId = String(row?.entity_id || "").trim();
+  if (guidFromDetails) return `guid:${guidFromDetails.toUpperCase()}`;
+  if (GUID_RE.test(entityId)) return `guid:${entityId.toUpperCase()}`;
+  if (entityId) return `id:${entityId}`;
+  return `row:${row?.documentId || row?.id || row?.created_at || Math.random()}`;
+}
+
+// События → строки-группы «одна ТН = одна строка» для /logging (аварийные/плановые).
+// Сортировка групп — по последнему событию (новые сверху); действия внутри — новые сверху.
+function groupTnRows(rows) {
+  const groups = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const key = tnGroupKey(row);
+    let group = groups.get(key);
+    if (!group) {
+      const details = tnDetails(row);
+      const entityId = String(row?.entity_id || "").trim();
+      const numberFromEntity = /^\d+$/.test(entityId) ? entityId : "";
+      group = {
+        tn_key: key,
+        number: String(details.number || numberFromEntity || "").trim(),
+        guid: GUID_RE.test(entityId)
+          ? entityId
+          : String(details.guid || "").trim(),
+        status: "",
+        last_at: null,
+        actions: [],
+      };
+      groups.set(key, group);
+    }
+    group.actions.push(row);
+    if (!group.last_at || String(row?.created_at || "") > String(group.last_at)) {
+      group.last_at = row?.created_at || group.last_at;
+    }
+    // Статус ТН: текущий из Strapi (tn_status, обогащение) важнее исторических
+    // status_to; среди status_to берём самый свежий (строки приходят event_time:desc).
+    const details = tnDetails(row);
+    if (details.tn_status && !group._curStatus) {
+      group.status = String(details.tn_status);
+      group._curStatus = true;
+    } else if (!group._curStatus && details.status_to && !group._eventStatus) {
+      group.status = String(details.status_to);
+      group._eventStatus = true;
+    }
+    if (!group.number && details.number) group.number = String(details.number).trim();
+    if (!group.guid && details.guid) group.guid = String(details.guid).trim();
+  }
+
+  const result = [...groups.values()];
+  for (const g of result) {
+    g.actions.sort((a, b) => String(b?.created_at || "").localeCompare(String(a?.created_at || "")));
+    delete g._curStatus;
+    delete g._eventStatus;
+  }
+  result.sort((a, b) => String(b.last_at || "").localeCompare(String(a.last_at || "")));
+  return result;
 }
 
 async function readAuditEvents({
@@ -724,6 +902,7 @@ async function readAuditEvents({
   tnValue = "",
   branch = "",
   po = "",
+  groupBy = "",
 } = {}) {
   const safePage = Math.min(100000, Math.max(1, Number(page) || 1));
   const safePageSize = Math.min(100, Math.max(1, Number(pageSize || limit) || 200));
@@ -734,6 +913,7 @@ async function readAuditEvents({
   const safeBranch = String(branch || "").trim();
   const safePo = String(po || "").trim();
   const searchNeedle = String(search || "").trim().toLowerCase();
+  const safeGroupBy = String(groupBy || "").trim().toLowerCase() === "tn" ? "tn" : "";
   const hasClientSideFilters = Boolean(
     searchNeedle || String(tnValue || "").trim() || safeBranch || safePo
   );
@@ -791,7 +971,9 @@ async function readAuditEvents({
   let data = [];
   let meta = {};
 
-  if (!hasClientSideFilters) {
+  // Группировка по ТН требует всех записей окна — едем в режиме скана
+  // даже без клиентских фильтров (пагинация потом режет по группам).
+  if (!hasClientSideFilters && !safeGroupBy) {
     const resp = await strapiRequest("get", {
       params: {
         ...baseParams,
@@ -814,9 +996,12 @@ async function readAuditEvents({
   } else {
     const scanPageSize = envInt("AUDIT_FILTER_SCAN_PAGE_SIZE", 100, { min: 10, max: 100 });
     const maxScanPages = envInt("AUDIT_FILTER_SCAN_MAX_PAGES", 500, { min: 1, max: 1000 });
-    const matched = [];
+    let matched = [];
     let scanPage = 1;
     let pageCount = 1;
+    // В grouped-режиме фильтр по ТН (tnValue) откладываем: сначала обогащаем
+    // documentId → number/guid, иначе поиск по номеру старых событий не матчит.
+    const deferTnFilter = Boolean(safeGroupBy);
 
     while (scanPage <= pageCount && scanPage <= maxScanPages) {
       const resp = await strapiRequest("get", {
@@ -828,31 +1013,59 @@ async function readAuditEvents({
         timeoutMs: cfg().queryTimeoutMs,
       });
       const rawRows = Array.isArray(resp?.data?.data) ? resp.data.data : [];
-      matched.push(...rawRows.map(rowToUi).filter(applyUiFilters));
+      const mapped = rawRows.map(rowToUi);
+      matched.push(...(deferTnFilter ? mapped : mapped.filter(applyUiFilters)));
 
       const pagination = resp?.data?.meta?.pagination || {};
       pageCount = Math.max(1, Number(pagination.pageCount || 1));
       scanPage += 1;
     }
 
-    const startIndex = (safePage - 1) * safePageSize;
-    data = matched.slice(startIndex, startIndex + safePageSize);
-    meta = {
-      count: data.length,
-      limit: safePageSize,
-      total: matched.length,
-      page: safePage,
-      pageSize: safePageSize,
-      pageCount: Math.max(1, Math.ceil(matched.length / safePageSize)),
-      partial: scanPage <= pageCount,
-    };
+    if (safeGroupBy) {
+      matched = await enrichTnRowsByDocumentId(matched);
+      matched = matched.filter(applyUiFilters);
+      // Email — до группировки (внутри actions уходят готовые строки).
+      try {
+        const directory = await loadUsersDirectory();
+        matched = attachEmailByUsername(matched, directory);
+      } catch {
+        // Справочник пользователей недоступен — журнал всё равно должен открыться.
+      }
+      const groups = groupTnRows(matched);
+      const startIndex = (safePage - 1) * safePageSize;
+      data = groups.slice(startIndex, startIndex + safePageSize);
+      meta = {
+        count: data.length,
+        limit: safePageSize,
+        total: groups.length,
+        page: safePage,
+        pageSize: safePageSize,
+        pageCount: Math.max(1, Math.ceil(groups.length / safePageSize)),
+        partial: scanPage <= pageCount,
+        grouped: "tn",
+      };
+    } else {
+      const startIndex = (safePage - 1) * safePageSize;
+      data = matched.slice(startIndex, startIndex + safePageSize);
+      meta = {
+        count: data.length,
+        limit: safePageSize,
+        total: matched.length,
+        page: safePage,
+        pageSize: safePageSize,
+        pageCount: Math.max(1, Math.ceil(matched.length / safePageSize)),
+        partial: scanPage <= pageCount,
+      };
+    }
   }
 
-  try {
-    const directory = await loadUsersDirectory();
-    data = attachEmailByUsername(data, directory);
-  } catch {
-    // Если справочник пользователей недоступен, журнал всё равно должен открыться.
+  if (!safeGroupBy) {
+    try {
+      const directory = await loadUsersDirectory();
+      data = attachEmailByUsername(data, directory);
+    } catch {
+      // Если справочник пользователей недоступен, журнал всё равно должен открыться.
+    }
   }
 
   state.lastReadAt = new Date().toISOString();
