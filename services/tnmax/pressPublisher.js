@@ -1,7 +1,10 @@
 // Публикация в MAX-канал press «Мособлэнерго24» (Этап 9 POST МОДУСа).
 // Плановые: текст по живому примеру канала + картинка округа (tn-okruga.img_plan).
-// Внеплановые: текст по шаблону пресс-службы, без картинки.
+// Внеплановые: текст по шаблону пресс-службы; ADDRESS_LIST пустой → не публикуем;
+// картинка — статичный файл из репо assets/ (оригинал: Media Library Strapi /social/avarini).
 // После отправки mid → mid_MAX_press, текст → description_MAX_press (поля Text/long).
+const fs = require("fs");
+const path = require("path");
 const axios = require("axios");
 const { sendToChannel, uploadImage, deleteStoredMids } = require("./tnMaxChannel");
 const {
@@ -9,12 +12,33 @@ const {
   buildPressPlannedGroupText,
   buildPressEmergencyText,
   normalizeDistrictKey,
+  cleanAddressList,
   splitPressText,
 } = require("./pressTextTemplate");
 
 const SEND_PAUSE_MS = 600;
 const RETRY_PAUSE_MS = 1200;
 const MAX_SEND_ATTEMPTS = 3;
+
+// Картинка аварийного поста (одна на все внеплановые). Оригинал живёт в Strapi
+// Media Library /social/avarini; в репо лежит копия — замена = положить файл
+// с тем же именем.
+const EMERGENCY_IMAGE_PATH = path.join(__dirname, "../../assets/press-avariynaya.jpeg");
+let emergencyImageCache = null;
+
+function loadEmergencyImage() {
+  if (emergencyImageCache) return emergencyImageCache;
+  try {
+    emergencyImageCache = {
+      buffer: fs.readFileSync(EMERGENCY_IMAGE_PATH),
+      filename: path.basename(EMERGENCY_IMAGE_PATH),
+    };
+  } catch (e) {
+    console.warn(`[press] картинка аварийного поста не найдена (${EMERGENCY_IMAGE_PATH}):`, e.message);
+    emergencyImageCache = null;
+  }
+  return emergencyImageCache;
+}
 
 async function sendWithRetry(payload, label, sentMids) {
   let result = null;
@@ -134,6 +158,11 @@ async function publishPressPost({ jwt, guid, raw, urlStrapi, midDocId }) {
     return { ok: true, message: `статус «${statusName}» — пропущено` };
   }
 
+  // Внеплановая без адреса (пустой ADDRESS_LIST) — пост не делаем (спека 11.11.2026).
+  if (!isPlanned && !cleanAddressList(raw?.addressList || data.ADDRESS_LIST)) {
+    return { ok: true, message: "ADDRESS_LIST пуст — пост не публикуется" };
+  }
+
   let postText;
   try {
     postText = (isPlanned ? buildPressPlannedText : buildPressEmergencyText)(raw) || "";
@@ -142,7 +171,8 @@ async function publishPressPost({ jwt, guid, raw, urlStrapi, midDocId }) {
   }
   if (!postText.trim()) return { ok: false, message: "пустой текст поста" };
 
-  // Картинка только у плановых; падение картинки не валит пост
+  // Картинка: у плановых — округа (tn-okruga.img_plan), у внеплановых — статичная
+  // из assets/. Падение картинки не валит пост.
   let image = null;
   let imageNote = "";
   if (isPlanned) {
@@ -157,6 +187,9 @@ async function publishPressPost({ jwt, guid, raw, urlStrapi, midDocId }) {
       imageNote = `; картинка НЕ отправлена: ${ie?.response?.status || ie?.message}`;
       console.warn(`[press] ошибка картинки округа (guid=${guid}):`, ie?.response?.status || ie?.message);
     }
+  } else {
+    image = loadEmergencyImage();
+    if (!image) imageNote = "; картинка из assets/ не найдена";
   }
 
   const chunks = splitPressText(postText);

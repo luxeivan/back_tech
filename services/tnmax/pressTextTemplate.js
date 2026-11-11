@@ -302,6 +302,7 @@ module.exports = {
   buildPressEmergencyText,
   normalizeDistrictKey,
   districtTitle,
+  cleanAddressList,
   splitPressText,
   fmtDmy,
   fmtHm,
