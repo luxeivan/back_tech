@@ -468,6 +468,9 @@ function buildAutoDescription(raw = {}, { includeHousesAddresses = true, socialO
     if (fromSocial) blocks.push(fromSocial);
   }
   if (blocks.length) {
+    // UnderV-перечень: пустая строка перед заголовком, чтобы не прилипал
+    // к «Городской округ» (для старых ТН разделения нет — вид не меняем).
+    if (underV) outageLines.push("");
     outageLines.push(blocks.join("\n\n"));
   }
 
