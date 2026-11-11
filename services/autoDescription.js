@@ -109,6 +109,112 @@ function buildSocialObjectsBlocks(arr) {
     .join("\n\n");
 }
 
+// ── UnderV: полное/частичное обесточивание СЗО (новое поле МОДУСа, ~11.2026) ──
+// 0 = отключено полностью (все ввода), 1 = частичное (по одному вводу).
+const UNDERV_FULL_TITLE = "Перечень СЗО отключенных полностью:";
+const UNDERV_PART_TITLE = "Перечень СЗО отключенных по одному вводу:";
+
+function hasUnderVData(arr) {
+  return (Array.isArray(arr) ? arr : []).some(
+    (o) => o && typeof o === "object" && "UnderV" in o
+  );
+}
+
+function isUnderVPartial(obj) {
+  return Boolean(obj && "UnderV" in obj && num(obj.UnderV) === 1);
+}
+
+// «Имя объекта. Адрес: …» (секция ADDRESS_LIST) → «Имя объекта»
+function szoItemBaseName(item) {
+  const t = s(item);
+  const m = t.match(/^(.*?)\.?\s*Адрес\s*:/i);
+  const base = m && m[1] ? m[1] : t;
+  return base.replace(/[.\s]+$/, "").trim();
+}
+
+function normalizeSzoMatchName(name) {
+  return s(name)
+    .toLowerCase()
+    .replace(/["«»'`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// UnderV-пикер для элементов секций ADDRESS_LIST: точное совпадение
+// нормализованного названия со SocialObjects, иначе префикс; одноимённые
+// дубли — по порядку вхождения. Нет данных → 0 (полное отключение).
+function makeUnderVPicker(socialObjects) {
+  const byName = new Map();
+  (Array.isArray(socialObjects) ? socialObjects : []).forEach((o) => {
+    const key = normalizeSzoMatchName(o?.Name);
+    if (!key) return;
+    if (!byName.has(key)) byName.set(key, { values: [], used: 0 });
+    byName.get(key).values.push(isUnderVPartial(o) ? 1 : 0);
+  });
+  return (itemName) => {
+    const key = normalizeSzoMatchName(szoItemBaseName(itemName));
+    if (!key) return 0;
+    let entry = byName.get(key);
+    if (!entry) {
+      for (const [k, v] of byName) {
+        if (k.startsWith(key) || key.startsWith(k)) {
+          entry = v;
+          break;
+        }
+      }
+    }
+    if (!entry) return 0;
+    const val = entry.values[Math.min(entry.used, entry.values.length - 1)];
+    entry.used += 1;
+    return val;
+  };
+}
+
+// Секции ADDRESS_LIST → два перечня с заголовками (пустой перечень опускается).
+function splitSectionsByUnderV(sections, socialObjects) {
+  const pick = makeUnderVPicker(socialObjects);
+  const full = [];
+  const part = [];
+  sections.forEach((sec) => {
+    const fullItems = [];
+    const partItems = [];
+    sec.items.forEach((item) => {
+      (pick(item) === 1 ? partItems : fullItems).push(item);
+    });
+    if (fullItems.length) full.push({ title: sec.title, items: fullItems });
+    if (partItems.length) part.push({ title: sec.title, items: partItems });
+  });
+  const render = (group) =>
+    group.map((sec) => `${sec.title}\n${sec.items.join("\n")}`).join("\n\n");
+  const out = [];
+  const fullText = render(full);
+  const partText = render(part);
+  if (fullText) out.push(`${UNDERV_FULL_TITLE}\n${fullText}`);
+  if (partText) out.push(`${UNDERV_PART_TITLE}\n${partText}`);
+  return out.join("\n\n");
+}
+
+// Фолбэк-путь (в ADDRESS_LIST нет секций): SocialObjects → два перечня.
+function buildSocialObjectsBlocksByUnderV(arr) {
+  const list = Array.isArray(arr) ? arr : [];
+  const render = (subset) => {
+    const buckets = collectSocialNames(subset);
+    return Object.entries(SOCIAL_BLOCK_TITLES)
+      .map(([key, title]) => {
+        const names = buckets[key] || [];
+        return names.length ? `${title}:\n${names.join("\n")}` : null;
+      })
+      .filter(Boolean)
+      .join("\n\n");
+  };
+  const out = [];
+  const fullText = render(list.filter((o) => !isUnderVPartial(o)));
+  const partText = render(list.filter(isUnderVPartial));
+  if (fullText) out.push(`${UNDERV_FULL_TITLE}\n${fullText}`);
+  if (partText) out.push(`${UNDERV_PART_TITLE}\n${partText}`);
+  return out.join("\n\n");
+}
+
 function fmtCountDeclOnly(count, forms) {
   const c = num(count);
   if (!c) return null;
@@ -343,12 +449,22 @@ function buildAutoDescription(raw = {}, { includeHousesAddresses = true, socialO
   if (includeHousesAddresses && streetsOnly) {
     blocks.push(`Адреса отключенных объектов: ${streetsOnly}`);
   }
-  sections.forEach((sec) => {
-    blocks.push(`${sec.title}\n${sec.items.join("\n")}`);
-  });
+  // Новое поле UnderV есть → перечень СЗО делим на «полностью»/«по одному вводу»;
+  // старые ТН без поля живут как раньше.
+  const underV = hasUnderVData(raw.SocialObjects);
+  if (underV && sections.length) {
+    const split = splitSectionsByUnderV(sections, raw.SocialObjects);
+    if (split) blocks.push(split);
+  } else {
+    sections.forEach((sec) => {
+      blocks.push(`${sec.title}\n${sec.items.join("\n")}`);
+    });
+  }
   // Фолбэк: в ADDRESS_LIST нет секций СЗО (тестовые пейлоады) — берём из SocialObjects
   if (socialObjectsBlocks && !sections.length) {
-    const fromSocial = buildSocialObjectsBlocks(raw.SocialObjects);
+    const fromSocial = underV
+      ? buildSocialObjectsBlocksByUnderV(raw.SocialObjects)
+      : buildSocialObjectsBlocks(raw.SocialObjects);
     if (fromSocial) blocks.push(fromSocial);
   }
   if (blocks.length) {
