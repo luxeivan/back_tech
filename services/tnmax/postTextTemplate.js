@@ -125,7 +125,7 @@ function buildMaxPostText(raw = {}, { sequenceNumber, incident } = {}) {
     .filter(Boolean)
     .join(" ");
 
-  const body = buildAutoDescription(raw, {
+  const plain = buildAutoDescription(raw, {
     includeHousesAddresses: false,
     socialObjectsBlocks: true,
   })
@@ -135,12 +135,16 @@ function buildMaxPostText(raw = {}, { sequenceNumber, incident } = {}) {
     .replace(
       /^(СЗО полностью:.*)$/m,
       `$1\nСЗО по одному вводу: ${buildSzoSummaryNew(raw).sectStr}`
-    )
-    // Пустая строка перед первым блоком СЗО — как в макете заказчика
-    .replace(
-      /(^|\n)(?!\n)(Поликлиники|Больницы|Школы|Детские сады|Котельные|ЦТП|КНС|ВЗУ|ВНС|СНТ):/m,
-      "$1\n$2:"
     );
+  // Пустая строка перед первым блоком СЗО — как в макете заказчика;
+  // при заголовках «Перечень СЗО…» (UnderV) пустая строка уже стоит перед
+  // самим заголовком, второй отступ после него не нужен (юзер 2026-11-12).
+  const body = plain.includes("Перечень СЗО")
+    ? plain
+    : plain.replace(
+        /(^|\n)(?!\n)(Поликлиники|Больницы|Школы|Детские сады|Котельные|ЦТП|КНС|ВЗУ|ВНС|СНТ):/m,
+        "$1\n$2:"
+      );
 
   return [headerLine, body].filter(Boolean).join("\n\n");
 }
