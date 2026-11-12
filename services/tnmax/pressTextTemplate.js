@@ -200,7 +200,7 @@ function buildPressPlannedGroupText(entries = [], { firstLine, district, additio
   }
   if (reasons.length) {
     lines.push("");
-    lines.push(`<b>Причина планового отключения- ${reasons.join("; ")}.</b>`);
+    lines.push(`<b>Причина планового отключения - ${reasons.join("; ")}.</b>`);
   }
 
   lines.push("");
