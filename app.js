@@ -28,6 +28,7 @@ const {
 const {
   startPressPlannedScheduler,
 } = require("./services/tnmax/pressPlannedScheduler");
+const { startPressBotPolling } = require("./services/tnmax/pressBot");
 
 const webhooks = require("./routers/webhooks");
 const { sseHandler, broadcast } = require("./services/sse");
@@ -94,6 +95,7 @@ app.listen(port, () => {
   startOperationalDashboardStatsScheduler();
   startFilialResourcesScheduler();
   startPressPlannedScheduler();
+  startPressBotPolling();
 });
 
 //ПРОВЕРКА123
