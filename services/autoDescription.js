@@ -395,7 +395,10 @@ function stripHousesAndSzo(addressList) {
     .join("; ");
 }
 
-function buildAutoDescription(raw = {}, { includeHousesAddresses = true, socialObjectsBlocks = false } = {}) {
+function buildAutoDescription(
+  raw = {},
+  { includeHousesAddresses = true, socialObjectsBlocks = false, underVSplit = false } = {}
+) {
   const sc = s(raw.SC_PO);
   const when = formatDateTimeNew(raw.F81_060_EVENTDATETIME);
   const ownSc = s(raw.SC_FILIAL);
@@ -449,9 +452,9 @@ function buildAutoDescription(raw = {}, { includeHousesAddresses = true, socialO
   if (includeHousesAddresses && streetsOnly) {
     blocks.push(`Адреса отключенных объектов: ${streetsOnly}`);
   }
-  // Новое поле UnderV есть → перечень СЗО делим на «полностью»/«по одному вводу»;
-  // старые ТН без поля живут как раньше.
-  const underV = hasUnderVData(raw.SocialObjects);
+  // UnderV-деление перечня («полностью»/«по одному вводу») — только MAX-пост:
+  // описание ЕДДС/модалка остаются в прежнем виде (зеркало фронта).
+  const underV = underVSplit && hasUnderVData(raw.SocialObjects);
   if (underV && sections.length) {
     const split = splitSectionsByUnderV(sections, raw.SocialObjects);
     if (split) blocks.push(split);

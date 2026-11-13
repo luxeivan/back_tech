@@ -128,6 +128,7 @@ function buildMaxPostText(raw = {}, { sequenceNumber, incident } = {}) {
   const plain = buildAutoDescription(raw, {
     includeHousesAddresses: false,
     socialObjectsBlocks: true,
+    underVSplit: true,
   })
     .replace(/^АО «Мособлэнерго»\s*/, "")
     // Строка «СЗО по одному вводу: …» — после «СЗО полностью», всегда (даже 0),
