@@ -2,7 +2,7 @@
 // (накопление ✓ + подтверждение) и хранение в Strapi tn-podpischiki-maxes.
 const axios = require("axios");
 const { getJwt } = require("../modus/strapi");
-const { getDistricts, subscribe, unsubscribe } = require("./pressSubsStore");
+const { getDistricts, subscribe, unsubscribe, touchSubscriber } = require("./pressSubsStore");
 
 const PAGE_SIZE = 10; // округов на странице (в столбик)
 const TTL_MS = 10 * 60 * 1000; // время жизни кэша списка округов
@@ -54,12 +54,32 @@ const GREETING_KEYBOARD = keyboard([
   [button("Мои подписки", "my")],
 ]);
 
-// user_id из callback-update.
+// user_id из update (callback, приветствие, сообщение).
 function cbUserId(update) {
   const cb = update?.callback || {};
-  const u = cb.sender || cb.user || update?.user || update?.sender || null;
+  const u = cb.sender || cb.user || update?.user || update?.sender || update?.message?.sender || null;
   const id = Number(cb.user_id || update?.user_id || u?.user_id);
   return Number.isFinite(id) && id > 0 ? id : null;
+}
+
+// chat_id диалога из update — для записи max_chat_id подписчика.
+function dialogChatId(update) {
+  const chatId = Number(
+    update?.chat_id ||
+      update?.callback?.message?.recipient?.chat_id ||
+      update?.message?.recipient?.chat_id
+  );
+  return Number.isFinite(chatId) && chatId > 0 ? chatId : null;
+}
+
+// Фоном запоминает chat_id юзера в записи подписчика (если она есть).
+function rememberChat(update) {
+  const chatId = dialogChatId(update);
+  const userId = cbUserId(update);
+  if (!chatId || !userId) return;
+  touchSubscriber(userId, chatId).catch((e) =>
+    log("touchSubscriber: ошибка", e?.message || e)
+  );
 }
 
 // Профиль юзера из callback — для записи подписки в Strapi.
@@ -191,6 +211,7 @@ async function sendGreeting(update) {
   if (!target) return log("приветствие: нет target", update?.update_type || "");
   await sendMessage(target, GREETING, GREETING_KEYBOARD);
   log("приветствие отправлено", target);
+  rememberChat(update);
 }
 
 // Данные пользователя и клика по округу для лога (база будущих подписок в Strapi).
@@ -225,6 +246,7 @@ async function confirmSubscription(update, userId, callbackId) {
   const profile = cbProfile(update);
   await subscribe({ ...profile, districtIds: ids });
   log("подписка сохранена", { ...profile, districts: [...st.sel] });
+  rememberChat(update);
   st.sel.clear();
   const msg = await mySubsMessage(userId);
   await answerCallback(callbackId, { ...msg, notification: "Подписка оформлена" });
@@ -354,4 +376,10 @@ async function startPressBotPolling() {
   pollLoop();
 }
 
-module.exports = { startPressBotPolling, fetchDistricts, buildDistrictsMessage, processUpdate };
+module.exports = {
+  startPressBotPolling,
+  fetchDistricts,
+  buildDistrictsMessage,
+  processUpdate,
+  sendMessage,
+};

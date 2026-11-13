@@ -76,4 +76,42 @@ async function unsubscribe({ maxUserId, districtIds }) {
   return { updated: true };
 }
 
-module.exports = { getDistricts, subscribe, unsubscribe };
+// Все подписчики с их округами — для оповещений (до 100 записей).
+async function getAllSubscribers() {
+  const url =
+    `${process.env.URL_STRAPI}/api/${COLLECTION}` +
+    `?pagination[pageSize]=100` +
+    `&fields[0]=max_user_id&fields[1]=max_chat_id&fields[2]=is_active` +
+    `&populate[tn_okrugas][fields][0]=name`;
+  const data = await req("get", url);
+  return (data?.data || []).map((row) => {
+    const rel = row.tn_okrugas;
+    const list = Array.isArray(rel) ? rel : Array.isArray(rel?.data) ? rel.data : [];
+    return {
+      maxUserId: row.max_user_id,
+      maxChatId: row.max_chat_id,
+      isActive: row.is_active !== false,
+      districts: list.map((r) => r?.name).filter(Boolean),
+    };
+  });
+}
+
+// Запоминает chat_id и время взаимодействия, если запись подписчика уже есть.
+async function touchSubscriber(maxUserId, chatId) {
+  const id = Number(maxUserId);
+  const chat = Number(chatId);
+  if (!Number.isFinite(id) || id <= 0 || !Number.isFinite(chat) || chat <= 0) {
+    return { updated: false };
+  }
+  const base = `${process.env.URL_STRAPI}/api/${COLLECTION}`;
+  const url = `${base}?filters[max_user_id][$eq]=${id}&pagination[pageSize]=1&fields[0]=documentId`;
+  const data = await req("get", url);
+  const row = data?.data?.[0];
+  if (!row) return { updated: false };
+  await req("put", `${base}/${row.documentId}`, {
+    data: { max_chat_id: chat, last_interaction_at: new Date().toISOString() },
+  });
+  return { updated: true };
+}
+
+module.exports = { getDistricts, subscribe, unsubscribe, getAllSubscribers, touchSubscriber };

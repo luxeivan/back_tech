@@ -20,6 +20,7 @@ const { getAutoSendState } = require("../services/modus/autoSend");
 const { deleteStoredMids } = require("../services/tnmax/tnMaxChannel");
 const { publishTnPost, publishClosePost } = require("../services/tnmax/postPublisher");
 const { publishPressPost, deletePressPost } = require("../services/tnmax/pressPublisher");
+const { notifyDistrict } = require("../services/tnmax/pressNotifier");
 const {
   schedulePressPlannedRun,
   isPressPlannedDue,
@@ -1919,11 +1920,12 @@ router.post("/", async (req, res) => {
                 schedulePressPlannedRun("late-planned-tn");
               }
             } else {
+              const pressRaw = { ...(item?.data || {}), ...item };
               try {
                 const result = await publishPressPost({
                   jwt,
                   guid,
-                  raw: { ...(item?.data || {}), ...item },
+                  raw: pressRaw,
                   urlStrapi,
                   midDocId: created?.documentId || createdId,
                 });
@@ -1932,6 +1934,10 @@ router.post("/", async (req, res) => {
               } catch (pe) {
                 islg.fail(st9, pe?.message || String(pe));
               }
+              // Оповещение подписчиков округа; ошибки не валят этап (notifyDistrict не бросает)
+              notifyDistrict(pressRaw.DISTRICT, "emergency").catch((ne) =>
+                console.warn("[press-bot] оповещение не отправлено:", ne?.message || ne)
+              );
             }
           }
 

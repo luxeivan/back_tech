@@ -10,6 +10,7 @@ require("dotenv").config();
 const { getJwt } = require("../modus/strapi");
 const { publishPressGroupPost } = require("./pressPublisher");
 const { normalizeDistrictKey } = require("./pressTextTemplate");
+const { notifyDistrict } = require("./pressNotifier");
 
 const RUN_AT_H_MSK = 7; // 07:30 МСК; в коде ниже сдвиг на +3h в UTC-поля,
 const RUN_AT_M_MSK = 30; // вычитание 3h возвращает реальный момент
@@ -167,6 +168,8 @@ async function runPressPlannedOnce({ reason = "manual", dryRun = false, onlyDist
         published += 1;
         console.log(`[press-planned] ✓ ${label}: ${result.message}`);
         notes.push(`ok: ${label}`);
+        // Оповещение подписчиков округа (notifyDistrict своих ошибок не отдаёт)
+        notifyDistrict(g.district, "planned").catch(() => {});
       } else {
         failed += 1;
         console.warn(`[press-planned] ✗ ${label}: ${result.message}`);
