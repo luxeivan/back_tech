@@ -2,7 +2,7 @@
 // (накопление ✓ + подтверждение) и хранение в Strapi tn-podpischiki-maxes.
 const axios = require("axios");
 const { getJwt } = require("../modus/strapi");
-const { getDistricts, subscribe } = require("./pressSubsStore");
+const { getDistricts, subscribe, unsubscribe } = require("./pressSubsStore");
 
 const PAGE_SIZE = 10; // округов на странице (в столбик)
 const TTL_MS = 10 * 60 * 1000; // время жизни кэша списка округов
@@ -230,7 +230,22 @@ async function confirmSubscription(update, userId, callbackId) {
   await answerCallback(callbackId, { ...msg, notification: "Подписка оформлена" });
 }
 
-// Кнопки меню: листание, выбор ✓, подтверждение, мой список, заглушки.
+// Отписка от одного округа: disconnect в Strapi + перерисовка «Мои подписки».
+async function unsubscribeDistrict(update, userId, callbackId, districtName) {
+  const all = await fetchDistricts();
+  const id = all.find((d) => d.name === districtName)?.id;
+  if (!Number.isFinite(Number(id))) {
+    await answerCallback(callbackId, { notification: "Округ не найден" });
+    return;
+  }
+  const profile = cbProfile(update);
+  await unsubscribe({ ...profile, districtIds: [id] });
+  log("отписка сохранена", { ...profile, district: districtName });
+  const msg = await mySubsMessage(userId);
+  await answerCallback(callbackId, { ...msg, notification: `Отписка от «${districtName}»` });
+}
+
+// Кнопки меню: листание, выбор ✓, подтверждение, мой список, отписка.
 async function handleCallback(update) {
   const callbackId = String(update?.callback?.callback_id || update?.callback?.id || "").trim();
   if (!callbackId) return;
@@ -262,7 +277,7 @@ async function handleCallback(update) {
     } else if (action === "home") {
       await answerCallback(callbackId, { text: GREETING, attachments: GREETING_KEYBOARD });
     } else if (action === "unsub") {
-      await answerCallback(callbackId, { notification: "Отписка — скоро" }); // фаза 2
+      await unsubscribeDistrict(update, userId, callbackId, value);
     } else {
       await answerCallback(callbackId, { notification: "Неизвестная команда" });
     }

@@ -61,4 +61,19 @@ async function subscribe({ maxUserId, username, firstName, lastName, districtIds
   return { created: true };
 }
 
-module.exports = { getDistricts, subscribe };
+// Отписывает юзера от округов: disconnect из tn_okrugas (запись юзера остаётся).
+async function unsubscribe({ maxUserId, districtIds }) {
+  const base = `${process.env.URL_STRAPI}/api/${COLLECTION}`;
+  const url =
+    `${base}?filters[max_user_id][$eq]=${Number(maxUserId)}` +
+    `&pagination[pageSize]=1&fields[0]=documentId`;
+  const data = await req("get", url);
+  const row = data?.data?.[0];
+  if (!row) return { updated: false };
+  await req("put", `${base}/${row.documentId}`, {
+    data: { tn_okrugas: { disconnect: districtIds } },
+  });
+  return { updated: true };
+}
+
+module.exports = { getDistricts, subscribe, unsubscribe };
