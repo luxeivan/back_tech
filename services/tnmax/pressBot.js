@@ -7,6 +7,12 @@ const { getDistricts, subscribe, unsubscribe, touchSubscriber } = require("./pre
 const PAGE_SIZE = 10; // округов на странице (в столбик)
 const TTL_MS = 10 * 60 * 1000; // время жизни кэша списка округов
 let cache = { at: 0, rows: null };
+
+// Округа, схлопнутые в одну кнопку: отображаемое имя → имена записей tn-okruga
+// (подписка ставится на все id группы разом, чтобы оповещения совпадали с любым вариантом имени).
+const MERGED_DISTRICTS = {
+  "Орехово-Зуевский": ["Орехово-Зуевский", "Орехово-Зуевский г.о", "Орехово-Зуево"],
+};
 let polling = false;
 let marker = null;
 const state = new Map(); // user_id → {page, sel:Set} — выбор в памяти процесса
@@ -100,7 +106,7 @@ function userState(userId) {
   return state.get(userId);
 }
 
-// Активные округа из Strapi (id+имя) с кэшем на 10 минут.
+// Активные округа из Strapi (id+имя) с кэшем на 10 минут; группы MERGED_DISTRICTS схлопнуты в одну строку.
 async function fetchDistricts() {
   if (cache.rows && Date.now() - cache.at < TTL_MS) return cache.rows;
   const jwt = await getJwt();
@@ -115,13 +121,42 @@ async function fetchDistricts() {
     },
     timeout: 15000,
   });
-  const rows = (data?.data || [])
+  const active = (data?.data || [])
     .filter((r) => r?.name && r.is_active !== false)
-    .map((r) => ({ id: r.id, name: String(r.name).trim() }))
-    .sort((a, b) => a.name.localeCompare(b.name, "ru"));
+    .map((r) => ({ id: r.id, name: String(r.name).trim() }));
+
+  const rows = [];
+  const consumed = new Set();
+  for (const [display, members] of Object.entries(MERGED_DISTRICTS)) {
+    const hits = active.filter((r) => members.includes(r.name));
+    if (!hits.length) continue;
+    // members — только активные (по ним считается «уже подписаны»); неактивные имена
+    // входят в MERGED_DISTRICTS лишь для displayNameFor.
+    rows.push({ name: display, ids: hits.map((r) => r.id), members: hits.map((r) => r.name) });
+    hits.forEach((r) => consumed.add(r.name));
+  }
+  for (const r of active) {
+    if (consumed.has(r.name)) continue;
+    rows.push({ name: r.name, ids: [r.id], members: [r.name] });
+  }
+  rows.sort((a, b) => a.name.localeCompare(b.name, "ru"));
+
   cache = { at: Date.now(), rows };
   log(`округа загружены: ${rows.length}`);
   return rows;
+}
+
+// Имя кнопки для имени записи tn-okruga (обратный маппинг MERGED_DISTRICTS).
+function displayNameFor(memberName) {
+  for (const [display, members] of Object.entries(MERGED_DISTRICTS)) {
+    if (members.includes(memberName)) return display;
+  }
+  return memberName;
+}
+
+// Подписан ли юзер на строку списка полностью (для группы — на все её члены).
+function isRowSubscribed(row, subscribed) {
+  return row.members.every((m) => subscribed.includes(m));
 }
 
 // Страница списка округов: ✓ — в выборе, ✅ — уже подписан; навигация и кнопки действий.
@@ -134,8 +169,9 @@ async function buildDistrictsMessage(pageIndex, userId) {
   const subscribed = await getDistricts(userId);
   const slice = all.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
-  const rows = slice.map(({ name }) => {
-    const mark = subscribed.includes(name) ? "✅ " : st.sel.has(name) ? "✓ " : "";
+  const rows = slice.map(({ name, ids, members }) => {
+    const row = { name, ids, members };
+    const mark = isRowSubscribed(row, subscribed) ? "✅ " : st.sel.has(name) ? "✓ " : "";
     return [button(mark + name, "pick", name)];
   });
 
@@ -152,9 +188,9 @@ async function buildDistrictsMessage(pageIndex, userId) {
   };
 }
 
-// Экран «Мои подписки»: текущие подписки кликабельны (отписка — фаза 2).
+// Экран «Мои подписки»: члены MERGED_DISTRICTS схлопнуты в одну строку; отписка — по имени кнопки.
 async function mySubsMessage(userId) {
-  const districts = await getDistricts(userId);
+  const districts = [...new Set((await getDistricts(userId)).map(displayNameFor))];
   const text = districts.length
     ? `Ваши подписки:\n${districts.map((d) => `• ${d}`).join("\n")}`
     : "У вас пока нет подписок.";
@@ -241,7 +277,7 @@ async function confirmSubscription(update, userId, callbackId) {
   }
   const all = await fetchDistricts();
   const ids = [...st.sel]
-    .map((name) => all.find((d) => d.name === name)?.id)
+    .flatMap((name) => all.find((d) => d.name === name)?.ids || [])
     .filter((id) => Number.isFinite(Number(id)));
   const profile = cbProfile(update);
   await subscribe({ ...profile, districtIds: ids });
@@ -252,16 +288,18 @@ async function confirmSubscription(update, userId, callbackId) {
   await answerCallback(callbackId, { ...msg, notification: "Подписка оформлена" });
 }
 
-// Отписка от одного округа: disconnect в Strapi + перерисовка «Мои подписки».
+// Отписка от одного округа (для группы — disconnect всех её id) + перерисовка «Мои подписки».
 async function unsubscribeDistrict(update, userId, callbackId, districtName) {
   const all = await fetchDistricts();
-  const id = all.find((d) => d.name === districtName)?.id;
-  if (!Number.isFinite(Number(id))) {
+  const ids = (all.find((d) => d.name === districtName)?.ids || []).filter((id) =>
+    Number.isFinite(Number(id))
+  );
+  if (!ids.length) {
     await answerCallback(callbackId, { notification: "Округ не найден" });
     return;
   }
   const profile = cbProfile(update);
-  await unsubscribe({ ...profile, districtIds: [id] });
+  await unsubscribe({ ...profile, districtIds: ids });
   log("отписка сохранена", { ...profile, district: districtName });
   const msg = await mySubsMessage(userId);
   await answerCallback(callbackId, { ...msg, notification: `Отписка от «${districtName}»` });
@@ -279,7 +317,11 @@ async function handleCallback(update) {
       await answerCallback(callbackId, await buildDistrictsMessage(page, userId));
     } else if (action === "pick") {
       const subscribed = await getDistricts(userId);
-      if (subscribed.includes(value)) {
+      const row = (await fetchDistricts()).find((d) => d.name === value);
+      const fullySubscribed = row
+        ? isRowSubscribed(row, subscribed)
+        : subscribed.includes(value);
+      if (fullySubscribed) {
         await answerCallback(callbackId, { notification: "Вы уже подписаны" });
       } else {
         const st = userState(userId);
