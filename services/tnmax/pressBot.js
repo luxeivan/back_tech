@@ -351,13 +351,15 @@ async function handleCallback(update) {
   }
 }
 
-// Диспетчер update: старт/«начать» → приветствие, callback → меню.
+// Диспетчер update: старт/«начать» → приветствие, callback → меню, прочие тексты → лог.
 async function processUpdate(update) {
   const type = String(update?.update_type || "").toLowerCase();
   if (type === "bot_started") return sendGreeting(update);
   if (type === "message_created") {
     const text = String(update?.message?.body?.text || "").trim().toLowerCase();
-    if (["начать", "/start", "старт"].includes(text)) await sendGreeting(update);
+    if (["начать", "/start", "старт"].includes(text)) return sendGreeting(update);
+    const raw = String(update?.message?.body?.text || "");
+    if (raw.trim()) log(`сообщение от ${cbUserId(update) || "?"}:`, raw);
     return;
   }
   if (type === "message_callback") await handleCallback(update);
