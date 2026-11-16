@@ -61,17 +61,26 @@ async function subscribe({ maxUserId, username, firstName, lastName, districtIds
   return { created: true };
 }
 
-// Отписывает юзера от округов: disconnect из tn_okrugas (запись юзера остаётся).
+// Отписывает юзера от округов: полная замена массива (запись юзера остаётся).
+// Ловушка Strapi: {disconnect:[...]} отдаёт 200 и обновляет updatedAt, но ссылки НЕ удаляет
+// (проверено живьём 16.11) — читаем текущие id и пишем массив без отписываемых.
 async function unsubscribe({ maxUserId, districtIds }) {
   const base = `${process.env.URL_STRAPI}/api/${COLLECTION}`;
   const url =
     `${base}?filters[max_user_id][$eq]=${Number(maxUserId)}` +
-    `&pagination[pageSize]=1&fields[0]=documentId`;
+    `&pagination[pageSize]=1&fields[0]=documentId` +
+    `&populate[tn_okrugas][fields][0]=name`;
   const data = await req("get", url);
   const row = data?.data?.[0];
   if (!row) return { updated: false };
+  const rel = row.tn_okrugas;
+  const list = Array.isArray(rel) ? rel : Array.isArray(rel?.data) ? rel.data : [];
+  const remove = new Set((districtIds || []).map(Number));
+  const next = list
+    .map((r) => Number(r?.id))
+    .filter((id) => Number.isFinite(id) && id > 0 && !remove.has(id));
   await req("put", `${base}/${row.documentId}`, {
-    data: { tn_okrugas: { disconnect: districtIds } },
+    data: { tn_okrugas: next },
   });
   return { updated: true };
 }
