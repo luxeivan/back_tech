@@ -56,7 +56,7 @@ const decode = (raw) => {
 
 // Два экрана приветствия: выбор подписок и мой список.
 const GREETING_KEYBOARD = keyboard([
-  [button("Выбрать подписку", "subs")],
+  [button("Добавить округа", "subs")],
   [button("Мои подписки", "my")],
 ]);
 
@@ -183,7 +183,7 @@ async function buildDistrictsMessage(pageIndex, userId) {
   rows.push([button(`Подтвердить (${st.sel.size})`, "confirm"), button("Очистить", "clear")]);
 
   return {
-    text: `Выберите округа для подписки (всего ${all.length}):`,
+    text: "Выберите округа, по которым хотите получать уведомления",
     attachments: keyboard(rows),
   };
 }
@@ -192,10 +192,10 @@ async function buildDistrictsMessage(pageIndex, userId) {
 async function mySubsMessage(userId) {
   const districts = [...new Set((await getDistricts(userId)).map(displayNameFor))];
   const text = districts.length
-    ? `Ваши подписки:\n${districts.map((d) => `• ${d}`).join("\n")}`
+    ? `Вы подписаны на уведомления по округам:\n${districts.map((d) => `• ${d}`).join("\n")}`
     : "У вас пока нет подписок.";
-  const rows = districts.map((d) => [button(`✅ ${d}`, "unsub", d)]);
-  rows.push([button("Выбрать подписку", "subs")]);
+  const rows = districts.map((d) => [button(`❌ Отписаться от ${d}`, "unsub", d)]);
+  rows.push([button("Добавить округа", "subs")]);
   rows.push([button("В приветствие", "home")]);
   return { text, attachments: keyboard(rows) };
 }
@@ -241,7 +241,7 @@ async function answerCallback(callbackId, { text, attachments, notification } = 
   });
 }
 
-// Приветствие с кнопками «Выбрать подписку» и «Мои подписки».
+// Приветствие с кнопками «Добавить округа» и «Мои подписки».
 async function sendGreeting(update) {
   const target = replyTarget(update);
   if (!target) return log("приветствие: нет target", update?.update_type || "");
@@ -408,8 +408,11 @@ async function pollLoop() {
   }
 }
 
-// Точка входа из app.js: включается только при заданном токене.
+// Точка входа из app.js: включается при заданном токене И флаге локального запуска.
 async function startPressBotPolling() {
+  if (String(process.env.PRESS_MAX_BOT_ENABLED_LOCAL).toLowerCase() !== "true") {
+    return log("отключен (PRESS_MAX_BOT_ENABLED_LOCAL != true)");
+  }
   if (!token()) return log("отключен (нет TN_MAX_BOT_PRESS)");
   if (polling) return;
   polling = true;
