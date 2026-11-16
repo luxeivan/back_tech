@@ -20,7 +20,7 @@ const { getAutoSendState } = require("../services/modus/autoSend");
 const { deleteStoredMids } = require("../services/tnmax/tnMaxChannel");
 const { publishTnPost, publishClosePost } = require("../services/tnmax/postPublisher");
 const { publishPressPost, deletePressPost } = require("../services/tnmax/pressPublisher");
-const { notifyDistrict } = require("../services/tnmax/pressNotifier");
+const { notifyDistrict, appendPressBotMids } = require("../services/tnmax/pressNotifier");
 const {
   schedulePressPlannedRun,
   isPressPlannedDue,
@@ -1171,6 +1171,50 @@ router.put("/", async (req, res) => {
           }
         }
 
+        // Этап 8.7 — Гашение оповещений бота press в ЛС подписчиков
+        // (внеплановая: статус финальный; условие то же, что у 8.6).
+        // mid'ы в поле mid_press_bot; тихо, если оповещения не шлались.
+        {
+          const storedBotMid =
+            currentAttrs?.mid_press_bot || found?.mid_press_bot || null;
+          const botFinal = nextBaseType === 0 && isFinalStatus(nextStatus);
+          if (botFinal && storedBotMid) {
+            const st87 = islg.start(8.7, "Гашение оповещений бота press (ЛС)");
+            try {
+              const { deleted, failed } = await deleteStoredMids(storedBotMid, "press");
+              const remaining = failed.map((f) => f.mid).join(",") || null;
+              let putOk = true;
+              try {
+                await axios.put(
+                  `${urlStrapi}/api/teh-narusheniyas/${documentId}`,
+                  { data: { mid_press_bot: remaining } },
+                  { headers: { Authorization: `Bearer ${jwt}` }, timeout: 15000 }
+                );
+              } catch (ce) {
+                putOk = false;
+                islg.fail(
+                  st87,
+                  `удалено ${deleted.length}, но поле не очищено: ${ce?.response?.status || ce?.message}`
+                );
+              }
+              if (putOk) {
+                if (failed.length) {
+                  islg.fail(
+                    st87,
+                    `удалено ${deleted.length}/${deleted.length + failed.length}, не удалены: ${failed
+                      .map((f) => f.mid)
+                      .join(",")}`
+                  );
+                } else {
+                  islg.success(st87, `удалено оповещений: ${deleted.length}`);
+                }
+              }
+            } catch (de) {
+              islg.fail(st87, de?.response?.data?.message || de?.message);
+            }
+          }
+        }
+
         if (needEdds) {
           // Этап 9 — Отправка в ЕДДС (авария, BASE_TYPE=0)
           const st9 = islg.start(9, "Отправка в ЕДДС v1 (авария, через /services/edds)");
@@ -1934,10 +1978,36 @@ router.post("/", async (req, res) => {
               } catch (pe) {
                 islg.fail(st9, pe?.message || String(pe));
               }
-              // Оповещение подписчиков округа; ошибки не валят этап (notifyDistrict не бросает)
-              notifyDistrict(pressRaw.DISTRICT, "emergency").catch((ne) =>
-                console.warn("[press-bot] оповещение не отправлено:", ne?.message || ne)
-              );
+              // Оповещение подписчикам бота — только пока ТН открыта (спека 16.11.2026);
+              // ошибки не валят этап (notifyDistrict не бросает). mid → поле mid_press_bot.
+              const notifyStatus = String(
+                item?.STATUS_NAME || pressRaw.STATUS_NAME || ""
+              )
+                .trim()
+                .toLowerCase();
+              if (isFinalStatus(notifyStatus)) {
+                console.log(
+                  "[press-bot] оповещение пропущено: ТН пришла с финальным статусом"
+                );
+              } else {
+                try {
+                  const notif = await notifyDistrict(
+                    pressRaw.DISTRICT,
+                    "emergency",
+                    pressRaw
+                  );
+                  if (notif?.mids?.length) {
+                    await appendPressBotMids({
+                      jwt,
+                      urlStrapi,
+                      documentId: created?.documentId || createdId,
+                      mids: notif.mids,
+                    });
+                  }
+                } catch (ne) {
+                  console.warn("[press-bot] оповещение не отправлено:", ne?.message || ne);
+                }
+              }
             }
           }
 
