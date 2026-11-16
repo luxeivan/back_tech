@@ -123,4 +123,30 @@ async function touchSubscriber(maxUserId, chatId) {
   return { updated: true };
 }
 
-module.exports = { getDistricts, subscribe, unsubscribe, getAllSubscribers, touchSubscriber };
+// Дописывает запись в history JSON подписчика (нет записи — no-op), хранит последние 200.
+async function appendHistory(maxUserId, entry) {
+  const id = Number(maxUserId);
+  if (!Number.isFinite(id) || id <= 0 || !entry) return { saved: false };
+  const base = `${process.env.URL_STRAPI}/api/${COLLECTION}`;
+  const url =
+    `${base}?filters[max_user_id][$eq]=${id}` +
+    `&pagination[pageSize]=1&fields[0]=documentId&fields[1]=history`;
+  const data = await req("get", url);
+  const row = data?.data?.[0];
+  if (!row) return { saved: false };
+  const hist = Array.isArray(row.history) ? row.history : [];
+  hist.push({ at: new Date().toISOString(), ...entry });
+  await req("put", `${base}/${row.documentId}`, {
+    data: { history: hist.slice(-200) },
+  });
+  return { saved: true };
+}
+
+module.exports = {
+  getDistricts,
+  subscribe,
+  unsubscribe,
+  getAllSubscribers,
+  touchSubscriber,
+  appendHistory,
+};

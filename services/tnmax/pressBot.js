@@ -2,7 +2,7 @@
 // (накопление ✓ + подтверждение) и хранение в Strapi tn-podpischiki-maxes.
 const axios = require("axios");
 const { getJwt } = require("../modus/strapi");
-const { getDistricts, subscribe, unsubscribe, touchSubscriber } = require("./pressSubsStore");
+const { getDistricts, subscribe, unsubscribe, touchSubscriber, appendHistory } = require("./pressSubsStore");
 
 const PAGE_SIZE = 10; // округов на странице (в столбик)
 const TTL_MS = 10 * 60 * 1000; // время жизни кэша списка округов
@@ -212,9 +212,10 @@ function replyTarget(update) {
   return dialog > 0 ? { user_id: dialog } : null;
 }
 
-// Отправить сообщение (текст + опц. клавиатура) в личку/чат.
-async function sendMessage(target, text, attachments) {
+// Отправить сообщение (текст + опц. клавиатура + опц. format) в личку/чат.
+async function sendMessage(target, text, attachments, format) {
   const body = { text };
+  if (format) body.format = format;
   if (attachments?.length) body.attachments = attachments;
   const { data } = await axios.post(`${apiBase()}/messages`, body, {
     headers: { Authorization: token(), "Content-Type": "application/json" },
@@ -225,7 +226,8 @@ async function sendMessage(target, text, attachments) {
 }
 
 // Ответить на кнопку: с text/attachments заменяет сообщение, иначе — тост notification.
-async function answerCallback(callbackId, { text, attachments, notification } = {}) {
+// userId — для history в Strapi (нет — не пишем).
+async function answerCallback(callbackId, { text, attachments, notification } = {}, userId) {
   if (!callbackId) return;
   const body = {};
   if (notification) body.notification = notification;
@@ -234,20 +236,35 @@ async function answerCallback(callbackId, { text, attachments, notification } = 
     if (text) body.message.text = text;
     if (attachments?.length) body.message.attachments = attachments;
   }
-  await axios.post(`${apiBase()}/answers`, body, {
+  const resp = await axios.post(`${apiBase()}/answers`, body, {
     headers: { Authorization: token(), "Content-Type": "application/json" },
     params: { callback_id: callbackId },
     timeout: 20000,
   });
+  if (userId) {
+    const mid = resp?.data?.message?.body?.mid || null;
+    appendHistory(userId, {
+      dir: "out",
+      kind: "answer",
+      text: text || notification || null,
+      notification: notification || null,
+      mid,
+    }).catch(() => {});
+  }
 }
 
 // Приветствие с кнопками «Добавить округа» и «Мои подписки».
 async function sendGreeting(update) {
   const target = replyTarget(update);
   if (!target) return log("приветствие: нет target", update?.update_type || "");
-  await sendMessage(target, GREETING, GREETING_KEYBOARD);
+  const resp = await sendMessage(target, GREETING, GREETING_KEYBOARD);
   log("приветствие отправлено", target);
   rememberChat(update);
+  const userId = cbUserId(update);
+  if (userId) {
+    const mid = resp?.message?.body?.mid || null;
+    appendHistory(userId, { dir: "out", kind: "greeting", text: GREETING, mid }).catch(() => {});
+  }
 }
 
 // Данные пользователя и клика по округу для лога (база будущих подписок в Strapi).
@@ -272,7 +289,7 @@ function pickLog(update, district) {
 async function confirmSubscription(update, userId, callbackId) {
   const st = userState(userId);
   if (!st.sel.size) {
-    await answerCallback(callbackId, { notification: "Выберите хотя бы один округ" });
+    await answerCallback(callbackId, { notification: "Выберите хотя бы один округ" }, userId);
     return;
   }
   const all = await fetchDistricts();
@@ -285,7 +302,7 @@ async function confirmSubscription(update, userId, callbackId) {
   rememberChat(update);
   st.sel.clear();
   const msg = await mySubsMessage(userId);
-  await answerCallback(callbackId, { ...msg, notification: "Подписка оформлена" });
+  await answerCallback(callbackId, { ...msg, notification: "Подписка оформлена" }, userId);
 }
 
 // Отписка от одного округа (для группы — disconnect всех её id) + перерисовка «Мои подписки».
@@ -295,14 +312,14 @@ async function unsubscribeDistrict(update, userId, callbackId, districtName) {
     Number.isFinite(Number(id))
   );
   if (!ids.length) {
-    await answerCallback(callbackId, { notification: "Округ не найден" });
+    await answerCallback(callbackId, { notification: "Округ не найден" }, userId);
     return;
   }
   const profile = cbProfile(update);
   await unsubscribe({ ...profile, districtIds: ids });
   log("отписка сохранена", { ...profile, district: districtName });
   const msg = await mySubsMessage(userId);
-  await answerCallback(callbackId, { ...msg, notification: `Отписка от «${districtName}»` });
+  await answerCallback(callbackId, { ...msg, notification: `Отписка от «${districtName}»` }, userId);
 }
 
 // Кнопки меню: листание, выбор ✓, подтверждение, мой список, отписка.
@@ -314,7 +331,7 @@ async function handleCallback(update) {
   try {
     if (action === "subs" || action === "page") {
       const page = action === "page" ? Number(value) : 0;
-      await answerCallback(callbackId, await buildDistrictsMessage(page, userId));
+      await answerCallback(callbackId, await buildDistrictsMessage(page, userId), userId);
     } else if (action === "pick") {
       const subscribed = await getDistricts(userId);
       const row = (await fetchDistricts()).find((d) => d.name === value);
@@ -322,32 +339,32 @@ async function handleCallback(update) {
         ? isRowSubscribed(row, subscribed)
         : subscribed.includes(value);
       if (fullySubscribed) {
-        await answerCallback(callbackId, { notification: "Вы уже подписаны" });
+        await answerCallback(callbackId, { notification: "Вы уже подписаны" }, userId);
       } else {
         const st = userState(userId);
         if (st.sel.has(value)) st.sel.delete(value);
         else st.sel.add(value);
         log("выбор округа", pickLog(update, value));
-        await answerCallback(callbackId, await buildDistrictsMessage(st.page, userId));
+        await answerCallback(callbackId, await buildDistrictsMessage(st.page, userId), userId);
       }
     } else if (action === "confirm") {
       await confirmSubscription(update, userId, callbackId);
     } else if (action === "clear") {
       const st = userState(userId);
       st.sel.clear();
-      await answerCallback(callbackId, await buildDistrictsMessage(st.page, userId));
+      await answerCallback(callbackId, await buildDistrictsMessage(st.page, userId), userId);
     } else if (action === "my") {
-      await answerCallback(callbackId, await mySubsMessage(userId));
+      await answerCallback(callbackId, await mySubsMessage(userId), userId);
     } else if (action === "home") {
-      await answerCallback(callbackId, { text: GREETING, attachments: GREETING_KEYBOARD });
+      await answerCallback(callbackId, { text: GREETING, attachments: GREETING_KEYBOARD }, userId);
     } else if (action === "unsub") {
       await unsubscribeDistrict(update, userId, callbackId, value);
     } else {
-      await answerCallback(callbackId, { notification: "Неизвестная команда" });
+      await answerCallback(callbackId, { notification: "Неизвестная команда" }, userId);
     }
   } catch (e) {
     log("ошибка callback", e?.response?.data || e?.message || e);
-    await answerCallback(callbackId, { notification: "Ошибка, попробуйте позже" }).catch(() => {});
+    await answerCallback(callbackId, { notification: "Ошибка, попробуйте позже" }, userId).catch(() => {});
   }
 }
 
@@ -357,9 +374,15 @@ async function processUpdate(update) {
   if (type === "bot_started") return sendGreeting(update);
   if (type === "message_created") {
     const text = String(update?.message?.body?.text || "").trim().toLowerCase();
-    if (["начать", "/start", "старт"].includes(text)) return sendGreeting(update);
     const raw = String(update?.message?.body?.text || "");
-    if (raw.trim()) log(`сообщение от ${cbUserId(update) || "?"}:`, raw);
+    if (raw.trim()) {
+      log(`сообщение от ${cbUserId(update) || "?"}:`, raw);
+      const inUserId = cbUserId(update);
+      if (inUserId) {
+        appendHistory(inUserId, { dir: "in", text: raw }).catch(() => {});
+      }
+    }
+    if (["начать", "/start", "старт"].includes(text)) return sendGreeting(update);
     return;
   }
   if (type === "message_callback") await handleCallback(update);
