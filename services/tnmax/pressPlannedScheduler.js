@@ -168,8 +168,9 @@ async function runPressPlannedOnce({ reason = "manual", dryRun = false, onlyDist
         published += 1;
         console.log(`[press-planned] ✓ ${label}: ${result.message}`);
         notes.push(`ok: ${label}`);
-        // Оповещение подписчиков округа (notifyDistrict своих ошибок не отдаёт)
-        notifyDistrict(g.district, "planned").catch(() => {});
+        // Оповещение подписчиков округа (notifyDistrict своих ошибок не отдаёт):
+        // entries/additional — та же группировка и доп-пост, что у канала.
+        notifyDistrict(g.district, "planned", { entries, additional }).catch(() => {});
       } else {
         failed += 1;
         console.warn(`[press-planned] ✗ ${label}: ${result.message}`);

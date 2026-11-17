@@ -306,6 +306,7 @@ module.exports = {
   splitPressText,
   fmtDmy,
   fmtHm,
+  fmtWindow,
   parseDate,
   escapeHtml,
 };

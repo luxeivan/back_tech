@@ -8,6 +8,7 @@ const {
   cleanAddressList,
   fmtDmy,
   fmtHm,
+  fmtWindow,
   parseDate,
   escapeHtml,
 } = require("./pressTextTemplate");
@@ -20,8 +21,8 @@ const BADGE_PLANNED = "❗️❗️⚡ ❗️❗️";
 const TEXTS = {
   // Внеплановая — HTML (format:"html" в sendMessage), спека пресс-службы 16.11.2026.
   emergency: (district, raw) => buildEmergencyText(district, raw),
-  planned: (district) =>
-    `${BADGE_PLANNED}\n\nВ вашем ГО будет плановая ТН (${district})`,
+  // Плановая — HTML; raw = { entries, additional } из pressPlannedScheduler (спека 17.11.2026).
+  planned: (district, raw) => buildPlannedText(district, raw),
 };
 
 const KIND_RU = { emergency: "аварийная", planned: "плановая" };
@@ -84,6 +85,59 @@ async function buildEmergencyText(district, raw = {}) {
   ].join("\n");
 }
 
+// Текст планового оповещения: шапка + first_line округа, блок «Адрес/Время» на
+// каждую ТН группы, причина внизу. additional=true → маркер доп.информации (как в канале).
+// Без адреса ни у одной ТН — возвращаем null, notifyDistrict не шлёт (спека 17.11.2026).
+async function buildPlannedText(district, raw = {}) {
+  const entries = Array.isArray(raw.entries) ? raw.entries : [];
+  const withAddr = entries.filter((e) => cleanAddressList(e?.address));
+  if (!withAddr.length) return null;
+
+  const firstLine = (
+    (await fetchFirstLine(district)) || `В г.о. ${districtTitle(district) || ""}`
+  ).trim();
+
+  const lines = [BADGE_PLANNED, ""];
+  if (raw.additional) {
+    lines.push("ДОПОЛНИТЕЛЬНАЯ ИНФОРМАЦИЯ ПО ОТКЛЮЧЕНИЮ", "");
+  }
+  lines.push(
+    `<b>${escapeHtml(firstLine)} произойдет плановое отключение электроэнергии</b>`,
+    ""
+  );
+
+  withAddr.forEach((e, i) => {
+    if (i) lines.push("");
+    const address = cleanAddressList(e.address);
+    const start = e.start instanceof Date ? e.start : parseDate(e.start);
+    const end = e.end instanceof Date ? e.end : parseDate(e.end);
+    const window = fmtWindow(start, end);
+    const when = start ? `${fmtDmy(start)}${window ? ` (${window})` : ""}` : "—";
+    lines.push(`<b>Адрес:</b> ${escapeHtml(address)}`);
+    lines.push("");
+    lines.push(`<b>Время возможного отключения (с-до):</b> ${when}`);
+  });
+
+  // Причина: уникальные значения через «; » — как в шаблоне канала.
+  const reasons = [];
+  const seen = new Set();
+  for (const e of withAddr) {
+    const r = String(e.reason || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/[.\s]+$/, "");
+    if (!r) continue;
+    const key = r.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    reasons.push(escapeHtml(r));
+  }
+  if (reasons.length) {
+    lines.push("", `<b>Причина отключения:</b> ${reasons.join("; ")}`);
+  }
+  return lines.join("\n");
+}
+
 // Шлёт оповещение всем подписчикам округа; своих ошибок наружу не отдаёт.
 async function notifyDistrict(districtRaw, kind, raw) {
   try {
@@ -113,7 +167,14 @@ async function notifyDistrict(districtRaw, kind, raw) {
     }
 
     const text = await textFor(district, raw);
-    const format = kind === "emergency" ? "html" : undefined;
+    // Плановая без адреса (buildPlannedText вернула null) — не шлём.
+    if (!text) {
+      log(
+        `оповещение [плановая]: нет адреса в ТН округа «${district}» — пропускаю`
+      );
+      return { sent: 0, reason: "no-address" };
+    }
+    const format = "html";
     let sent = 0;
     const mids = [];
     for (const s of subs) {
