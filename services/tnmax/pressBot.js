@@ -5,6 +5,7 @@ const { getJwt } = require("../modus/strapi");
 const { getDistricts, subscribe, unsubscribe, touchSubscriber, appendHistory } = require("./pressSubsStore");
 
 const PAGE_SIZE = 10; // округов на странице (в столбик)
+const MY_PAGE_SIZE = 10; // подписок на странице экрана «Мои подписки»
 const TTL_MS = 10 * 60 * 1000; // время жизни кэша списка округов
 let cache = { at: 0, rows: null };
 
@@ -189,12 +190,30 @@ async function buildDistrictsMessage(pageIndex, userId) {
 }
 
 // Экран «Мои подписки»: члены MERGED_DISTRICTS схлопнуты в одну строку; отписка — по имени кнопки.
-async function mySubsMessage(userId) {
+// Пагинация обязательна: у MAX лимит inline_keyboard — 30 строк, а подписок бывает до 56
+// (без неё ответ /answers падал с 400 → «Ошибка, попробуйте позже»; баг Маргариты 17.11.2026).
+// pageIndex === undefined — оставить текущую страницу (отписка), иначе перейти на указанную.
+async function mySubsMessage(userId, pageIndex) {
+  const st = userState(userId);
   const districts = [...new Set((await getDistricts(userId)).map(displayNameFor))];
+  const pages = Math.max(1, Math.ceil(districts.length / MY_PAGE_SIZE));
+  const wanted = pageIndex === undefined ? st.myPage || 0 : Number(pageIndex) || 0;
+  const page = Math.min(Math.max(0, wanted), pages - 1);
+  st.myPage = page;
+
+  const slice = districts.slice(page * MY_PAGE_SIZE, (page + 1) * MY_PAGE_SIZE);
   const text = districts.length
-    ? `Вы подписаны на уведомления по округам:\n${districts.map((d) => `• ${d}`).join("\n")}`
+    ? `Вы подписаны на уведомления по округам:\n${slice
+        .map((d) => `• ${d}`)
+        .join("\n")}${pages > 1 ? `\n\nСтраница ${page + 1}/${pages}` : ""}`
     : "У вас пока нет подписок.";
-  const rows = districts.map((d) => [button(`❌ Отписаться от ${d}`, "unsub", d)]);
+
+  const rows = slice.map((d) => [button(`❌ Отписаться от ${d}`, "unsub", d)]);
+  const nav = [];
+  if (page > 0) nav.push(button("◀️", "mypage", page - 1));
+  if (pages > 1) nav.push(button(`Страница ${page + 1}/${pages}`, "mypage", page));
+  if (page < pages - 1) nav.push(button("▶️", "mypage", page + 1));
+  if (nav.length) rows.push(nav);
   rows.push([button("Добавить округа", "subs")]);
   rows.push([button("В приветствие", "home")]);
   return { text, attachments: keyboard(rows) };
@@ -301,7 +320,7 @@ async function confirmSubscription(update, userId, callbackId) {
   log("подписка сохранена", { ...profile, districts: [...st.sel] });
   rememberChat(update);
   st.sel.clear();
-  const msg = await mySubsMessage(userId);
+  const msg = await mySubsMessage(userId, 0);
   await answerCallback(callbackId, { ...msg, notification: "Подписка оформлена" }, userId);
 }
 
@@ -354,7 +373,9 @@ async function handleCallback(update) {
       st.sel.clear();
       await answerCallback(callbackId, await buildDistrictsMessage(st.page, userId), userId);
     } else if (action === "my") {
-      await answerCallback(callbackId, await mySubsMessage(userId), userId);
+      await answerCallback(callbackId, await mySubsMessage(userId, 0), userId);
+    } else if (action === "mypage") {
+      await answerCallback(callbackId, await mySubsMessage(userId, Number(value)), userId);
     } else if (action === "home") {
       await answerCallback(callbackId, { text: GREETING, attachments: GREETING_KEYBOARD }, userId);
     } else if (action === "unsub") {
@@ -368,10 +389,17 @@ async function handleCallback(update) {
   }
 }
 
-// Диспетчер update: старт/«начать» → приветствие, callback → меню, прочие тексты → лог.
+// Диспетчер update: старт/«начать» → приветствие, очистка истории → автоприветствие,
+// callback → меню, прочие тексты → лог.
 async function processUpdate(update) {
   const type = String(update?.update_type || "").toLowerCase();
   if (type === "bot_started") return sendGreeting(update);
+  // Стерли переписку — сами шлём приветствие с кнопками, чтобы не заставлять
+  // пользователя вручную вводить «Начать» (update dialog_cleared, документация MAX).
+  if (type === "dialog_cleared") {
+    log(`диалог очищен → автоприветствие, user=${cbUserId(update) || "?"}`);
+    return sendGreeting(update);
+  }
   if (type === "message_created") {
     const text = String(update?.message?.body?.text || "").trim().toLowerCase();
     const raw = String(update?.message?.body?.text || "");
@@ -390,7 +418,7 @@ async function processUpdate(update) {
 
 // Один long-poll запрос /updates (marker — позиция в потоке).
 async function fetchUpdates({ timeout = 25, limit = 100 } = {}) {
-  const params = { timeout, limit, types: "message_created,bot_started,message_callback" };
+  const params = { timeout, limit, types: "message_created,bot_started,message_callback,dialog_cleared" };
   if (Number.isFinite(Number(marker))) params.marker = Number(marker);
   const { data } = await axios.get(`${apiBase()}/updates`, {
     headers: { Authorization: token() },
