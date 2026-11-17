@@ -182,6 +182,7 @@ async function buildDistrictsMessage(pageIndex, userId) {
   if (page < pages - 1) nav.push(button("▶️", "page", page + 1));
   rows.push(nav);
   rows.push([button(`Подтвердить (${st.sel.size})`, "confirm"), button("Очистить", "clear")]);
+  rows.push([button("В приветствие", "home")]);
 
   return {
     text: "Выберите округа, по которым хотите получать уведомления",
