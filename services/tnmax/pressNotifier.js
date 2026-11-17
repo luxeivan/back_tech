@@ -13,10 +13,15 @@ const {
 } = require("./pressTextTemplate");
 const { sendMessage } = require("./pressBot");
 
+// Эмодзи-шапка отдельной строкой, дальше пустая строка и основной текст (спека 17.11.2026).
+const BADGE_EMERGENCY = "❗️❗️🚨❗️❗️";
+const BADGE_PLANNED = "❗️❗️⚡ ❗️❗️";
+
 const TEXTS = {
   // Внеплановая — HTML (format:"html" в sendMessage), спека пресс-службы 16.11.2026.
   emergency: (district, raw) => buildEmergencyText(district, raw),
-  planned: (district) => `В вашем ГО будет плановая ТН (${district})`,
+  planned: (district) =>
+    `${BADGE_PLANNED}\n\nВ вашем ГО будет плановая ТН (${district})`,
 };
 
 const KIND_RU = { emergency: "аварийная", planned: "плановая" };
@@ -67,6 +72,8 @@ async function buildEmergencyText(district, raw = {}) {
   const when = start ? `${fmtDmy(start)} ${fmtHm(start)}` : "—";
 
   return [
+    BADGE_EMERGENCY,
+    "",
     `<b>${escapeHtml(firstLine)} произошло внеплановое отключение электроэнергии</b>`,
     "",
     `<b>Адрес:</b> ${address ? escapeHtml(address) : "—"}`,
@@ -84,6 +91,18 @@ async function notifyDistrict(districtRaw, kind, raw) {
     const key = normalizeDistrictKey(district);
     const textFor = TEXTS[kind];
     if (!key || !textFor) return { sent: 0, reason: "bad-args" };
+
+    // Внеплановую без адреса подписчикам не шлём (спека пресс-службы 17.11.2026).
+    if (kind === "emergency") {
+      const data = raw?.data && typeof raw.data === "object" ? raw.data : {};
+      const address = cleanAddressList(raw?.addressList || data.ADDRESS_LIST);
+      if (!address) {
+        log(
+          `оповещение [аварийная]: нет адреса в ТН округа «${district}» — пропускаю`
+        );
+        return { sent: 0, reason: "no-address" };
+      }
+    }
 
     const subs = (await getAllSubscribers()).filter(
       (s) => s.isActive && s.districts.some((d) => normalizeDistrictKey(d) === key)
