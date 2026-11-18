@@ -11,6 +11,7 @@ const {
   fmtWindow,
   parseDate,
   escapeHtml,
+  splitPressText,
 } = require("./pressTextTemplate");
 const { sendMessage } = require("./pressBot");
 
@@ -174,6 +175,9 @@ async function notifyDistrict(districtRaw, kind, raw) {
       );
       return { sent: 0, reason: "no-address" };
     }
+    // Лимит MAX на text — 4000 симв. (массовый ТН, кейс 18.11: 85 адресов = 12145);
+    // сплит как в канале, иначе весь текст отвергается proto.payload.
+    const chunks = splitPressText(text);
     const format = "html";
     let sent = 0;
     const mids = [];
@@ -185,13 +189,21 @@ async function notifyDistrict(districtRaw, kind, raw) {
           : null;
       if (!target) continue;
       try {
-        const resp = await sendMessage(target, text, null, format);
+        for (let i = 0; i < chunks.length; i++) {
+          const resp = await sendMessage(target, chunks[i], null, format);
+          const mid = resp?.message?.body?.mid || null;
+          if (mid) mids.push(mid);
+          // История в ЛС подписчика (не валяет отправку)
+          appendHistory(s.maxUserId, { dir: "out", kind, text: chunks[i], mid }).catch(() => {});
+          if (i < chunks.length - 1) {
+            await new Promise((r) => setTimeout(r, 600));
+          }
+        }
         sent += 1;
-        const mid = resp?.message?.body?.mid || null;
-        if (mid) mids.push(mid);
-        log(`оповещение [${KIND_RU[kind]}] → user ${s.maxUserId}: ok`, target);
-        // История в ЛС подписчика (не валяет отправку)
-        appendHistory(s.maxUserId, { dir: "out", kind, text, mid }).catch(() => {});
+        log(
+          `оповещение [${KIND_RU[kind]}] → user ${s.maxUserId}: ok${chunks.length > 1 ? ` (чанков: ${chunks.length})` : ""}`,
+          target
+        );
       } catch (e) {
         log(
           `оповещение [${KIND_RU[kind]}] → user ${s.maxUserId}: ошибка`,
