@@ -116,7 +116,7 @@ async function buildPlannedText(district, raw = {}) {
     const when = start ? `${fmtDmy(start)}${window ? ` (${window})` : ""}` : "—";
     lines.push(`<b>Адрес:</b> ${escapeHtml(address)}`);
     lines.push("");
-    lines.push(`<b>Время возможного отключения (с-до):</b> ${when}`);
+    lines.push(`<b>Дата/Время возможного отключения:</b> ${when}`);
   });
 
   // Причина: уникальные значения через «; » — как в шаблоне канала.
