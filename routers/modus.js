@@ -19,6 +19,7 @@ const { getJwt, fetchTnDescriptionById } = require("../services/modus/strapi");
 const { getAutoSendState } = require("../services/modus/autoSend");
 const { deleteStoredMids } = require("../services/tnmax/tnMaxChannel");
 const { publishTnPost, publishClosePost } = require("../services/tnmax/postPublisher");
+const closeGuard = require("../services/tnmax/closeGuard");
 const { publishPressPost, deletePressPost } = require("../services/tnmax/pressPublisher");
 const { notifyDistrict, appendPressBotMids } = require("../services/tnmax/pressNotifier");
 const {
@@ -1098,16 +1099,29 @@ router.put("/", async (req, res) => {
 
         // Этап 8.5 — Пост-закрытие/запитка в MAX (авария, уже был первый пост)
         {
-          const isOpenToClose =
-            statusChanged &&
-            ["закрыта", "запитана"].includes(nextStatus) &&
-            // Закрытие — только если ТН до этого была открыта. Иначе дубли:
-            // (а) запитана→закрыта после уже отправленного закрытия;
-            // (б) ТН пришла одним POST уже закрытой (пост-закрытия уходит в Этапе 8).
-            !["закрыта", "запитана"].includes(prevStatus) &&
-            nextBaseType === 0;
-          if (!isOpenToClose) {
-            // тихо — этап не логируем, чтобы не засорять журнал плановых/прочих PUT
+          // «Закрыли и забыли» (заказчик, 18.11.2026): если финальный статус
+          // (закрыта/запитана/удалена) уже приходил — повторных постов в MAX нет.
+          // Ловит и правки ТН после закрытия, и флапы МОДУСа
+          // (запитана→открыта→запитана, №170 от 15.11 — три поста-закрытия),
+          // и восстановления (удалена→запитана).
+          const finalSeenBefore = closeGuard.has(mapped.guid);
+          if (nextBaseType === 0 && isFinalStatus(nextStatus) && !finalSeenBefore) {
+            closeGuard.mark(mapped.guid);
+          }
+          const gate = closeGuard.evaluate({
+            statusChanged,
+            prevStatus,
+            nextStatus,
+            nextBaseType,
+            wasActive: currentAttrs?.isActive !== false,
+            finalSeen: finalSeenBefore,
+          });
+          if (!gate.send) {
+            if (gate.reason) {
+              const st85 = islg.start(8.5, "Пост-закрытие в MAX (Доп. информация)");
+              islg.skip(st85, gate.reason);
+            }
+            // иначе тихо — этап не логируем, чтобы не засорять журнал плановых/прочих PUT
           } else {
             const st85 = islg.start(8.5, "Пост-закрытие в MAX (Доп. информация)");
             const firstDescription =
@@ -2198,6 +2212,11 @@ router.post("/", async (req, res) => {
             if (!guid) {
               islg.skip(st8, "GUID отсутствует");
             } else {
+              // «Закрыли и забыли»: ТН пришла уже с финальным статусом —
+              // фиксируем, чтобы повторные PUT/флапы не устроили второй пост-закрытие.
+              if (isFinalStatus(item?.STATUS_NAME)) {
+                closeGuard.mark(guid);
+              }
               const result = await publishTnPost({
                 jwt,
                 guid,
