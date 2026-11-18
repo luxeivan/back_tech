@@ -6,6 +6,7 @@ const axios = require("axios");
 const { sendToChannel, uploadFile } = require("./tnMaxChannel");
 const { generateTablesPdfs } = require("./pdf");
 const { buildMaxPostText, buildClosePostText, boldifyForMax, skipIncidentFirstPost } = require("./postTextTemplate");
+const { splitPressText } = require("./pressTextTemplate");
 
 const SEND_PAUSE_MS = 600; // лимит MAX: 2 сообщ/сек
 const RETRY_PAUSE_MS = 1200;
@@ -201,10 +202,20 @@ async function publishTnPost({ jwt, guid, raw, midDocId, urlStrapi }) {
   const sentUrls = [];
 
   try {
-    // 1) Текст (рич-шаблон, fallback guid) — жирные лейблы через HTML
+    // 1) Текст (рич-шаблон, fallback guid) — жирные лейблы через HTML.
+    // Длинный текст (адреса) режем чанками как в press: лимит MAX 4000.
     const htmlText = postText === guid ? guid : boldifyForMax(postText);
-    const textPayload = postText === guid ? { text: guid } : { text: htmlText, format: "html" };
-    await sendWithRetry(textPayload, "текст", sentMids, sentUrls);
+    const chunks = splitPressText(htmlText);
+    for (let i = 0; i < chunks.length; i += 1) {
+      const textPayload = postText === guid ? { text: chunks[i] } : { text: chunks[i], format: "html" };
+      await sendWithRetry(
+        textPayload,
+        chunks.length > 1 ? `текст ${i + 1}/${chunks.length}` : "текст",
+        sentMids,
+        sentUrls
+      );
+      if (i < chunks.length - 1) await new Promise((r) => setTimeout(r, SEND_PAUSE_MS));
+    }
     await new Promise((r) => setTimeout(r, SEND_PAUSE_MS));
 
     // 2–3) PDF-файлы — по одному file-вложению на сообщение (лимит MAX)
@@ -227,7 +238,9 @@ async function publishTnPost({ jwt, guid, raw, midDocId, urlStrapi }) {
 
     // ── Группа И: зеркало первого поста (только текст, без PDF) ──
     // Малая ТН (≤1000 чел., нет СЗО) без ПЭС — в группу И не шлём (юзер, 2026-10-19).
-    let incidentMid = "";
+    // Длинный текст режем чанками (лимит MAX 4000), как в канале ОО.
+    let incidentMid = "";       // все mid через запятую — в mid_MAX_incident
+    let firstIncidentMid = "";  // первый чанк — reply для поста-закрытия
     let incidentNote = "";
     let incidentText = "";
     if (skipIncidentFirstPost(raw)) {
@@ -235,13 +248,32 @@ async function publishTnPost({ jwt, guid, raw, midDocId, urlStrapi }) {
     } else {
       try {
         incidentText = buildMaxPostText(raw, { sequenceNumber, incident: true }) || guid;
-        const incidentPayload =
-          incidentText === guid
-            ? { text: guid }
-            : { text: boldifyForMax(incidentText), format: "html" };
-        const incidentResult = await sendWithRetry(incidentPayload, "группа И: текст", [], [], "i");
-        incidentMid = incidentResult?.message?.body?.mid || "";
-        incidentNote = incidentMid ? `; группа И mid=${incidentMid}` : "; группа И: mid отсутствует";
+        const incidentHtml = incidentText === guid ? guid : boldifyForMax(incidentText);
+        const incidentChunks = splitPressText(incidentHtml);
+        const incidentMids = [];
+        for (let i = 0; i < incidentChunks.length; i += 1) {
+          const incidentPayload =
+            incidentText === guid
+              ? { text: incidentChunks[i] }
+              : { text: incidentChunks[i], format: "html" };
+          const incidentResult = await sendWithRetry(
+            incidentPayload,
+            incidentChunks.length > 1
+              ? `группа И: текст ${i + 1}/${incidentChunks.length}`
+              : "группа И: текст",
+            [],
+            [],
+            "i"
+          );
+          const imid = incidentResult?.message?.body?.mid || "";
+          if (imid) incidentMids.push(imid);
+          if (i < incidentChunks.length - 1) await new Promise((r) => setTimeout(r, SEND_PAUSE_MS));
+        }
+        incidentMid = incidentMids.join(",");
+        firstIncidentMid = incidentMids[0] || "";
+        incidentNote = incidentMid
+          ? `; группа И mid=${incidentMid}`
+          : "; группа И: mid отсутствует";
       } catch (ie) {
         incidentNote = `; группа И: НЕ отправлен — ${ie?.response?.data?.message || ie?.message}`;
         console.warn(`[tnmax] Группа И: текст не отправлен (guid=${guid}):`, ie?.response?.status || ie?.message);
@@ -288,7 +320,7 @@ async function publishTnPost({ jwt, guid, raw, midDocId, urlStrapi }) {
           raw,
           firstDescription: postText === guid ? null : postText,
           firstMid: sentMids[0] || null,
-          firstIncidentMid: incidentMid || null,
+          firstIncidentMid: firstIncidentMid || null,
         });
         closeNote = closeResult.ok
           ? `; ТН пришла уже «${finalStatus}» — пост-закрытия отправлен`

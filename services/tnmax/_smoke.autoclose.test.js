@@ -79,7 +79,7 @@ async function runCase(label, status, expectClose) {
   console.log(`\n=== ${label}: STATUS_NAME="${status}" → ok=${result.ok}`);
   console.log("message:", result.message);
   console.log("files:", files.length);
-  texts.forEach((t, i) => console.log(`text[${i}] target=${t.target} reply=${t.reply || "-"} | ${t.head}`));
+  texts.forEach((t, i) => console.log(`text[${i}] target=${t.target} reply=${t.reply || "-"} len=${t.full.length} | ${t.head}`));
   const closes = texts.filter((t) => t.head.includes("Доп. информация"));
   // Открытие: 2 PDF; закрытие: +2 актуальных PDF (только канал ОО, без target/i)
   const expectFiles = expectClose ? 4 : 2;
@@ -88,6 +88,10 @@ async function runCase(label, status, expectClose) {
     files.every((m) => !m.target || m.target === "oo"),
     "PDF — только канал ОО"
   );
+  // Лимит MAX на текст — 4000 символов (реальный кейс №872: 5043 → Этап 8 падал)
+  texts.forEach((t) => {
+    assert.ok(t.full.length <= 4000, `текстовое сообщение ${t.full.length} > 4000`);
+  });
   if (expectClose) {
     assert.strictEqual(closes.length, 2, "закрытие: ОО + группа И");
     assert.ok(closes.every((c) => c.reply), "закрытие должно быть reply на первый пост");
@@ -101,10 +105,65 @@ async function runCase(label, status, expectClose) {
   }
 }
 
+// Длинный текст (адреса Климовска, реальный кейс №872: 5043 > 4000) —
+// должен разбиться на чанки в канале ОО и в группе И, каждый ≤4000.
+async function runLongTextCase() {
+  sent.length = 0;
+  const longAddresses = Array.from(
+    { length: 80 },
+    (_, i) => `ЦТП №${i}. Адрес: г. Климовск, ул. Большая, д. ${i} стр. ${i}`
+  ).join("\n");
+  const raw = mkRaw({
+    STATUS_NAME: "Открыта",
+    ADDRESS_LIST: `ЦТП:\n${longAddresses}\n`,
+    POPULATION_COUNT: 6000,
+    PES_COUNT: 6,
+  });
+  const result = await publishTnPost({
+    jwt: "j",
+    guid: "GUID-long",
+    raw,
+    midDocId: "doc",
+    urlStrapi: "http://unused",
+  });
+  const texts = sent.filter((m) => m.text).map((m) => ({
+    target: m.target || "oo",
+    full: String(m.text),
+    reply: m.link?.mid || null,
+  }));
+  const files = sent.filter((m) => m.attachments?.[0]?.type === "file");
+  const ooTexts = texts.filter((t) => t.target === "oo" && !t.reply);
+  const iTexts = texts.filter((t) => t.target === "i" && !t.reply);
+
+  console.log(`\n=== длинный текст → ok=${result.ok}`);
+  console.log("message:", result.message);
+  console.log(`ОО-чанков=${ooTexts.length} И-чанков=${iTexts.length} PDF=${files.length}`);
+  ooTexts.forEach((t, i) => console.log(`oo[${i}] len=${t.full.length}`));
+  iTexts.forEach((t, i) => console.log(`i[${i}] len=${t.full.length}`));
+
+  assert.ok(result.ok, `publishTnPost должен быть ok: ${result.message}`);
+  assert.ok(ooTexts.length > 1, `канал ОО: ожидалось >1 чанка, получено ${ooTexts.length}`);
+  assert.ok(iTexts.length > 1, `группа И: ожидалось >1 чанка, получено ${iTexts.length}`);
+  texts.forEach((t) => {
+    assert.ok(t.full.length <= 4000, `чанк ${t.full.length} > 4000`);
+  });
+  assert.strictEqual(files.length, 2, "PDF по-прежнему 2, сплит их не ломает");
+  assert.ok(
+    result.message.includes("mid сохранён"),
+    `mid должен сохраняться: ${result.message}`
+  );
+  // reply закрытия не в этом кейсе (ТН открыта), но сохранённый mid группы И — список
+  assert.ok(
+    result.message.includes("группа И mid=") && result.message.includes(","),
+    `mid группы И должен быть списком через запятую: ${result.message}`
+  );
+}
+
 (async () => {
   await runCase("открыта", "Открыта", false);
   await runCase("запитана", "запитана", true);
   await runCase("закрыта", "ЗАКРЫТА", true);
+  await runLongTextCase();
   console.log("\nALL OK");
   process.exit(0);
 })().catch((e) => {
