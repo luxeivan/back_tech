@@ -9,7 +9,7 @@ const axios = require("axios");
 require("dotenv").config();
 const { getJwt } = require("../modus/strapi");
 const { publishPressGroupPost } = require("./pressPublisher");
-const { normalizeDistrictKey } = require("./pressTextTemplate");
+const { normalizeDistrictKey, fmtHm } = require("./pressTextTemplate");
 const { notifyDistrict } = require("./pressNotifier");
 
 const RUN_AT_H_MSK = 7; // 07:30 МСК; в коде ниже сдвиг на +3h в UTC-поля,
@@ -211,7 +211,9 @@ function schedulePressPlannedRun(reason = "late-planned-tn") {
     enqueueRun(reason);
   }, DEBOUNCE_MS);
   console.log(
-    `[press-planned] опоздавшая ТН — прогон через ${DEBOUNCE_MS / 60000} мин (${reason})`
+    `[press-planned] опоздавшая ТН — прогон через ${DEBOUNCE_MS / 60000} мин, в ${fmtHm(
+      new Date(Date.now() + DEBOUNCE_MS)
+    )} МСК (${reason})`
   );
   return true;
 }
