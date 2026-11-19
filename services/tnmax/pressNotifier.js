@@ -86,8 +86,9 @@ async function buildEmergencyText(district, raw = {}) {
   ].join("\n");
 }
 
-// Текст планового оповещения: шапка + first_line округа, блок «Адрес/Время» на
-// каждую ТН группы, причина внизу. additional=true → маркер доп.информации (как в канале).
+// Текст планового оповещения: шапка + first_line округа, блок «Адрес/Время/Причина»
+// на каждую ТН группы (📍 — разделитель, как в постах канала). additional=true →
+// маркер доп.информации (как в канале).
 // Без адреса ни у одной ТН — возвращаем null, notifyDistrict не шлёт (спека 17.11.2026).
 async function buildPlannedText(district, raw = {}) {
   const entries = Array.isArray(raw.entries) ? raw.entries : [];
@@ -114,28 +115,18 @@ async function buildPlannedText(district, raw = {}) {
     const end = e.end instanceof Date ? e.end : parseDate(e.end);
     const window = fmtWindow(start, end);
     const when = start ? `${fmtDmy(start)}${window ? ` ${window}` : ""}` : "—";
-    lines.push(`<b>Адрес:</b> ${escapeHtml(address)}`);
+    // 📍 — та же «красная иголка», что разделяет ТН в постах канала.
+    lines.push(`📍 <b>Адрес:</b> ${escapeHtml(address)}`);
     lines.push("");
     lines.push(`<b>Дата / Время возможного отключения:</b> ${when}`);
-  });
-
-  // Причина: уникальные значения через «; » — как в шаблоне канала.
-  const reasons = [];
-  const seen = new Set();
-  for (const e of withAddr) {
-    const r = String(e.reason || "")
+    const reason = String(e.reason || "")
       .replace(/\s+/g, " ")
       .trim()
       .replace(/[.\s]+$/, "");
-    if (!r) continue;
-    const key = r.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    reasons.push(escapeHtml(r));
-  }
-  if (reasons.length) {
-    lines.push("", `<b>Причина отключения:</b> ${reasons.join("; ")}`);
-  }
+    if (reason) {
+      lines.push("", `<b>Причина отключения:</b> ${escapeHtml(reason)}`);
+    }
+  });
   return lines.join("\n");
 }
 
