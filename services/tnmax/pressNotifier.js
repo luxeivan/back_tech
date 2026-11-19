@@ -113,10 +113,10 @@ async function buildPlannedText(district, raw = {}) {
     const start = e.start instanceof Date ? e.start : parseDate(e.start);
     const end = e.end instanceof Date ? e.end : parseDate(e.end);
     const window = fmtWindow(start, end);
-    const when = start ? `${fmtDmy(start)}${window ? ` (${window})` : ""}` : "—";
+    const when = start ? `${fmtDmy(start)}${window ? ` ${window}` : ""}` : "—";
     lines.push(`<b>Адрес:</b> ${escapeHtml(address)}`);
     lines.push("");
-    lines.push(`<b>Дата/Время возможного отключения:</b> ${when}`);
+    lines.push(`<b>Дата / Время возможного отключения:</b> ${when}`);
   });
 
   // Причина: уникальные значения через «; » — как в шаблоне канала.
