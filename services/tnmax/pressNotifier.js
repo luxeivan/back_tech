@@ -151,7 +151,10 @@ async function notifyDistrict(districtRaw, kind, raw) {
     }
 
     const subs = (await getAllSubscribers()).filter(
-      (s) => s.isActive && s.districts.some((d) => normalizeDistrictKey(d) === key)
+      (s) =>
+        s.isActive &&
+        (s.subscribeAll ||
+          s.districts.some((d) => normalizeDistrictKey(d) === key))
     );
     if (!subs.length) {
       log(`оповещение [${KIND_RU[kind]}]: нет подписчиков округа «${district}»`);

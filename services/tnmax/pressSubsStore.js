@@ -85,12 +85,65 @@ async function unsubscribe({ maxUserId, districtIds }) {
   return { updated: true };
 }
 
+// Состояние подписки: флаг subscribe_all + текущие id округов (+ documentId для записи).
+async function getSubscriptionState(maxUserId) {
+  const id = Number(maxUserId);
+  if (!Number.isFinite(id) || id <= 0) {
+    return { exists: false, subscribe_all: false, districtIds: [], documentId: null };
+  }
+  const url =
+    `${process.env.URL_STRAPI}/api/${COLLECTION}` +
+    `?filters[max_user_id][$eq]=${id}` +
+    `&pagination[pageSize]=1&fields[0]=documentId&fields[1]=subscribe_all` +
+    `&populate[tn_okrugas][fields][0]=id`;
+  const data = await req("get", url);
+  const row = data?.data?.[0];
+  if (!row) return { exists: false, subscribe_all: false, districtIds: [], documentId: null };
+  const rel = Array.isArray(row.tn_okrugas) ? row.tn_okrugas : [];
+  const districtIds = rel
+    .map((r) => Number(r?.id))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  return {
+    exists: true,
+    subscribe_all: row.subscribe_all === true,
+    districtIds,
+    documentId: row.documentId || null,
+  };
+}
+
+// Ленивая синхронизация subscribe_all: дописывает недостающие округа, не трогая профиль.
+async function connectDistricts(maxUserId, districtIds) {
+  const st = await getSubscriptionState(maxUserId);
+  if (!st.exists || !st.documentId) return { updated: false, added: 0 };
+  const have = new Set(st.districtIds);
+  const add = (districtIds || [])
+    .map(Number)
+    .filter((n) => Number.isFinite(n) && n > 0 && !have.has(n));
+  if (!add.length) return { updated: false, added: 0 };
+  await req("put", `${process.env.URL_STRAPI}/api/${COLLECTION}/${st.documentId}`, {
+    data: { tn_okrugas: { connect: add } },
+  });
+  return { updated: true, added: add.length };
+}
+
+// Записывает subscribe_all (если изменился) — флаг производный: «покрыты все активные округа».
+async function setSubscribeAll(maxUserId, value) {
+  const st = await getSubscriptionState(maxUserId);
+  if (!st.exists || !st.documentId) return { updated: false };
+  const next = Boolean(value);
+  if (st.subscribe_all === next) return { updated: false, unchanged: true };
+  await req("put", `${process.env.URL_STRAPI}/api/${COLLECTION}/${st.documentId}`, {
+    data: { subscribe_all: next },
+  });
+  return { updated: true, value: next };
+}
+
 // Все подписчики с их округами — для оповещений (до 100 записей).
 async function getAllSubscribers() {
   const url =
     `${process.env.URL_STRAPI}/api/${COLLECTION}` +
     `?pagination[pageSize]=100` +
-    `&fields[0]=max_user_id&fields[1]=max_chat_id&fields[2]=is_active` +
+    `&fields[0]=max_user_id&fields[1]=max_chat_id&fields[2]=is_active&fields[3]=subscribe_all` +
     `&populate[tn_okrugas][fields][0]=name`;
   const data = await req("get", url);
   return (data?.data || []).map((row) => {
@@ -100,6 +153,7 @@ async function getAllSubscribers() {
       maxUserId: row.max_user_id,
       maxChatId: row.max_chat_id,
       isActive: row.is_active !== false,
+      subscribeAll: row.subscribe_all === true,
       districts: list.map((r) => r?.name).filter(Boolean),
     };
   });
@@ -146,6 +200,9 @@ module.exports = {
   getDistricts,
   subscribe,
   unsubscribe,
+  getSubscriptionState,
+  connectDistricts,
+  setSubscribeAll,
   getAllSubscribers,
   touchSubscriber,
   appendHistory,

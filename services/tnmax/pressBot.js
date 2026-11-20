@@ -2,7 +2,7 @@
 // (накопление ✓ + подтверждение) и хранение в Strapi tn-podpischiki-maxes.
 const axios = require("axios");
 const { getJwt } = require("../modus/strapi");
-const { getDistricts, subscribe, unsubscribe, touchSubscriber, appendHistory } = require("./pressSubsStore");
+const { getDistricts, subscribe, unsubscribe, getSubscriptionState, connectDistricts, setSubscribeAll, touchSubscriber, appendHistory } = require("./pressSubsStore");
 
 const PAGE_SIZE = 10; // округов на странице (в столбик)
 const MY_PAGE_SIZE = 10; // подписок на странице экрана «Мои подписки»
@@ -160,8 +160,31 @@ function isRowSubscribed(row, subscribed) {
   return row.members.every((m) => subscribed.includes(m));
 }
 
+// Админ включил subscribe_all в админке — лениво дописываем все округа в tn_okrugas
+// при первом открытии экрана подписок ( Strapi-флаг → реальные relation ).
+async function ensureSubscribeAll(userId) {
+  const st = await getSubscriptionState(userId);
+  if (!st.subscribe_all) return false;
+  const rows = await fetchDistricts();
+  const allIds = rows.flatMap((r) => r.ids.map(Number));
+  const res = await connectDistricts(userId, allIds);
+  if (res.added) log("subscribe_all: дописаны округа", { user: userId, added: res.added });
+  return true;
+}
+
+// Флаг производный: true ⇔ покрыты ВСЕ активные округа. Пишется после каждого ручного действия.
+async function recomputeSubscribeAll(userId) {
+  const rows = await fetchDistricts();
+  if (!rows.length) return;
+  const names = await getDistricts(userId);
+  const allCovered = rows.every((r) => isRowSubscribed(r, names));
+  const res = await setSubscribeAll(userId, allCovered);
+  if (res.updated) log("subscribe_all пересчитан", { user: userId, value: allCovered });
+}
+
 // Страница списка округов: ✓ — в выборе, ✅ — уже подписан; навигация и кнопки действий.
 async function buildDistrictsMessage(pageIndex, userId) {
+  await ensureSubscribeAll(userId);
   const all = await fetchDistricts();
   const pages = Math.max(1, Math.ceil(all.length / PAGE_SIZE));
   const page = Math.min(Math.max(0, Number(pageIndex) || 0), pages - 1);
@@ -196,6 +219,7 @@ async function buildDistrictsMessage(pageIndex, userId) {
 // pageIndex === undefined — оставить текущую страницу (отписка), иначе перейти на указанную.
 async function mySubsMessage(userId, pageIndex) {
   const st = userState(userId);
+  const isAll = await ensureSubscribeAll(userId);
   const districts = [...new Set((await getDistricts(userId)).map(displayNameFor))];
   const pages = Math.max(1, Math.ceil(districts.length / MY_PAGE_SIZE));
   const wanted = pageIndex === undefined ? st.myPage || 0 : Number(pageIndex) || 0;
@@ -203,8 +227,11 @@ async function mySubsMessage(userId, pageIndex) {
   st.myPage = page;
 
   const slice = districts.slice(page * MY_PAGE_SIZE, (page + 1) * MY_PAGE_SIZE);
+  const header = isAll
+    ? "Вы подписаны на все округа:"
+    : "Вы подписаны на уведомления <b>об отключениях электроэнергии</b> по округам:";
   const text = districts.length
-    ? `Вы подписаны на уведомления <b>об отключениях электроэнергии</b> по округам:\n${slice
+    ? `${header}\n${slice
         .map((d) => `• ${d}`)
         .join("\n")}${pages > 1 ? `\n\nСтраница ${page + 1}/${pages}` : ""}`
     : "У вас пока нет подписок.";
@@ -319,6 +346,7 @@ async function confirmSubscription(update, userId, callbackId) {
     .filter((id) => Number.isFinite(Number(id)));
   const profile = cbProfile(update);
   await subscribe({ ...profile, districtIds: ids });
+  await recomputeSubscribeAll(userId);
   log("подписка сохранена", { ...profile, districts: [...st.sel] });
   rememberChat(update);
   st.sel.clear();
@@ -338,6 +366,7 @@ async function unsubscribeDistrict(update, userId, callbackId, districtName) {
   }
   const profile = cbProfile(update);
   await unsubscribe({ ...profile, districtIds: ids });
+  await recomputeSubscribeAll(userId);
   log("отписка сохранена", { ...profile, district: districtName });
   const msg = await mySubsMessage(userId);
   await answerCallback(callbackId, { ...msg, notification: `Отписка от «${districtName}»` }, userId);
@@ -480,6 +509,7 @@ module.exports = {
   startPressBotPolling,
   fetchDistricts,
   buildDistrictsMessage,
+  mySubsMessage,
   processUpdate,
   sendMessage,
 };
