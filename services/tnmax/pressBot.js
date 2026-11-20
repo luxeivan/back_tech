@@ -20,9 +20,9 @@ const state = new Map(); // user_id → {page, sel:Set} — выбор в пам
 
 // Текст приветствия — правится здесь.
 const GREETING = [
-  "Здравствуйте! Это бот пресс-службы АО «Мособлэнерго».",
+  "Здравствуйте! Это автоматический информатор АО «Мособлэнерго» о плановых и внеплановых отключениях электроэнергии в сетях компании.",
   "",
-  "Здесь вы можете получить информацию о плановых и аварийных отключениях.",
+  "Подпишитесь на рассылку, чтобы получать уведомления об отключениях в вашем городском или муниципальном округе Московской области.",
 ].join("\n");
 
 // Базовый URL MAX API.
@@ -204,7 +204,7 @@ async function mySubsMessage(userId, pageIndex) {
 
   const slice = districts.slice(page * MY_PAGE_SIZE, (page + 1) * MY_PAGE_SIZE);
   const text = districts.length
-    ? `Вы подписаны на уведомления по округам:\n${slice
+    ? `Вы подписаны на уведомления <b>об отключениях электроэнергии</b> по округам:\n${slice
         .map((d) => `• ${d}`)
         .join("\n")}${pages > 1 ? `\n\nСтраница ${page + 1}/${pages}` : ""}`
     : "У вас пока нет подписок.";
@@ -217,7 +217,7 @@ async function mySubsMessage(userId, pageIndex) {
   if (nav.length) rows.push(nav);
   rows.push([button("Добавить округа", "subs")]);
   rows.push([button("В приветствие", "home")]);
-  return { text, attachments: keyboard(rows) };
+  return { text, attachments: keyboard(rows), format: "html" };
 }
 
 // Кому отвечать: chat_id из update, иначе user_id отправителя.
@@ -247,7 +247,7 @@ async function sendMessage(target, text, attachments, format) {
 
 // Ответить на кнопку: с text/attachments заменяет сообщение, иначе — тост notification.
 // userId — для history в Strapi (нет — не пишем).
-async function answerCallback(callbackId, { text, attachments, notification } = {}, userId) {
+async function answerCallback(callbackId, { text, attachments, notification, format } = {}, userId) {
   if (!callbackId) return;
   const body = {};
   if (notification) body.notification = notification;
@@ -255,6 +255,7 @@ async function answerCallback(callbackId, { text, attachments, notification } = 
     body.message = {};
     if (text) body.message.text = text;
     if (attachments?.length) body.message.attachments = attachments;
+    if (format && text) body.message.format = format;
   }
   const resp = await axios.post(`${apiBase()}/answers`, body, {
     headers: { Authorization: token(), "Content-Type": "application/json" },
