@@ -14,6 +14,8 @@ const {
   splitPressText,
 } = require("./pressTextTemplate");
 const { sendMessage } = require("./pressBot");
+const { uploadImage } = require("./tnMaxChannel");
+const { fetchDistrictInfo, loadEmergencyImage } = require("./pressPublisher");
 
 // Эмодзи-шапка отдельной строкой, дальше пустая строка и основной текст (спека 17.11.2026).
 const BADGE_EMERGENCY = "❗️❗️🚨❗️❗️";
@@ -169,6 +171,29 @@ async function notifyDistrict(districtRaw, kind, raw) {
       );
       return { sent: 0, reason: "no-address" };
     }
+
+    // Картинка оповещения — логика канала: аварийная универсальная из assets/,
+    // плановая — img_plan округа. Сбой картинки не валит текст.
+    let image = null;
+    if (kind === "emergency") {
+      image = loadEmergencyImage();
+    } else if (kind === "planned") {
+      try {
+        const jwt = await getJwt();
+        const info = await fetchDistrictInfo({
+          jwt,
+          urlStrapi: process.env.URL_STRAPI,
+          district,
+        });
+        image = info.image;
+      } catch (e) {
+        log(
+          `картинка плановой не получена (${district}):`,
+          e?.response?.status || e?.message
+        );
+      }
+    }
+
     // Лимит MAX на text — 4000 симв. (массовый ТН, кейс 18.11: 85 адресов = 12145);
     // сплит как в канале, иначе весь текст отвергается proto.payload.
     const chunks = splitPressText(text);
@@ -184,7 +209,25 @@ async function notifyDistrict(districtRaw, kind, raw) {
       if (!target) continue;
       try {
         for (let i = 0; i < chunks.length; i++) {
-          const resp = await sendMessage(target, chunks[i], null, format);
+          // Картинка — только к первому чанку (как в канале); токен грузим
+          // на каждого подписчика отдельно — не полагаемся на переиспользование.
+          let attachments = null;
+          if (i === 0 && image?.buffer) {
+            try {
+              const mediaToken = await uploadImage(
+                image.buffer,
+                image.filename || "image.jpg",
+                "press"
+              );
+              attachments = [{ type: "image", payload: { token: mediaToken } }];
+            } catch (ue) {
+              log(
+                `картинка ЛС не загружена (${s.maxUserId}):`,
+                ue?.response?.data?.message || ue?.message
+              );
+            }
+          }
+          const resp = await sendMessage(target, chunks[i], attachments, format);
           const mid = resp?.message?.body?.mid || null;
           if (mid) mids.push(mid);
           // История в ЛС подписчика (не валяет отправку)
@@ -195,7 +238,7 @@ async function notifyDistrict(districtRaw, kind, raw) {
         }
         sent += 1;
         log(
-          `оповещение [${KIND_RU[kind]}] → user ${s.maxUserId}: ok${chunks.length > 1 ? ` (чанков: ${chunks.length})` : ""}`,
+          `оповещение [${KIND_RU[kind]}] → user ${s.maxUserId}: ok${chunks.length > 1 ? ` (чанков: ${chunks.length})` : ""}${image?.buffer ? " +картинка" : ""}`,
           target
         );
       } catch (e) {
