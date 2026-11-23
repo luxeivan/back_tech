@@ -1,5 +1,8 @@
 // Транспорт VK: публикация/удаление записей на стене сообщества press
 // (аналог tnMaxChannel для MAX). Гейт включения — VK_PRESS_ENABLED_LOCAL (как PRESS_MAX_BOT_ENABLED_LOCAL).
+// Картинка: VK не принимает внешние файлы как photo (photos.* закрыты для токена
+// сообщества, ссылки-аттачи не рендерятся) — прикрепляем НАСТОЯЩЕЕ фото альбома
+// по id из реестра vk_photo_id (tn-okruga); нет id → пост уходит текстом.
 const axios = require("axios");
 
 const VK_API_BASE = "https://api.vk.com/method";
@@ -7,8 +10,6 @@ const VK_API_VERSION = "5.199";
 // Лимит текста записи на стене ~20000 символов — режем с запасом.
 const VK_TEXT_LIMIT = 19000;
 const VK_SEND_PAUSE_MS = 600;
-// Имя файла для preview-роута (аналог FILE_RE в routers/vkPreview.js).
-const VK_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 
 function getVkConfig() {
   return {
@@ -22,12 +23,16 @@ function isVkPressEnabled() {
   return String(process.env.VK_PRESS_ENABLED_LOCAL || "").toLowerCase() === "true";
 }
 
-// База для og:image-страниц (публичный адрес back_tech через nginx).
-function getPreviewBase() {
-  return String(process.env.VK_PREVIEW_BASE || "https://jtv.mosoblenergo.ru").replace(
-    /\/$/,
-    ""
-  );
+// В vk_photo_id можно вставлять что угодно из VK: полную ссылку
+// (vk.ru/...?z=photo-243608996_456239021%2F...), photo-243608996_456239021
+// или голый id (456239021) — вернём только id фото, иначе null.
+function extractVkPhotoId(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const fromRef = raw.match(/photo-?\d+_(\d+)/i);
+  if (fromRef) return fromRef[1];
+  if (/^\d+$/.test(raw)) return raw;
+  return null;
 }
 
 async function vkApi(method, params, token = getVkConfig().token) {
@@ -93,9 +98,9 @@ async function postToWall(message) {
   };
 }
 
-// Зеркало press-поста: HTML → текст; картинка — ссылкой на og:image-страницу
-// (нативная photo-загрузка сообществу API VK не даёт — только ссылочный путь).
-async function mirrorToWall({ html, image } = {}) {
+// Зеркало press-поста: HTML → текст; картинка — нативное фото альбома по
+// vkPhotoId (photo-<gid>_<id>), нет id → текст без картинки.
+async function mirrorToWall({ html, vkPhotoId } = {}) {
   const { groupId, token } = getVkConfig();
   if (!groupId) throw new Error("Не задан VK_PRESS_GROUP_ID");
   if (!token) throw new Error("Не задан VK_PRESS_BOT_TOKEN");
@@ -103,17 +108,8 @@ async function mirrorToWall({ html, image } = {}) {
   const text = htmlToVkText(html);
   if (!text) throw new Error("Пустой текст поста");
 
-  const publicFile = String(image?.publicFile || image?.filename || "");
-  let attachment = "";
-  if (publicFile && VK_FILE_RE.test(publicFile)) {
-    const titleLine =
-      (text.split("\n").find((line) => line.trim()) || "Мособлэнерго")
-        .trim()
-        .slice(0, 120);
-    attachment =
-      `${getPreviewBase()}/services/vk/preview` +
-      `?img=${encodeURIComponent(publicFile)}&title=${encodeURIComponent(titleLine)}`;
-  }
+  const photoId = extractVkPhotoId(vkPhotoId);
+  const attachment = photoId ? `photo-${groupId}_${photoId}` : "";
 
   const chunks = splitVkText(text);
   const postIds = [];
@@ -138,6 +134,7 @@ async function mirrorToWall({ html, image } = {}) {
     post_id: postId,
     post_ids: postIds,
     url: postId ? `https://vk.com/wall-${groupId}_${postId}` : null,
+    attachment: attachment || null,
   };
 }
 
@@ -159,4 +156,5 @@ module.exports = {
   deleteWallPost,
   htmlToVkText,
   isVkPressEnabled,
+  extractVkPhotoId,
 };

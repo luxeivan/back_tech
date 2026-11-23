@@ -68,12 +68,20 @@ async function sendWithRetry(payload, label, sentMids) {
 
 // Зеркало press-поста в стену VK (best-effort): ошибка VK не валит публикацию —
 // только лог + сноска в сообщении этапа. post_id → post_id_press_vk.
-async function mirrorPressToVk({ postText, image, label }) {
+// vkPhotoId — фото альбома сообщества из реестра (tn-okruga.vk_photo_id);
+// нет id → пост уходит текстом без картинки.
+async function mirrorPressToVk({ postText, vkPhotoId, label }) {
   if (!isVkPressEnabled()) return { postId: null, note: "" };
   try {
-    const r = await mirrorToWall({ html: postText, image });
-    console.log(`[press] ✓ ВК ${label}: post_id=${r.post_id} url=${r.url || "-"}`);
-    return { postId: r.post_id || null, note: `; ВК post_id=${r.post_id || "-"}` };
+    const r = await mirrorToWall({ html: postText, vkPhotoId });
+    const photoNote = r.attachment ? "" : "; ВК без фото (нет vk_photo_id)";
+    console.log(
+      `[press] ✓ ВК ${label}: post_id=${r.post_id} url=${r.url || "-"}${photoNote}`
+    );
+    return {
+      postId: r.post_id || null,
+      note: `; ВК post_id=${r.post_id || "-"}${photoNote}`,
+    };
   } catch (e) {
     const msg = e?.vk ? `${e.vk.error_code}: ${e.vk.error_msg}` : e?.message || e;
     console.error(`[press] ВК-зеркало не удалось (${label}):`, msg);
@@ -81,38 +89,54 @@ async function mirrorPressToVk({ postText, image, label }) {
   }
 }
 
-// Метаданные округа: first_line_shablon (заголовок) + картинка img_plan.
-// Ошибки картинки не валят результат — image будет null.
+// Метаданные округа: first_line_shablon (заголовок), картинка img_plan и
+// vk_photo_id — реестр фото альбома VK (для зеркала на стену). Ошибки картинки
+// не валят результат (image = null); поля vk_photo_id может не быть в схеме —
+// тогда повторяем запрос без него (fallback), чтобы img_plan не пострадал.
 async function fetchDistrictInfo({ jwt, urlStrapi, district }) {
   const key = normalizeDistrictKey(district);
-  if (!key) return { firstLine: null, image: null };
+  if (!key) return { firstLine: null, image: null, vkPhotoId: null };
 
-  const { data } = await axios.get(`${urlStrapi}/api/tn-okruga`, {
-    headers: { Authorization: `Bearer ${jwt}` },
-    params: {
-      "pagination[pageSize]": 100,
-      "fields[0]": "name",
-      "fields[1]": "source_name",
-      "fields[2]": "first_line_shablon",
-      "populate[img_plan][fields][0]": "url",
-      "populate[img_plan][fields][1]": "name",
-      "populate[img_plan][fields][2]": "ext",
-    },
-    timeout: 15000,
-  });
-  const rows = data?.data || [];
+  const baseParams = {
+    "pagination[pageSize]": 100,
+    "fields[0]": "name",
+    "fields[1]": "source_name",
+    "fields[2]": "first_line_shablon",
+    "populate[img_plan][fields][0]": "url",
+    "populate[img_plan][fields][1]": "name",
+    "populate[img_plan][fields][2]": "ext",
+  };
+  const getRows = (params) =>
+    axios
+      .get(`${urlStrapi}/api/tn-okruga`, {
+        headers: { Authorization: `Bearer ${jwt}` },
+        params,
+        timeout: 15000,
+      })
+      .then((r) => r.data?.data || []);
+
+  let rows;
+  try {
+    rows = await getRows({ ...baseParams, "fields[3]": "vk_photo_id" });
+  } catch (e) {
+    rows = await getRows(baseParams);
+  }
   const hit = rows.find(
     (r) =>
       normalizeDistrictKey(r.name) === key ||
       normalizeDistrictKey(r.source_name) === key
   );
-  if (!hit) return { firstLine: null, image: null };
+  if (!hit) return { firstLine: null, image: null, vkPhotoId: null };
 
   const firstLine = hit.first_line_shablon || null;
+  const vkPhotoId =
+    hit.vk_photo_id != null && String(hit.vk_photo_id).trim()
+      ? String(hit.vk_photo_id).trim()
+      : null;
 
   if (!hit.img_plan?.url) {
     console.warn(`[press] нет img_plan для округа "${district}" (key=${key})`);
-    return { firstLine, image: null };
+    return { firstLine, image: null, vkPhotoId };
   }
 
   try {
@@ -120,21 +144,19 @@ async function fetchDistrictInfo({ jwt, urlStrapi, district }) {
       ? hit.img_plan.url
       : `${String(urlStrapi).replace(/\/$/, "")}${hit.img_plan.url}`;
     const filename = hit.img_plan.name || `okrug${hit.img_plan.ext || ".png"}`;
-    // Имя файла в Strapi (/uploads/<publicFile>) — для og:image-зеркала VK.
-    const publicFile = path.posix.basename(String(hit.img_plan.url || ""));
     const resp = await axios.get(fileUrl, {
       responseType: "arraybuffer",
       timeout: 30000,
       headers: jwt ? { Authorization: `Bearer ${jwt}` } : undefined,
     });
     console.log(`[press] картинка округа: ${filename} (${resp.data.length} б)`);
-    return { firstLine, image: { buffer: Buffer.from(resp.data), filename, publicFile } };
+    return { firstLine, image: { buffer: Buffer.from(resp.data), filename }, vkPhotoId };
   } catch (ie) {
     console.warn(
       `[press] скачивание картинки округа не удалось (key=${key}):`,
       ie?.response?.status || ie?.message
     );
-    return { firstLine, image: null };
+    return { firstLine, image: null, vkPhotoId };
   }
 }
 
@@ -196,9 +218,11 @@ async function publishPressPost({ jwt, guid, raw, urlStrapi, midDocId }) {
   if (!postText.trim()) return { ok: false, message: "пустой текст поста" };
 
   // Картинка: у плановых — округа (tn-okruga.img_plan), у внеплановых — статичная
-  // из assets/. Падение картинки не валит пост.
+  // из assets/. Падение картинки не валит пост. vkPhotoId — фото альбома VK
+  // для зеркала (плановая — из реестра tn-okruga, внеплановая — из env).
   let image = null;
   let imageNote = "";
+  let vkPhotoId = null;
   if (isPlanned) {
     try {
       const info = await fetchDistrictInfo({
@@ -207,6 +231,7 @@ async function publishPressPost({ jwt, guid, raw, urlStrapi, midDocId }) {
         district: data.DISTRICT || raw.DISTRICT || "",
       });
       image = info.image;
+      vkPhotoId = info.vkPhotoId;
     } catch (ie) {
       imageNote = `; картинка НЕ отправлена: ${ie?.response?.status || ie?.message}`;
       console.warn(`[press] ошибка картинки округа (guid=${guid}):`, ie?.response?.status || ie?.message);
@@ -214,6 +239,7 @@ async function publishPressPost({ jwt, guid, raw, urlStrapi, midDocId }) {
   } else {
     image = loadEmergencyImage();
     if (!image) imageNote = "; картинка из assets/ не найдена";
+    vkPhotoId = String(process.env.VK_PRESS_EMERGENCY_PHOTO_ID || "").trim() || null;
   }
 
   const chunks = splitPressText(postText);
@@ -244,7 +270,7 @@ async function publishPressPost({ jwt, guid, raw, urlStrapi, midDocId }) {
   // Зеркало поста в VK-стену (после успешного MAX; до сохранения — post_id нужен в PUT).
   const vk = await mirrorPressToVk({
     postText,
-    image,
+    vkPhotoId,
     label: `${isPlanned ? "плановая" : "внеплановая"} guid=${guid}`,
   });
 
@@ -397,10 +423,12 @@ async function publishPressGroupPost({ jwt, urlStrapi, district, entries, member
   let firstLine = null;
   let image = null;
   let imageNote = "";
+  let vkPhotoId = null;
   try {
     const info = await fetchDistrictInfo({ jwt, urlStrapi, district });
     firstLine = info.firstLine;
     image = info.image;
+    vkPhotoId = info.vkPhotoId;
   } catch (ie) {
     imageNote = `; метаданные округа не получены: ${ie?.response?.status || ie?.message}`;
     console.warn(`[press] ошибка метаданных округа "${district}":`, ie?.response?.status || ie?.message);
@@ -442,7 +470,7 @@ async function publishPressGroupPost({ jwt, urlStrapi, district, entries, member
   // Зеркало группового поста в VK-стену (после успешного MAX).
   const vk = await mirrorPressToVk({
     postText,
-    image,
+    vkPhotoId,
     label: `группа ${district}`,
   });
 
@@ -478,4 +506,10 @@ async function publishPressGroupPost({ jwt, urlStrapi, district, entries, member
   };
 }
 
-module.exports = { publishPressPost, publishPressGroupPost, deletePressPost, fetchDistrictInfo };
+module.exports = {
+  publishPressPost,
+  publishPressGroupPost,
+  deletePressPost,
+  fetchDistrictInfo,
+  loadEmergencyImage,
+};
