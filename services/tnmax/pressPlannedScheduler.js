@@ -9,7 +9,7 @@ const axios = require("axios");
 require("dotenv").config();
 const { getJwt } = require("../modus/strapi");
 const { publishPressGroupPost } = require("./pressPublisher");
-const { normalizeDistrictKey, fmtHm } = require("./pressTextTemplate");
+const { normalizeDistrictKey, fmtHm, cleanAddressList } = require("./pressTextTemplate");
 const { notifyDistrict } = require("./pressNotifier");
 
 const RUN_AT_H_MSK = 7; // 07:30 МСК; в коде ниже сдвиг на +3h в UTC-поля,
@@ -130,7 +130,20 @@ async function runPressPlannedOnce({ reason = "manual", dryRun = false, onlyDist
     // постом-дополнением с пометкой «ДОПОЛНИТЕЛЬНАЯ ИНФОРМАЦИЯ ПО ОТКЛЮЧЕНИЮ».
     const additional = publishedRows.length > 0;
 
-    const entries = freshRows
+    // Плановая без адреса не публикуется — зеркало гейта внеплановых
+    // (спека 11.11.2026 → плановые, 23.11.2026) и фильтра в ЛС (buildPlannedText).
+    const withAddrRows = freshRows.filter((r) => {
+      const data = r.data && typeof r.data === "object" ? r.data : {};
+      return cleanAddressList(data.ADDRESS_LIST);
+    });
+    if (!withAddrRows.length) {
+      skipped += 1;
+      console.log(`[press-planned] пропуск ${g.district}: свежие ТН без адреса`);
+      notes.push(`skip: ${g.district} — нет адресов`);
+      continue;
+    }
+
+    const entries = withAddrRows
       .map((r) => {
         const data = r.data && typeof r.data === "object" ? r.data : {};
         return {
@@ -143,7 +156,7 @@ async function runPressPlannedOnce({ reason = "manual", dryRun = false, onlyDist
       })
       .sort((a, b) => a.start - b.start);
 
-    const members = freshRows.map((r) => ({ documentId: r.documentId, guid: r.guid }));
+    const members = withAddrRows.map((r) => ({ documentId: r.documentId, guid: r.guid }));
     const label =
       `${g.district} (${mskDateKey(entries[0].start)}): ТН=${entries.length}` +
       `${additional ? " [доп]" : ""}`;

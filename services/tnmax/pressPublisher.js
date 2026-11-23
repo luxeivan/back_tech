@@ -204,8 +204,9 @@ async function publishPressPost({ jwt, guid, raw, urlStrapi, midDocId }) {
     return { ok: true, message: `статус «${statusName}» — пропущено` };
   }
 
-  // Внеплановая без адреса (пустой ADDRESS_LIST) — пост не делаем (спека 11.11.2026).
-  if (!isPlanned && !cleanAddressList(raw?.addressList || data.ADDRESS_LIST)) {
+  // Без адреса (пустой ADDRESS_LIST) не публикуем — внеплановые (спека 11.11.2026)
+  // и плановые (зеркало гейта, спека 23.11.2026).
+  if (!cleanAddressList(raw?.addressList || data.ADDRESS_LIST)) {
     return { ok: true, message: "ADDRESS_LIST пуст — пост не публикуется" };
   }
 
