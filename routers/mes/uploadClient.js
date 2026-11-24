@@ -57,9 +57,18 @@ async function mesUploadRegistry(items, { externalId } = {}) {
     { attempts: MES_RETRY_ATTEMPTS, baseDelay: 1500 }
   );
 
+  const safeResponse = sanitizeMesResponse(data);
+  logMes("[МосЭнергоСбыт] upload: ответ внешней системы", safeResponse);
+
   const idRegistry = data?.data?.[0]?.id_registry;
-  if (!idRegistry) throw new Error("Не получили id_registry в ответе СУВК");
-  logMes("[МосЭнергоСбыт] upload: ответ внешней системы", sanitizeMesResponse(data));
+  if (!idRegistry) {
+    const hint = data?.data?.[0]?.ns_nm_result;
+    const err = new Error(
+      `Не получили id_registry в ответе СУВК${hint ? `: ${hint}` : ""}`
+    );
+    err.response = { data: safeResponse };
+    throw err;
+  }
   return { idRegistry, idRegistryExt, session, raw: data };
 }
 
