@@ -105,6 +105,41 @@ function rowPalette(level, isTotal = false) {
   return { bg: COLORS.goBg, text: COLORS.goText };
 }
 
+// Критерии отключения — порт с карты /dashboard-oo (getPopulationSeverity,
+// operationalMapPanel.utils.js). СЗО = ЖВО + мед. + образование
+// (= boilers/ctp/vzu/vns/kns + hosp/clinics + schools/kindergartens).
+// Фоны приглушённые версии цветов карты (#8ad34a/#ffc928/#ff171f).
+const SEVERITY_BG = {
+  high: "#f9cfcf",
+  medium: "#ffeeb8",
+  low: "#d9f0c7",
+  empty: null,
+};
+const SEVERITY_TEXT = {
+  high: "#8c1c1c",
+  medium: "#7a5b00",
+  low: "#14532d",
+};
+
+function severityByPeopleSzo(people, szoCount = 0) {
+  const value = Number(people || 0);
+  const szo = Number(szoCount || 0);
+  if (value > 5000 || szo > 5) return "high";
+  if (value > 1000 || szo > 0) return "medium";
+  if (value > 0) return "low";
+  return "empty";
+}
+
+function severityRowPalette(people, szoCount, fallback) {
+  const bg = SEVERITY_BG[severityByPeopleSzo(people, szoCount)];
+  if (!bg) return fallback;
+  return { bg, text: SEVERITY_TEXT[severityByPeopleSzo(people, szoCount)] };
+}
+
+function mskNowLabel() {
+  return dayjs().tz("Europe/Moscow").format("DD.MM.YYYY HH:mm");
+}
+
 function headerRow() {
   return [
     {
@@ -157,7 +192,13 @@ function labelCell({ level, label, id, parentId, color }) {
 }
 
 function dataRow({ level, label, totals, id, parentId, isTotal = false }) {
-  const { bg, text: textColor } = rowPalette(level, isTotal);
+  const szo =
+    toNumber(totals?.jvo) + toNumber(totals?.medical) + toNumber(totals?.schools);
+  const { bg, text: textColor } = severityRowPalette(
+    totals?.population,
+    szo,
+    rowPalette(level, isTotal)
+  );
 
   return [
     labelCell({ level, label, id, parentId, color: textColor }),
@@ -366,6 +407,13 @@ function makeEmergencyDocDefinition(filials) {
       {
         text: "Аварийные ТН",
         style: "header",
+        color: "#101827",
+        margin: [0, 0, 0, 2],
+      },
+      {
+        text: `Данные актуальны на ${mskNowLabel()} (МСК)`,
+        fontSize: 8,
+        color: "#555555",
         margin: [0, 0, 0, 8],
       },
       {
@@ -401,6 +449,13 @@ function makeEmptyDocDefinition() {
       {
         text: "Аварийные ТН",
         style: "header",
+        color: "#101827",
+        margin: [0, 0, 0, 2],
+      },
+      {
+        text: `Данные актуальны на ${mskNowLabel()} (МСК)`,
+        fontSize: 8,
+        color: "#555555",
         margin: [0, 0, 0, 8],
       },
       {
@@ -502,12 +557,22 @@ function ooHeaderRow() {
 }
 
 function ooBodyRow(record, index, isSummary = false) {
-  const bg = isSummary
+  const fallbackBg = isSummary
     ? OO_TABLE_COLORS.summaryBg
     : index % 2 === 0
       ? OO_TABLE_COLORS.oddBg
       : OO_TABLE_COLORS.evenBg;
-  const textColor = isSummary ? OO_TABLE_COLORS.summaryText : OO_TABLE_COLORS.dataText;
+  const fallbackText = isSummary ? OO_TABLE_COLORS.summaryText : OO_TABLE_COLORS.dataText;
+  const szo =
+    toNumber(record?.boilerCtp) +
+    toNumber(record?.vzuVns) +
+    toNumber(record?.kns) +
+    toNumber(record?.medical) +
+    toNumber(record?.schools);
+  const { bg, text: textColor } = severityRowPalette(record?.population, szo, {
+    bg: fallbackBg,
+    text: fallbackText,
+  });
 
   return OPERATIONAL_BRANCH_COLUMNS.map((column, colIndex) => {
     const isBranch = column.dataIndex === "branch";
@@ -515,7 +580,7 @@ function ooBodyRow(record, index, isSummary = false) {
       text: formatOoCellValue(record[column.dataIndex]),
       bold: isSummary || isBranch,
       alignment: isBranch ? "left" : "center",
-      color: isBranch && !isSummary ? OO_TABLE_COLORS.branchText : textColor,
+      color: textColor,
       fillColor: bg,
       fontSize: 7,
       margin: colIndex === 0 ? [2, 1, 0, 1] : [0, 1, 0, 1],
@@ -542,6 +607,13 @@ function makeOoDocDefinition(dataSource) {
       {
         text: "ОО все филиалы",
         style: "header",
+        color: "#101827",
+        margin: [0, 0, 0, 2],
+      },
+      {
+        text: `Данные актуальны на ${mskNowLabel()} (МСК)`,
+        fontSize: 8,
+        color: "#555555",
         margin: [0, 0, 0, 8],
       },
       {
