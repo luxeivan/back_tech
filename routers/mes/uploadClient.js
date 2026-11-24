@@ -29,7 +29,7 @@ async function mesUploadRegistry(items, { externalId } = {}) {
     dt_campaign_beg: dayjs().format("YYYY-MM-DD"),
     dt_campaign_end: dayjs().add(3, "day").format("YYYY-MM-DD"),
     id_facility: FACILITY_ID,
-    kd_tp_campaign: CAMPAIGN_TYPE,
+    // kd_tp_campaign: CAMPAIGN_TYPE, — СУВК: «ИД кампании SETI_NOTICE отсутствует в справочнике»; без параметра — тест 24.11
   };
 
   const form = new FormData();
