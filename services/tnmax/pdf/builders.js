@@ -194,11 +194,10 @@ function labelCell({ level, label, id, parentId, color }) {
 function dataRow({ level, label, totals, id, parentId, isTotal = false }) {
   const szo =
     toNumber(totals?.jvo) + toNumber(totals?.medical) + toNumber(totals?.schools);
-  const { bg, text: textColor } = severityRowPalette(
-    totals?.population,
-    szo,
-    rowPalette(level, isTotal)
-  );
+  // Строка «ВСЕГО» — без severity-раскраски (заказчик 25.11): только нейтральный фон итога.
+  const { bg, text: textColor } = isTotal
+    ? rowPalette(level, isTotal)
+    : severityRowPalette(totals?.population, szo, rowPalette(level, isTotal));
 
   return [
     labelCell({ level, label, id, parentId, color: textColor }),
@@ -569,10 +568,13 @@ function ooBodyRow(record, index, isSummary = false) {
     toNumber(record?.kns) +
     toNumber(record?.medical) +
     toNumber(record?.schools);
-  const { bg, text: textColor } = severityRowPalette(record?.population, szo, {
-    bg: fallbackBg,
-    text: fallbackText,
-  });
+  // Строка «Всего» — без severity-раскраски (заказчик 25.11): только нейтральный фон итога.
+  const { bg, text: textColor } = isSummary
+    ? { bg: fallbackBg, text: fallbackText }
+    : severityRowPalette(record?.population, szo, {
+        bg: fallbackBg,
+        text: fallbackText,
+      });
 
   return OPERATIONAL_BRANCH_COLUMNS.map((column, colIndex) => {
     const isBranch = column.dataIndex === "branch";
