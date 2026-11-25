@@ -21,12 +21,10 @@ function szoCount(raw) {
 
 // Кружки важности НА ОТКРЫТИИ — всегда красные (юзер, 2026-10-15: «при открытии
 // только красные»); зелёные — только в посте-закрытии.
-// ОО-канал: 🔴 = население ≤1000 вкл. И нет СЗО; 🔴🔴 = 1000–5000 и/или СЗО≤5; 🔴🔴🔴 = >5000 и/или СЗО>5
-// Группа И (incident): один 🔴 — только если направлена ПЭС (PES_COUNT>0), без привязки к населению/СЗО;
-// 2–3 кружка — по тем же правилам, что и в ОО.
-function severityEmoji(population, szo, { incident, pes } = {}) {
+// Одинаково для канала ОО и группы И (юзер 2026-11-25: кружки везде по ТЗ, ПЭС — только гейт отправки):
+// 🔴 = население ≤1000 вкл. И нет СЗО; 🔴🔴 = 1000–5000 и/или СЗО≤5; 🔴🔴🔴 = >5000 и/или СЗО>5
+function severityEmoji(population, szo) {
   if (szo > 5 || population > 5000) return "🔴🔴🔴";
-  if (incident) return num(pes) > 0 ? "🔴" : "🔴🔴";
   if (szo === 0 && population <= 1000) return "🔴";
   return "🔴🔴";
 }
@@ -104,10 +102,9 @@ function boldifyForMax(plain) {
   return html;
 }
 
-function buildMaxPostText(raw = {}, { sequenceNumber, incident } = {}) {
+function buildMaxPostText(raw = {}, { sequenceNumber } = {}) {
   // sequenceNumber — порядковый номер аварийки с 08:00 МСК (см. calcSequenceNumber в postPublisher);
   // fallback на номер ТН из МОДУСа, если нумерация не посчиталась
-  // incident=true — вариант для группы И: один 🔴 только если направлена ПЭС (см. severityEmoji)
   const number =
     sequenceNumber != null && Number(sequenceNumber) > 0
       ? String(sequenceNumber)
@@ -118,7 +115,7 @@ function buildMaxPostText(raw = {}, { sequenceNumber, incident } = {}) {
 
   const headerLine = [
     number ? `${number}.` : "",
-    severityEmoji(population, szo, { incident, pes: raw.PES_COUNT }),
+    severityEmoji(population, szo),
     `🧑‍🧑‍🧒‍🧒(${population})`,
     `🏭(${szo})`,
   ]

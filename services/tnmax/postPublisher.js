@@ -247,7 +247,7 @@ async function publishTnPost({ jwt, guid, raw, midDocId, urlStrapi }) {
       incidentNote = "; группа И: пропущено (малая ТН без ПЭС — для инцидентов неактуально)";
     } else {
       try {
-        incidentText = buildMaxPostText(raw, { sequenceNumber, incident: true }) || guid;
+        incidentText = buildMaxPostText(raw, { sequenceNumber }) || guid;
         const incidentHtml = incidentText === guid ? guid : boldifyForMax(incidentText);
         const incidentChunks = splitPressText(incidentHtml);
         const incidentMids = [];
