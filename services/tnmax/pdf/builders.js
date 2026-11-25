@@ -105,10 +105,9 @@ function rowPalette(level, isTotal = false) {
   return { bg: COLORS.goBg, text: COLORS.goText };
 }
 
-// Критерии отключения — порт с карты /dashboard-oo (getPopulationSeverity,
-// operationalMapPanel.utils.js). СЗО = ЖВО + мед. + образование
-// (= boilers/ctp/vzu/vns/kns + hosp/clinics + schools/kindergartens).
-// Фоны приглушённые версии цветов карты (#8ad34a/#ffc928/#ff171f).
+// Раскраска по продолжительности ТН (заказчик 25.11): ≤2 ч — зелёный,
+// >2 и ≤4 ч — жёлтый, >4 ч — красный. minStartMs — момент возникновения
+// самой «старой» ТН в строке; 0/undefined → без раскраски (fallback).
 const SEVERITY_BG = {
   high: "#f9cfcf",
   medium: "#ffeeb8",
@@ -121,19 +120,20 @@ const SEVERITY_TEXT = {
   low: "#14532d",
 };
 
-function severityByPeopleSzo(people, szoCount = 0) {
-  const value = Number(people || 0);
-  const szo = Number(szoCount || 0);
-  if (value > 5000 || szo > 5) return "high";
-  if (value > 1000 || szo > 0) return "medium";
-  if (value > 0) return "low";
-  return "empty";
+const HOUR_MS = 60 * 60 * 1000;
+
+function severityByDuration(minStartMs, nowMs = Date.now()) {
+  if (!minStartMs) return "empty";
+  const hours = (nowMs - minStartMs) / HOUR_MS;
+  if (hours > 4) return "high";
+  if (hours > 2) return "medium";
+  return "low";
 }
 
-function severityRowPalette(people, szoCount, fallback) {
-  const bg = SEVERITY_BG[severityByPeopleSzo(people, szoCount)];
+function severityRowPalette(minStartMs, fallback) {
+  const bg = SEVERITY_BG[severityByDuration(minStartMs)];
   if (!bg) return fallback;
-  return { bg, text: SEVERITY_TEXT[severityByPeopleSzo(people, szoCount)] };
+  return { bg, text: SEVERITY_TEXT[severityByDuration(minStartMs)] };
 }
 
 function mskNowLabel() {
@@ -191,13 +191,11 @@ function labelCell({ level, label, id, parentId, color }) {
   };
 }
 
-function dataRow({ level, label, totals, id, parentId, isTotal = false }) {
-  const szo =
-    toNumber(totals?.jvo) + toNumber(totals?.medical) + toNumber(totals?.schools);
+function dataRow({ level, label, totals, minStart = 0, id, parentId, isTotal = false }) {
   // Строка «ВСЕГО» — без severity-раскраски (заказчик 25.11): только нейтральный фон итога.
   const { bg, text: textColor } = isTotal
     ? rowPalette(level, isTotal)
-    : severityRowPalette(totals?.population, szo, rowPalette(level, isTotal));
+    : severityRowPalette(minStart, rowPalette(level, isTotal));
 
   return [
     labelCell({ level, label, id, parentId, color: textColor }),
@@ -251,33 +249,41 @@ function buildHierarchy(list, resourceByBranch) {
       filialMap.set(filialName, {
         name: filialName,
         maxStart: 0,
+        minStart: 0,
         totals: { ...emptyTotals(), pes: toNumber(resourceRow?.pes) },
         pos: new Map(),
       });
     }
     const filial = filialMap.get(filialName);
     if (startMs > filial.maxStart) filial.maxStart = startMs;
+    if (startMs > 0 && (filial.minStart === 0 || startMs < filial.minStart)) {
+      filial.minStart = startMs;
+    }
 
     if (!filial.pos.has(poName)) {
       filial.pos.set(poName, {
         name: poName,
         maxStart: 0,
+        minStart: 0,
         totals: emptyTotals(),
         gos: new Map(),
       });
     }
     const po = filial.pos.get(poName);
     if (startMs > po.maxStart) po.maxStart = startMs;
+    if (startMs > 0 && (po.minStart === 0 || startMs < po.minStart)) po.minStart = startMs;
 
     if (!po.gos.has(goName)) {
       po.gos.set(goName, {
         name: goName,
         maxStart: 0,
+        minStart: 0,
         totals: emptyTotals(),
       });
     }
     const go = po.gos.get(goName);
     if (startMs > go.maxStart) go.maxStart = startMs;
+    if (startMs > 0 && (go.minStart === 0 || startMs < go.minStart)) go.minStart = startMs;
 
     addRowToTotals(go.totals, row);
   });
@@ -335,6 +341,7 @@ function buildBody(filials) {
         level: 0,
         label: filial.name,
         totals: filial.totals,
+        minStart: filial.minStart,
         id: fId,
         parentId: null,
       })
@@ -348,6 +355,7 @@ function buildBody(filials) {
           level: 1,
           label: po.name,
           totals: po.totals,
+          minStart: po.minStart,
           id: pId,
           parentId: fId,
         })
@@ -360,6 +368,7 @@ function buildBody(filials) {
             level: 2,
             label: go.name,
             totals: go.totals,
+            minStart: go.minStart,
             id: null,
             parentId: pId,
           })
@@ -410,7 +419,7 @@ function makeEmergencyDocDefinition(filials) {
         margin: [0, 0, 0, 2],
       },
       {
-        text: `Данные актуальны на ${mskNowLabel()} (МСК)`,
+        text: `${mskNowLabel()} (МСК)`,
         fontSize: 8,
         color: "#555555",
         margin: [0, 0, 0, 8],
@@ -452,7 +461,7 @@ function makeEmptyDocDefinition() {
         margin: [0, 0, 0, 2],
       },
       {
-        text: `Данные актуальны на ${mskNowLabel()} (МСК)`,
+        text: `${mskNowLabel()} (МСК)`,
         fontSize: 8,
         color: "#555555",
         margin: [0, 0, 0, 8],
@@ -562,16 +571,10 @@ function ooBodyRow(record, index, isSummary = false) {
       ? OO_TABLE_COLORS.oddBg
       : OO_TABLE_COLORS.evenBg;
   const fallbackText = isSummary ? OO_TABLE_COLORS.summaryText : OO_TABLE_COLORS.dataText;
-  const szo =
-    toNumber(record?.boilerCtp) +
-    toNumber(record?.vzuVns) +
-    toNumber(record?.kns) +
-    toNumber(record?.medical) +
-    toNumber(record?.schools);
   // Строка «Всего» — без severity-раскраски (заказчик 25.11): только нейтральный фон итога.
   const { bg, text: textColor } = isSummary
     ? { bg: fallbackBg, text: fallbackText }
-    : severityRowPalette(record?.population, szo, {
+    : severityRowPalette(record?.minStartMs, {
         bg: fallbackBg,
         text: fallbackText,
       });
@@ -613,7 +616,7 @@ function makeOoDocDefinition(dataSource) {
         margin: [0, 0, 0, 2],
       },
       {
-        text: `Данные актуальны на ${mskNowLabel()} (МСК)`,
+        text: `${mskNowLabel()} (МСК)`,
         fontSize: 8,
         color: "#555555",
         margin: [0, 0, 0, 8],

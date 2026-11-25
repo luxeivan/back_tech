@@ -19,11 +19,14 @@ const { docToPdfBuffer, pdfToPngs } = require("./render");
 const { isOpenTN } = require("./common");
 
 // --- Мок-данные: открытые аварийные ТН по 3 филиалам ---
+// Длительности под пороги раскраски (заказчик 25.11): ≤2ч зелёный, 2–4ч жёлтый, >4ч красный.
+const hoursAgo = (hours) => new Date(Date.now() - hours * 3600 * 1000).toISOString();
+
 const mkTn = (over) => ({
   isActive: true,
   BASE_TYPE: 0,
   STATUS_NAME: "Открыта",
-  createDateTime: "2026-10-01T10:00:00.000+03:00",
+  createDateTime: hoursAgo(1),
   SC_FILIAL: "Домодедовский",
   SC_PO: "Домодедово ПО",
   DISTRICT: "г.о. Домодедово",
@@ -54,14 +57,14 @@ const mkTn = (over) => ({
 });
 
 const tnRows = [
-  mkTn({ PES_COUNT: 1 }),
+  mkTn({ PES_COUNT: 1 }), // 1 ч → зелёный
   mkTn({
     SC_FILIAL: "Коломенский филиал",
     SC_PO: "Коломна ПО",
     DISTRICT: "г.о. Коломна",
     DISPCENTER_NAME_: "Коломна",
     POPULATION_COUNT: 2500,
-    createDateTime: "2026-10-02T08:30:00.000+03:00",
+    createDateTime: hoursAgo(3), // 3 ч → жёлтый
     PES_COUNT: 1,
   }),
   mkTn({
@@ -70,7 +73,7 @@ const tnRows = [
     DISTRICT: "г.о. Раменское",
     DISPCENTER_NAME_: "Раменское",
     POPULATION_COUNT: 700,
-    createDateTime: "2026-10-03T15:45:00.000+03:00",
+    createDateTime: hoursAgo(5), // 5 ч → красный
     PES_COUNT: 0,
   }),
   // Не должна попасть: закрытая ТН.
@@ -153,6 +156,40 @@ async function main() {
 
   const ooDataSource = [buildOperationalBranchSummary(branchRows), ...branchRows];
   const ooDoc = makeOoDocDefinition(ooDataSource);
+
+  // --- Проверки раскраски по длительности и шапки (заказчик 25.11) ---
+  const GREEN = "#d9f0c7";
+  const YELLOW = "#ffeeb8";
+  const RED = "#f9cfcf";
+  const TOTAL_BG = "#94add6";
+  const SUMMARY_BG = "#94add5";
+  const HEADER_TS = /^\d{2}\.\d{2}\.\d{4} \d{2}:\d{2} \(МСК\)$/;
+
+  const findRow = (body, label) =>
+    body.find((row) => {
+      const cell = row[0];
+      const text = cell?.stack?.[0]?.text ?? cell?.text ?? "";
+      return String(text).trim() === label;
+    });
+
+  const tnBody = tnDoc.content.find((c) => c.table)?.table?.body;
+  assert.ok(tnBody, "PDF #1: тело таблицы не найдено");
+  assert.strictEqual(findRow(tnBody, "ВСЕГО")[0].fillColor, TOTAL_BG, "ВСЕГО — нейтральный фон");
+  assert.strictEqual(findRow(tnBody, "Домодедовский")[0].fillColor, GREEN, "1 ч → зелёный");
+  assert.strictEqual(findRow(tnBody, "Коломенский")[0].fillColor, YELLOW, "3 ч → жёлтый");
+  assert.strictEqual(findRow(tnBody, "Раменский")[0].fillColor, RED, "5 ч → красный");
+
+  const ooBody = ooDoc.content.find((c) => c.table)?.table?.body;
+  assert.ok(ooBody, "PDF #2: тело таблицы не найдено");
+  assert.strictEqual(ooBody[1][0].fillColor, SUMMARY_BG, "Всего (ОО) — нейтральный фон");
+  assert.strictEqual(findRow(ooBody, "Домодедовский")[0].fillColor, GREEN, "ОО: 1 ч → зелёный");
+  assert.strictEqual(findRow(ooBody, "Коломенский")[0].fillColor, YELLOW, "ОО: 3 ч → жёлтый");
+  assert.strictEqual(findRow(ooBody, "Раменский")[0].fillColor, RED, "ОО: 5 ч → красный");
+
+  for (const [name, doc] of [["PDF #1", tnDoc], ["PDF #2", ooDoc], ["пустой", makeEmptyDocDefinition()]]) {
+    const label = doc.content[1]?.text;
+    assert.ok(HEADER_TS.test(label), `${name}: шапка без фразы «Данные актуальны на», получено: ${label}`);
+  }
 
   // --- Рендер PDF ---
   const [tnPdf, ooPdf] = await Promise.all([docToPdfBuffer(tnDoc), docToPdfBuffer(ooDoc)]);

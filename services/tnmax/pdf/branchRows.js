@@ -5,6 +5,7 @@ const {
   isNotDeletedTN,
   isOpenTN,
   pick,
+  startDate,
   getTnFilialName,
   getTnPoName,
   toNumber,
@@ -102,6 +103,12 @@ const addRowToTotals = (totals, row) => {
   // Столбец «ПЭС»: источник — PES_COUNT из ТН (как на фронте, operationalDistrictsPanel.utils.js).
   // При переданном pesCountMaps (старый формат — модуль ПЭС) значение перезаписывается ниже.
   totals.pes += toNumber(pick(row, "PES_COUNT"));
+  // Момент возникновения самой «старой» ТН ветки — для раскраски по длительности.
+  const rawStart = startDate(row);
+  const startMs = rawStart ? Date.parse(rawStart) : NaN;
+  if (Number.isFinite(startMs) && startMs > 0) {
+    if (!totals.minStartMs || startMs < totals.minStartMs) totals.minStartMs = startMs;
+  }
 };
 
 const getFilialMainResource = (row) =>
@@ -353,6 +360,7 @@ const createBranchRow = (branch, branchResources) => ({
   key: branch,
   branch,
   ...EMPTY_NUMERIC_VALUES,
+  minStartMs: 0,
   mainResource:
     branchResources?.get(branch)?.mainResource ?? OPERATIONAL_BRANCH_UNKNOWN_VALUE,
   ovb: branchResources?.get(branch)?.ovb ?? OPERATIONAL_BRANCH_UNKNOWN_VALUE,
