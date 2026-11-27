@@ -28,7 +28,7 @@ const SYS_CONTACT = process.env.MES_SYSTEM_CONTACT || "102";
 const KD_CHANNEL = process.env.MES_CHANNEL || "3";
 const KD_ORG = process.env.MES_ORG_CODE || "2";
 const FACILITY_ID = process.env.MES_FACILITY_ID || "1";
-const CAMPAIGN_TYPE = process.env.MES_CAMPAIGN_TYPE || "SETI_NOTICE";
+const CAMPAIGN_TYPE = process.env.MES_CAMPAIGN_TYPE || "SETI_NOTIC";
 const MES_REQUEST_LOG = String(process.env.MES_REQUEST_LOG || "1") !== "0";
 const MES_AUTH_METHOD = normalizeHttpMethod(process.env.MES_AUTH_METHOD, "post");
 const MES_AUTH_TIMEOUT_MS = readPositiveIntEnv("MES_AUTH_TIMEOUT_MS", 12000);
