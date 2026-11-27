@@ -38,6 +38,15 @@ async function mesUploadRegistry(items, { externalId } = {}) {
     contentType: "application/json",
   });
 
+  const queryForLog = new URLSearchParams(
+    Object.entries(params).map(([k, v]) => [
+      k,
+      k === "session" ? maskSession(session) : String(v),
+    ])
+  ).toString();
+  console.log(
+    `[МосЭнергоСбыт] upload: POST ${LOAD_BASE}?${queryForLog}`
+  );
   logMes("[МосЭнергоСбыт] upload: отправляем реестр", {
     mode: MES_MODE,
     url: LOAD_BASE,
